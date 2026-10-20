@@ -218,7 +218,7 @@ pub struct ChatOutboundSettleCommand {
     pub failure_code: Option<String>,
 }
 
-/// Additive migration 205. Every table is chat-only state and never feeds Camp.
+/// Additive migration 209. Every table is chat-only state and never feeds Camp.
 pub(crate) fn migrate(database: &mut Database) -> Result<()> {
     let transaction = database
         .connection_mut()
@@ -325,7 +325,7 @@ pub(crate) fn migrate(database: &mut Database) -> Result<()> {
     // Additive chat tables do not change any existing projection, so the
     // projection schema marker stays at 154.
     transaction.execute(
-        "INSERT INTO schema_migration VALUES(205,datetime('now'))",
+        "INSERT INTO schema_migration VALUES(209,datetime('now'))",
         [],
     )?;
     transaction.commit()?;

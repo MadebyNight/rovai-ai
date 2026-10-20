@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { AdapterInstallation, AgentProfile, AgentRunView, ThreadSnapshot } from '@contracts'
@@ -21,11 +21,12 @@ import { useNavigationPressMenu } from './useNavigationPressMenu'
 import type { AgentRunStopViewState } from './ThreadWorkspace'
 import './conversation-run-presence.css'
 
-export function ConversationRunPresence({ snapshot, slot, profiles, installations, onActivateMember, eventsByRunId, windowedEvidence, stopState, onStop, onOpen, onOpenMotionSettings, onError }: {
+export function ConversationRunPresence({ snapshot, slot, profiles, installations, source, onActivateMember, eventsByRunId, windowedEvidence, stopState, onStop, onOpen, onOpenMotionSettings, onError }: {
   snapshot: ThreadSnapshot
   slot: ConversationRunPresenceSlot
   profiles: readonly AgentProfile[]
   installations: AdapterInstallation[]
+  source: ReactNode
   onActivateMember(agentId: string, trigger: HTMLElement, focusPanel: boolean): void
   eventsByRunId: ReadonlyMap<string, LiveRuntimeEvent[]>
   windowedEvidence: boolean
@@ -103,8 +104,9 @@ export function ConversationRunPresence({ snapshot, slot, profiles, installation
         }
         const state = submittingId === run.id ? 'stopping' : stopState(run)
         const canStop = state === 'available' || state === 'stopping' || state === 'confirming'
-        const canRetry = run.status === 'failed' && run.invocationKind === 'batch' && (run.inputMessageIds?.length ?? 0) > 0
-        const description = run.status === 'failed' ? uiAttribute('执行中断，查看原因')
+        const inputTooLarge = run.failure?.code === 'context_payload_too_large'
+        const canRetry = !inputTooLarge && run.status === 'failed' && run.invocationKind === 'batch' && (run.inputMessageIds?.length ?? 0) > 0
+        const description = inputTooLarge ? uiAttribute('输入内容过大，查看详情') : run.status === 'failed' ? uiAttribute('执行中断，查看原因')
           : uiAttribute('查看执行过程')
         return <article key={run.id} className="conversation-bubble agent conversation-run-presence"
           data-presence-run={run.id} data-presence-state={run.status} data-continuation={continuation}
@@ -115,6 +117,7 @@ export function ConversationRunPresence({ snapshot, slot, profiles, installation
               {authorPart('name')}
               <RunModelSummary run={run} installations={installations} displayName={name} avatarRef={avatarRef} />
             </div>}
+            {source}
             <div className="run-presence-line">
               <RunPresenceOpen threadId={snapshot.thread.id} run={run} name={name} description={description}
                 windowedEvidence={windowedEvidence} events={eventsByRunId.get(run.id)}

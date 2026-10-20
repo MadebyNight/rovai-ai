@@ -3,10 +3,406 @@ document_type: implementation-plan
 version: v1.72
 authority: version-implementation-and-acceptance
 status: in_progress
-last_updated: 2026-10-15
+last_updated: 2026-10-19
 ---
 
 # v1.72 实施与验收
+
+## 主动停止后的会话蓝点（2026-10-19）
+
+**已撤回。** 原功能通过 [PR #821](https://github.com/murray17/rovai-ai/pull/821) 合入并安装后，
+User 反馈问题，要求先撤回，并确认将回退 PR 合入 main 后安装到本机 App。
+
+回退分支 `rovai/revert-manual-stop-unread`，基线 `7dbc9ed24170dac6032582285995da7af36702cd`，
+使用现有 checkout。移除 `BusinessApp` 中停止成功写入 `manualUnread` 的逻辑及丢失回执的提醒核对集合；
+恢复停止动作与回复未读的原有边界。现有停止、终态核对、回复未读和显式标记未读不变；
+不批量清理已有本机提醒，继续由显式打开或标记已读清除。
+
+既有生产 App Electron 夹具改为验证成功停止、切换会话、聚焦／自动刷新、丢失回执和迟到终态均不新增蓝点，
+日夜截图覆盖停止后的原会话。保留 #821 中与该功能独立的 Runtime 状态查询、同 tick 合并、schema 9 和 Task 顶栏夹具修正。
+
+保持 v1.72；UI 和 Architecture 已同步撤回后的规则，Navigation Read v1 的本机偏好字段与 Core 水位不变。
+没有新增 Rust 测试、存储迁移、模型上下文、Runtime、Contract 或 Version Decision 变更。
+
+回退验证：`pnpm typecheck`、相关 Vitest 188 项、`pnpm test:startup-presentation` 和 `pnpm docs:test` 10 项通过；
+日夜截图确认停止后的会话没有新增蓝点。生产 `BusinessApp.tsx` 与 #821 合入前的 `f6f359f2c` 完全一致。
+文档在只含受版本管理文件的临时 clone 中直接运行 package scripts 对应的版本检查、决定治理和
+`--require-base` 门禁，均通过；base 为上述回退基线，未扫描本机忽略的旧原型或增加门禁例外。
+
+## 记忆工作区 R4（2026-10-19）
+
+User 批准独立 worktree 实施、PR 合入 main，并从最新 main 构建安装本机 App。
+分支 `rovai/memory-r4-ui`，worktree 为同级 `rovai-ai-memory-r4`，基线
+`0fc75fda45ad7765c2ee22440464da767e718bd3`。最终 R4 HTML 的 SHA-256 为
+`29cb2e955daa7eae9f5c5bbed533ccff134d89875fa3a21866c8bfe55e54a62f`。
+
+实现采用生产 MemoryLibrary 和共享 Dialog/Menu 组件；统一灰阶 token，保留原 App shell，移除容量和
+治理筛选，增加 All 范围并兼容旧导航状态。列表只压缩预览，正文和版本仍可完整展开。
+编辑保留字节校验、草稿和冲突后显式重试；领域容量、持久化和权限约束不改变。
+自动通知按 Memory ID 合并事件，区分创建/修订；scope 缺失时通过已有 `memory.get` 补足，查询失败显示
+通用“记忆”而不猜测共同范围。迟到读取不能恢复已关闭通知。
+
+保持 v1.72；这是局部可逆的 Renderer 调整，不新增 Version Decision、协议或数据库迁移。
+同步 DESIGN、主题和 Memory surface brief、开发验收命令；Architecture、Contracts、Runtime Activity、
+模型输入、Runtime compatibility 与根 README 无变化。退役已移除容量组件的 TypeScript 展示测试，
+用通知归属/去重测试及生产组件交互验收覆盖新行为；没有新增、合并或退役 Rust 测试。
+
+验证：`pnpm typecheck`、`pnpm test`（246 个 Vitest 文件 / 2,800 项，Node 357 通过、2 项平台跳过）、
+`pnpm test:rust:pr`（474 通过、1 项既有忽略）与真实 base 的 `docs:check:ci` 通过。
+`test:memory-workspace-ui` 覆盖 10 组双主题/尺寸，完整正文、折叠版本、全部范围、通知查看/关闭、草稿、
+校验、失败与冲突显式重试、操作对齐与黄点居中；`test:memory-web-ui` 通过真实 Host 的手机新增、修订、
+返回及重入。`test:navigation-shell` 通过。隔离 `accept:memory-ui` 通过实际 Core IPC、复核设置/并发冲突、
+停止/恢复、永久遗忘、SQLite 重开以及日夜/200% 缩放。
+
+补充边界：`test:startup-presentation` 的 `runtime.availability.updated: refresh health once` 断言在本分支和
+原始基线 `0fc75fda` 均失败，不由本次 Memory 改动引入。既有 `test:host-web-mobile` 在进入 Memory 前的
+导航槽位/旧 CSS 断言失败，另有横屏执行台及缺少 debug Server 产物的问题；本次不修改这些无关行为，
+以独立生产 Web/Host Memory 验收证明本次路径。
+初次打包在前置构建完成后遇到 GitHub DNS 失败；按 packaging 文档校验 Electron 缓存 SHA-256 后，
+继续相同 daily ad-hoc 打包参数并通过 App/Core/CLI/Host 架构与签名门。日常安装使用非终止交接，
+最终 main 提交与安装位置记录在 Thread 交付中。
+最新 main 安装复验还发现页头几何检查偶尔抢在启动画布退出动画之前；验收入口改为等待画布移除及
+Memory 读取就绪，保留原始命中检测和几何断言，不修改生产交互或放宽结果。
+
+## Antigravity 长任务与工具收尾（2026-10-19）
+
+User 批准独立 worktree 实施、创建 PR 并合入 main。分支 `rovai/fix-antigravity-turn-timeout`，
+worktree 为同级 `rovai-ai-antigravity-timeout`，基线 `90b4f46b458943170a1f1541cb2928f320db311c`。
+真实 agy 1.4.2 复现中，短请求与多工具请求完成；长请求在第六轮工具未收口时结束，Run 总计 311.7 秒、
+输入准备后 300.7 秒，后端错误地呈现成功。该五分钟复现没有直接出现空正文，不能与原用户反馈混为同一次证据。
+[上游 1.1.28](https://github.com/google-antigravity/antigravity-cli/blob/main/CHANGELOG.md#1128) 明确
+超时返回部分结果并成功退出；[1.2.6](https://github.com/google-antigravity/antigravity-cli/blob/main/CHANGELOG.md#126)
+已默认不限时，但旧适配器的显式 `5m` 覆盖了该值。
+
+生产改动为 `--print-timeout 0`、精确原生 stderr 超时识别及共享终态工具投影。没有数据库迁移、
+模型输入或原生配置更改；没有取消初始化、停止与清理期限。缺失工具结果显示未知，底层 Evidence
+和迟到结果保持。保持 v1.72；局部可逆修复不新增 Version Decision，当前合同、架构和 UI 同步；
+Runtime Activity 映射、准入资格、根 README 和文档路由保持。
+
+Rust 扩展既有 `structured_runtime_failure_preserves_sanitized_provider_detail` 进程 owner，覆盖零退出
+部分文本／空白文本超时及原有配额失败脱敏；现有工具生命周期 owner 同时验证无限时参数与非致命警告。
+没有新增或退役独立 Rust 测试。最小回归为 `cargo test -p rovai-core --lib antigravity::tests::`。
+原有人工 smoke 新增显式 `ROVAI_ANTIGRAVITY_LONG_TURN_SMOKE=1` 入口，以真实适配器顺序执行八次 40 秒只读命令，
+不进入普通测试。UI 在既有分组 owner 和生产 ThreadWorkspace 浏览器 fixture 中验证三种终态与展开状态。
+
+真实适配器长任务使用 agy 1.4.2、原生默认模型，在独立临时 workspace 和日志目录执行，367.81 秒后
+返回 `AGY_LONG_TURN_OK`；跨过旧期限并保留正常最终结果。未启动第二个 Core 或修改日常 App 数据。
+第一次人工验收沿用了旧 CoreEnforcedV1/read_only 配置，会强制 plan 模式，在 63.94 秒返回空正文；
+它不是长任务通过证据，也说明空正文不能一概归因于五分钟时限。本次只对有明确超时证据的结果重新分类，
+其他空正文仍诚实失败；长任务 fixture 已使用当前 RuntimeManagedV2 权限语义。
+
+提交前定向 Antigravity 回归 16 passed、1 项人工 smoke 默认 ignored；默认 Rust workspace、
+`pnpm typecheck`、`pnpm test`（2798 项 Vitest、后续 Node 357 passed／2 个平台 skip）、
+`pnpm build:desktop`、真实 base SHA 的 `docs:check:ci`、Rust 格式与差异空白检查均通过。
+生产 ThreadWorkspace 浏览器验收覆盖日夜主题 × 底部／Inspector／Mobile，三种 Run 终态均无悬挂
+工具转圈，成功结果与展开状态保持；两轮截图检查确认结果未知图标可见。Impeccable 本次目标静态检查无发现。
+
+## Composer 链接高亮稳定性（2026-10-19）
+
+按 User 确认在独立 worktree 的 `rovai/composer-link-stability` 分支实施，基线为 `4ccfd8270`。
+生产改动集中在 `composer-web-links.ts`：每个已识别链接保存内存中的 TextNode key 和逻辑 offset，
+按节点索引接收 DOM 提交后的 mutation，包括节点销毁。仅比较相关节点的前后文本，将链接之外的
+编辑映射到既有 Range；不读取布局，不在输入路径遍历整棵编辑树或全部链接，不产生 editor update、草稿字段、
+保存或撤销记录。单个变化节点采用一个保守替换区间；改到 URL／尾部、跨节点或无法验证原文的范围
+立即撤下，150 ms 合并投影及用户操作前的刷新负责完整语义。卸载和草稿替换释放旧记录。
+
+在生产 Composer 的隔离 Electron fixture 中，先添加回归，再修改生产代码：原版在同 TextNode 尾部
+更新后，高亮 Range 的文本立即变为空串；修复后提交同步时和第一帧均保留原 URL 与同一 Range。
+新增 5 组回归覆盖前方插入／删除、重复 URL 位移碰撞及释放、日夜主题逐帧连续输入与前后方 IME、
+URL 自身／尾部修改及操作前目标刷新、节点拆合、跨行代码围栏与撤销。原有长草稿、原文、Atom、
+复制／发送、保存／恢复和无 Highlight 能力回归继续通过，共 46 个原生场景；Chrome Web 链接用例通过。
+IME 证据来自 CDP 组合输入事件，不替代每种系统输入法的真人验收。
+
+同机、隔离 Electron、没有并行运行本任务编译的前后采样，单位 ms。每个值包含一次 CDP 输入与两帧，
+不是纯范围维护耗时；本组只用于发现明显输入回退，不声称普遍性能提升。
+
+| 草稿 | 修复前六次输入 | 修复后六次输入 |
+| --- | --- | --- |
+| 112034 字符单行 | 34, 33, 34, 33, 33, 34 | 26, 33, 33, 34, 33, 34 |
+| 800 行／26190 字符 | 18, 33, 34, 33, 34, 33 | 18, 33, 34, 34, 33, 33 |
+
+完整识别仍在连续输入结束后合并执行；原有投影次数和保存版本断言继续通过。
+提交前 `pnpm typecheck`、`pnpm test`（2798 项 Vitest；后续 Node 回归 357 passed、2 个平台 skip）、
+`pnpm build:desktop`、`docs:check:ci`（真实 base SHA）及差异空白检查通过；默认 Rust workspace 为
+474 passed、1 ignored。Impeccable 对本次生产目标的静态检测无发现。未运行真实模型或改动日常 App 数据。
+
+## 文件预览自动刷新（2026-10-18）
+
+基于 `682f6bf58` 按 User 批复实施，主要改动位于共享 `file-preview-controller.ts`：300ms 末尾防抖、
+重新显示统一检查、首次读取后的更新检查和刷新结束后的合并补刷。继续使用原有忙碌状态、更新版本、请求代次
+与刷新错误；读取前检查可见性，冷恢复等待期间切走也保持冷态。失败后的重复通知只保留更新标记，
+明确重试或重新显示才再尝试。关闭、淘汰和 session 换代清理任务，迟到候选沿原代次规则释放。
+
+句柄已回收的缓存以候选恢复；分页记录可见行号，用既有 `resolveLine`、`readPage` 在新内容中定位，
+缩短时回落到最后有效行，重新建立分页位置与缓存。HTML 继续等待原就绪条件再切换，仅处理打开文件自身变化。
+未增加刷新服务、通用任务队列、文件版本协议、文本对齐、依赖追踪或界面设置。
+
+测试归入原四组，扩展既有 resources、Desktop service、Web adapter 和 Electron 预览夹具：
+
+- 共享控制器验证当前更新、后台重新显示、连续修改串行收敛、失败与关闭；包含首次加载、HTML 等待、
+  防抖及资源接线期间切走、句柄淘汰、分页新偏移和缩短回落。五个相关测试文件合计 **130 项通过**。
+- Desktop service 通过真实磁盘保存与 watcher 通知读取新候选；Web adapter 验证现有轮询通知和候选读取接线。
+- 隔离 Electron 夹具实际显示更新后的文本、PNG 和 HTML，并验证非首页滚动行号刷新及缩短回落；
+  复用原分栏、标签与阅读交互回归，不启动 Core/Runtime，不使用日常 userData。
+
+当前合同按既有冻结规则新增 v22，并同步架构、UI 与当前导航；不改写历史合同语义。
+
+最终 `pnpm typecheck`、`pnpm build:desktop`（含 Web 构建）、`pnpm test:file-preview-layout` 与带基线的
+`pnpm docs:check:ci` 通过。`pnpm test` 为 Vitest **2780 项通过**、后续脚本 **357 项通过、2 项既有 Windows 跳过**；
+`pnpm test:rust:pr` 为默认 workspace **474 项通过、1 项既有忽略**。并行验证曾出现渠道与评测的两项等待超时，
+对应 86 项定向复跑及最终全量均通过，未调整超时或测试准入。差异检查与改动界面的机械设计检查通过。
+
+评审修正（2026-10-18）：临时标签交给系统应用后，回退入口检查恢复显示的标签；分页快照未采样到
+可见行号时保存当前页 `startLine`，覆盖普通加载及预加载，保留首次目标高亮；自动刷新复用
+`pageRequests` 等待翻页完成，再沿原调度补刷，避免请求代次提前使用户翻页失效。
+生产改动只在原共享控制器，未增加状态或调度机制。新增四个复现用例在修复前均失败，修复后通过；
+关联五个测试文件 **134 项通过**，类型检查通过。本轮完整 `pnpm test` 为 Vitest **2784 项通过**、
+后续脚本 **357 项通过、2 项既有 Windows 跳过**；默认 Rust workspace **474 项通过、1 项既有忽略**。
+本轮带基线的文档门禁与差异检查通过。
+
+## 文件传输主线集成（2026-10-18）
+
+按 User seq29 创建 PR 并合入 main，先整合 `25c49c6b3`，再整合期间新进入主线的 `dba014d0c` 和 `1dc593088`。
+保留主线 Task 能力、MiniMax Runtime 更新和 Web 登录协议 5；文件传输合同改为继承主线 v6 的
+Host Web v7，决策使用 V1.72-D52，避免覆盖主线已占用的合同和决策编号。相关登录夹具同步协议 5，
+旧协议拒绝断言仍保留。未增加传输机制或调整已确认布局。
+
+首次主线集成后 `pnpm typecheck`、Host/Web 构建、Rust 格式检查、完整 `pnpm test` 通过：
+247 个 Vitest 文件、2764 项；Node 脚本 356 项通过、2 项平台跳过。真实 Host 文件传输、托管渠道、
+Chrome HTML/图片原生下载及上传取消 owner 通过。Rust 默认工作区 474 项通过、1 项既有 ignored；
+整合 MiniMax 更新后的 native usage owner 另行通过。最终合并检查及完整结果登记在 PR #800。
+
+整合术语清理后再次通过 TypeScript、完整 `pnpm test`（246 个文件、2750 项；Node 357 项通过、2 项平台跳过）、
+Host 构建和真实文件传输 HTTP owner。该 HTTP 测试首次停在旧 `Camp` 错误文案断言，更新为主线已采用的
+`Thread` 后通过；只调整测试预期，未修改生产错误路径。以最终主线 `1dc593088` 为基线的文档门禁通过。
+
+完整移动端 owner 为 1 通过、4 失败，未记为全绿。隔离构建 `25c49c6b3` 的 Web 界面后，使用同一 Host
+和登录协议 5 重跑，在相同位置复现导航 CSS、已变更导航选择器、横屏执行区高度和设置页选择器四处失败。
+这些检查发生在文件传输之外；保留原断言，不扩展本轮布局修改。对照使用临时源码和独立浏览器数据，
+完成后清理临时源码；此前的多标签草稿与跨平台未验证范围仍按原记录保留。
+
+## 文件下载准入后直接传输（2026-10-18）
+
+按 User seq27 从 `ce11c2c4f` 继续，保留该提交的冷标签与回收边界修复。此次明确调整旧行为合同，
+不把前端三行修复当作下载链路简化完成：
+
+- `downloads.rs` 删除两秒授权轮询、Core 业务事件订阅/缺口恢复、Session/Core 活动流撤销监听、
+  `Flow::Checking/Ready` 暂停协调，以及下载摘要、尾块留存、最终重开/状态/来源校验。
+- 申请只验证来源并打开检查元数据；GET/HEAD 校验短期票据、Session、安全打开和独立大小额度后直接传输。
+  `resources.rs` 删除下载专用来源重验对象与预览摘要扫描；可选旧 expectedGeneration 字段只作 wire 兼容，
+  不提供严格模式，不改变预览读取自身的版本约束。
+- 保留安全无跟随打开、64 KiB 块、单槽背压、并发与空闲额度、取消/断开释放和安全中断日志。
+  下载当前内容，不保证旧预览或快照；Session 撤销阻止新准入，业务来源失效阻止新申请，已准入流不主动撤销。
+- 不修改 Renderer 布局、下载入口或上传恢复，不新增管理模块、UI 步骤、状态机或存储。
+  同步 Host Web v7、统一 Host 架构、D52、UI 与用户指南，历史验收记录保留为当时行为的证据。
+
+测试退役说明：删除 `downloads::tests::event_gaps_revalidate_before_releasing_bytes_and_keep_explicit_revocations`，
+其事件暂停/持续撤销合同与生产路径在同一补丁退出。`rovai-web --lib` 可执行测试由 12 项变为 11 项，其他 owner 保留。
+继任边界由既有 `scripts/lib/host-web.test.mjs` HTTP owner 扩展，不新建 Rust/进程 fixture：验证来源准入、
+当前文件/长度、超预览预算、链接替换拒绝、独立额度、取消释放、短读中断，以及退出/删除后的准入与传输边界。
+既有 `host-web-html.test.mjs` 浏览器 owner 改验旧预览下载当前 HTML 且保留预览，局部失败通过原按钮重试恢复。
+最小命令为 `cargo test -p rovai-web --lib`、`pnpm test:host-web`、`pnpm test:host-web-html`；
+全量使用 `pnpm test:rust:pr`、`VITEST_MAX_WORKERS=2 pnpm test`，文档门禁以 `ce11c2c4f` 为基线。
+
+验收：`cargo test -p rovai-web --lib` 11 项通过，Host 构建与 `pnpm typecheck` 通过。
+`pnpm test:rust:pr` 为 474 项通过、0 失败、1 项既有 ignored；相对基线只退役上述已退出合同的一项测试。
+`VITEST_MAX_WORKERS=2 pnpm test` 通过：247 个 Vitest 文件、2756 项；Node 脚本 355 项通过、2 项既有平台跳过，
+文档和 Skill 检查及以 `ce11c2c4f` 为基线的通用文档门禁通过。
+真实 Host HTTP owner 与时钟 owner 独立复跑 2 项通过；最终 HTTP owner 再验传输中追加只发送
+原声明长度、截断报短读失败、退出/删除不中断已准入流，来源、Session、链接替换和下载额度仍在准入边界生效。
+`pnpm test:host-web-html` 通过，含当前 HTML 原字节下载且不刷新旧预览、文件暂缺后的原按钮重试、
+移动视口反馈归属、图片和普通 patch 下载及上传取消。浏览器首轮因测试预期的缺失文件文案不匹配失败，
+按现有客户端文案修正断言后通过，未改生产文案或界面。
+
+`pnpm test:host-web` 不记为全绿：多标签 owner 及其独立复跑均在新标签等待 `.camp-nav-open` 时失败，
+发生在下载操作之前，与下述已登记的默认视口/导航选择器问题一致；本轮未改该测试或扩展界面范围。
+最初整套运行的时钟用例被提前终止，上述独立完整复跑确认其通过。自动验收均使用 macOS 的隔离数据、
+Skill Library、MCP 与 Chrome profile，不使用日常 App 或真实模型；Linux/Windows 原生及实体手机仍未验证。
+
+## 文件下载冷标签与回收边界（2026-10-18）
+
+按 User seq25 独立核对 `26564a2fa`，继续在 `rovai/web-file-transfers` 做局部修复：
+
+- 菜单下载移除前置标签激活，直接调用既有 `download`；冷标签按已有来源申请，不启动预览恢复或切走当前文件。
+  保留原能力判断和请求代次，不交换调用顺序、不新增等待、重试或下载状态。
+- `evict` 与 `evictBytes` 更换预览代次时同步清除临时下载状态；保留文本正文、保留 HTML 页面两条路径均可再次下载。
+  旧申请结果仍由原代次校验丢弃，不覆盖后续申请，也不阻止预览资源回收。
+
+生产修改仅菜单删一行、两处回收各补一行；布局、Host 协议、来源授权、版本校验与流式传输均沿用现有实现。
+原资源测试覆盖冷标签按来源下载、两种回收及旧结果迟到；原 Renderer 自动验收增加真实右键菜单首次点击。
+修复前，两种回收用例均因残留 `preparing` 失败，真实菜单点击用例因下载申请为零失败；修复后上述用例通过。
+相关资源与标签测试共 42 项通过，`pnpm typecheck` 和 `pnpm test:file-preview-layout` 通过。
+Renderer 自动验收运行于 macOS 的隔离 Electron 夹具，下载 API 使用受控替身，不将其视为新的 Host 端到端或跨平台传输验收。
+`pnpm build:desktop` 通过。首次全量测试与构建并行时，既有 `evaluation-host.test.ts` 两项等待后台任务结束超时；
+构建结束后该文件 5 项独立复核通过，未修改相关代码、断言或超时。随后 `VITEST_MAX_WORKERS=2 pnpm test`
+通过：247 个 Vitest 文件、2756 项，以及 355 项 Node 测试、2 项既有平台跳过；文档及 Skill 检查通过。
+`pnpm test:rust:pr` 为 475 项通过、1 项既有 ignored；以 `26564a2fa` 为基线的通用文档门禁通过。
+
+## 文件下载可用性收尾（2026-10-18）
+
+按 User seq23 从 `rovai/web-file-transfers` 的 `787ea974a` 继续，保持 56px 文件行、图标、日夜主题与现有传输链路。
+本轮修改限于 Renderer 反馈、下载入口能力及 Web 正文读取错误分类：
+
+- 下载按钮的忙碌状态与结果归入既有文件标签，替换原按钮局部状态和菜单独立反馈；工具栏、菜单、恢复页
+  共用 `canDownloadFile` 和 `download`。错误放回所属面板，隐藏、切换或关闭后不覆盖其他页面；迟到结果不激活标签。
+  刷新／重新打开用既有请求代次排除旧反馈。成功只有无障碍状态；图片反馈同样留在灯箱内。
+- `#readResponse` 接收原调用方的取消信号，成功及错误响应的正文读取使用与发送阶段一致的分类。
+  主动取消不报离线；内部恢复超时、真实读流故障仍报连接不可用，旧连接结果受原 generation 约束。
+  取消重选核对时清理本次进度，原 commandId、未知绑定及 Core 回执不丢失。
+- 差异比较态不提供下载；磁盘上的 `.diff`／`.patch` 是有真实来源的普通文件，按来源及服务端能力下载原字节。
+  不增加前端权限系统、下载管理器、轮询或协议；Host、数据库及文件生命周期保持原实现。
+
+验证：`pnpm typecheck`、`pnpm build:desktop` 通过。`pnpm test` 为 247 个 Vitest 文件、2753 项通过，
+Node 脚本 355 项通过、2 项既有平台跳过；文档及 Skill 检查通过。扩展原 ConsoleClient owner 覆盖
+上传请求／成功正文／错误正文取消，以及核对正文时主动取消、超时、无主动取消的 AbortError 和连接替换；
+原预览资源 owner 覆盖同一申请防重复、迟到反馈、跨会话及已关闭标签。
+`test:file-preview-layout`、`test:host-web-recovery`、`test:host-web-recovery-live` 和 `test:host-web-html` 通过；
+真实 Host 的手机视口验证错误归属、切换隐藏、收起与刷新、不支持预览时菜单下载、普通 patch 下载及图片无成功浮层，
+下载保留逐字节比对和不创建整文件 Blob 的断言。Rust 本轮无改动，未重复执行其测试。
+自动验收使用隔离数据、Skill Library、MCP 与 Chrome profile；Linux/Windows 原生及实体手机仍未实测。
+
+## 文件查看与下载交互落地（2026-10-18）
+
+沿用 `rovai/web-file-transfers` 工作树；合并主线 `80d11450b` 的断线恢复后，将已确认的 A 方案接入正式组件。
+会话卡片整行打开、Agent 文件列表每行 56px，下载只位于查看界面；Diff/Patch 不提供下载，图片不新增可见标题。
+HTML 预览／源码与下载统一图标，图片灯箱提供复制及浏览器原图下载／本机保存，手机触区为 44×44px。
+文件恢复页和图片解码失败灯箱仍可按有效来源下载；文件已变化保留结构化错误，提供刷新预览入口。
+
+复用既有下载、预览、上传恢复 owner，不新增平台或状态机。与主线合并时保留统一断线恢复入口，上传仍使用
+原 commandId 和 Core 回执；刷新丢失字节先恢复连接再重选，摘要阶段断线释放本地进度记录。
+
+真实 Host 验收发现并修正合并边界：主动取消上传只保留原操作的未知回执，不将健康页面切入全页断线恢复；
+真正断线仍走统一恢复。既有 ConsoleClient owner 增加取消后仍可正常请求、原回执未丢失的用例。
+同步协议测试的 schema 断言到本次合入主线的 155，保留其余指纹及兼容性断言。
+
+验收结果（均在隔离数据及浏览器配置中运行，不使用日常 App 数据）：
+
+- `pnpm typecheck`、`pnpm build:desktop` 通过；最后的取消修复重新执行 `pnpm build:web` 通过。
+- `pnpm test`：Vitest 247 文件、2745 项通过；Node 脚本 355 项通过、2 项既有平台跳过；文档与 Skill 检查通过。
+- `pnpm test:rust:pr`：475 passed、0 failed、1 个既有 ignored；本轮未新增 Rust 测试函数。
+- `pnpm test:file-preview-layout`、`pnpm test:html-preview`（5 项）、`pnpm test:host-web-recovery`、
+  `pnpm test:host-web-recovery-live` 与 `pnpm test:host-web-html` 全部通过。
+  真实 Host 覆盖 HTML 交互／源码、二进制下载、同页重登后下载、图片解码失败仍下载、Diff 无下载、上传超限／取消／重选；
+  HTML、二进制及图片下载逐字节比对，确认新下载未额外创建整文件 Blob。
+- 正式组件视觉夹具验证日夜主题、桌面及 375px 手机视口：文件列表 56px，图标桌面 32px、手机 44px；
+  文件变化提示可刷新，图片灯箱无新增标题，超预览预算仍有下载。未将夹具 HTML 通道用于正式实现。
+
+仅 macOS 隔离环境和浏览器响应式视口，不代替 Linux/Windows 原生或实体手机验收。
+
+## 文件传输审查收尾（2026-10-17）
+
+针对 `208343138` 的固定提交审查，继续在 `rovai/web-file-transfers` 实施。独立核对后的处理：
+
+- 确认重登回归：下载句柄改用已有的已证明编辑身份边界，再由 Core 重验来源；新票据只绑定新 Session，
+  保留所见版本校验，另一个编辑身份仍被拒绝。没有增加前端句柄恢复机制。
+- 确认阻塞扫描许可缺口：准备摘要和安全打开把许可交给实际阻塞操作，取消 HTTP 不提前释放；
+  最终打开也保留活动许可，Body 取消与 worker 并发退出按已取消处理。
+- 调整 Lagged 策略：暂停正文放行，建立新订阅窗口并核对当前来源；新缺口再核对，明确撤销仍终止。
+  来源重验合并为一个循环；两秒兜底仍覆盖 Core 之外的路径变化和既有非统一撤销路径，不直接删除。
+- 完成票据在缓存紧张时先回收，保留空闲重试；单独表达不可回收的票据容量，避免暗含小文件下载次数限制。
+- 中断记录非凭证操作标识、阶段、安全错误码和交给 HTTP 的字节数，不记录 URL、票据、来源或路径。
+- 上传多 Map 的维护风险成立，但没有发现本轮必须修复的新状态错误；本轮不重写原 commandId/回执恢复。
+
+测试归属：扩展既有 content scan owner，以受控阻塞操作证明取消后许可仍被占用；既有 HTTP owner 覆盖
+同编辑身份重登/跨身份拒绝/旧票据撤销/所见版本、20 次顺序下载及日志字段。新增一个低成本内存 owner
+`event_gaps_revalidate_before_releasing_bytes_and_keep_explicit_revocations`，负责广播缺口、重验中的再次缺口、
+字节门及明确撤销；这些时序不是原解析/分页测试的职责，不引入 SQLite/Core fixture。
+最小命令：`cargo test -p rovai-web --lib`（12 项通过），Host HTTP owner 与
+`pnpm test:host-web-html`（含设置退出、同页重登、原预览下载）通过；Web client/adapter 32 项及 TypeScript 通过。
+最终 `pnpm test:rust:staged` 路由至完整 `cargo test --workspace` 并通过；Host/Web 构建、
+`pnpm docs:test` 及以 `c69a97fbf` 为基线的 `pnpm docs:check:ci` 通过。工具链的 rust-objcopy
+缺少 libLLVM 警告未阻断构建和测试；既有多标签草稿基线问题仍按下述记录处理。
+
+交互稿由真实 ThreadNavigation、AppHeader、ThreadWorkspace、AttachmentCard、ImageGallery、FilePreviewProvider/Pane
+和生产 CSS 编译成独立 HTML，模拟下载结果，不连接 Host、不传真实文件。保留 Porcelain Day / Steel Night，覆盖
+桌面、手机、准备中、交给浏览器、文件变化、来源失效、不能预览及图片附件下载。原型源码按本地规则放在忽略目录，
+交付 HTML 与截图独立提供；它是交互评审材料，不能替代上述真实 Host 验收。
+本轮仍在 macOS arm64 隔离环境验证；Linux/Windows 原生与实体手机资格没有因此增加。
+
+## 浏览器文件传输（2026-10-17）
+
+独立分支实现 [Host Web v7](../../contracts/host-web-v7.md)：上传 30 MiB 与独立预览预算，
+下载专用短期能力、背压、最终块校验、权限撤销和浏览器原生下载；恢复沿用 Core command receipt。
+没有新 Rust 测试 fixture；扩展既有 HTTP Host owner 验证传输 seam，前端 transport owner 验证地址/代次/取消。
+
+验证基线 `c69a97fbf`，工作分支 `rovai/web-file-transfers`。本机 macOS arm64：
+
+- TypeScript、`pnpm test`（246 个 Vitest 文件／2,730 项，脚本 355 通过／2 项平台跳过）、
+  Rust 默认工作区（473 通过／1 项既有忽略）、收尾 `rovai-web` 11 项、Desktop/Web 构建通过。
+- 既有 Host HTTP owner 扩展并通过：30 MiB 精确边界及附加信息、取消后未绑定清理、私有来源拒绝、
+  33 MiB 文件、64 MiB 背压／中途变化、空文件、独立额度、HEAD／Range、所见版本、退出及 Desktop 删除 Camp 撤销。
+- 隔离 Chrome 使用生产界面验证原生 HTML／二进制下载、零下载 Blob、390px 直接入口、超限保留正文与附件、
+  上传进度／取消／重选。未知上传重选和刷新恢复在 transport owner 中核对原 intent，避免第二个来源。
+- Host 渠道和定时任务回归通过。`test:host-web` 的多标签用例未通过：新 CDP 标签默认 756px，桌面导航选择器失效；
+  统一测试视口后进一步发现新标签复用了旧正文。独立构建基线 Web 也复现后者，当前本地 Composer store 仍按 Camp
+  使用共享 localStorage。本次保留原测试判据，不把该套件记为全绿；跨标签草稿隔离需另行修复。
+
+文档按通用治理门禁验证。本次没有真实模型调用、Linux/Windows 原生运行或实体手机验收，不推断这些平台已实测。
+
+## 旧概念残留收口（2026-10-18）
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-legacy-concepts`；分支 `rovai/legacy-concepts`；
+  基线 `dfb96a7ecba17490e5c9637944d8872644ab8da7`，与创建时 `origin/main` 一致。未触碰主工作区改动。
+- Benchmark evidence 导入改用 `threads.create`／`thread.messages.send`／`threads.snapshot`，读取
+  `payload.threadId` 和 `snapshot.thread`。既有报告的 `reviewCampId` 等字段与 legacy Trial 选项保留，
+  避免改写已有报告协议。定向用例使用当前 Core shape，覆盖创建拒绝、发送拒绝和意外执行。
+- `thread.list` help 说明新 Run 使用当前目录、旧 Run 保留冻结目录、目录读取不推进消息搜索边界。
+  新生成的错误说明使用 Thread，机器错误码与持久数据名保持；运行和上下文行为没有改变。
+- 当前操作指南、架构／UI 路由、领域词汇与评测教学对齐 Thread/User、reply-chain、当前历史可见性、
+  Automation result 和原生 Skills／工具箱。DEMO-105 导航说明普通多目标协作，sealed manifest 的历史标题保持。
+- 删除未挂载的 `SkillSettings`、专属单元测试及旧 preview 组件，共享正文去 frontmatter helper 独立保留。
+  现有 Electron fixture 改挂生产 `NativeSkillsSettings`／`ToolboxSettings`，继续覆盖 MCP；
+  历史 Library/Revision/恢复的 Core owner 保持。临时 userData 不启动 Core/Runtime、不接触日常数据。
+- 评测等待脚本以 `--thread-id` 为当前用法，接受旧 `--camp-id`；daily export 使用当前 trace flags，
+  文档配置字段与现有 `DailyScope` 一致。
+- 已通过 `pnpm typecheck`；全量 `pnpm exec vitest run` 为 246 个文件、2,728 项通过。
+- Benchmark、Qualification 与 Context Evaluation 的定向 Node 回归 76 项通过；等待脚本另用临时回执
+  验证 `--thread-id`、旧别名及重复参数拒绝，未连接日常 App。
+- `pnpm test:capability-workspace` 通过；复核原生 Skills／工具箱截图。覆盖 day/night、1040px/2560px、
+  200% zoom、文件导航、失败恢复、迟到响应、过滤后的成员配置及保留的 MCP 交互。
+- `cargo test -p rovai-core --lib`：428 通过、0 失败、1 项既有忽略；完整库回归包含 CLI catalog、
+  历史读取、冻结上下文、成员、附件及 Runtime owner。`cargo check -p rovai-core --all-targets`、
+  `cargo fmt --all -- --check` 和 `git diff --check` 通过；Rust 只改错误／帮助字符串及必要格式，
+  已有 unused/dead-code warning 未作为本次清理范围。
+- `pnpm docs:test` 10 项通过，`pnpm docs:check` 与以基线 SHA 运行的 `pnpm docs:check:ci` 通过。
+  本次不宣称真实模型调用、历史数据迁移或跨平台发布验收。Worktree 状态为 `ready`，保留至后续审阅／合入。
+
+跨版本复核：Version lifecycle 保持 v1.72；Decisions 无新取舍；Contracts 沿用 Thread Naming v1、
+User Naming v1、History v14 与 Skills Rebuild v2；Architecture 更新当前 teaching 和 result shape；
+UI 更新文档路由／测试归属，生产页面行为保持；Runtime Activity 和 Runtime compatibility 无变化；
+Documentation routing 已更新；Root README 无需更新（产品定位和支持范围未改变）。
+
+## 会话 Task 能力开关
+
+R4 已按 User 确认在独立 worktree 实施。范围、完整模型输入前后对照、兼容和 worktree 记录见
+[独立变更说明](model-context-change-task-capability.md)，界面依据见
+[设计稿](../../research/task-capability-ui.md)。默认关闭实例级 Task 能力；Send 与会话执行解耦，
+界面入口采用执行／队员／单聊／任务，数字快捷键一次性迁移为 1–4。
+功能、隔离 App 验证与回归结果见[实施与验证记录](task-capability-implementation.md)。两侧合同检查通过；真实场景均在 Runtime 预检受阻，且 Judge 不可用，Gate 为证据不足。
+
+## Web 断线统一恢复（2026-10-17）
+
+- 基线 `c69a97fbff1e986bbd1ff12ecfa55797b73e0553`；分支 `rovai/web-offline-recovery`。
+  沿用公共 ConsoleClient 的原提交与回执机制，不增加持久队列或业务页面的独立禁用逻辑。
+- 传输失败／SSE 断线进入统一可用性状态；显式恢复先验证服务并等待现有核对，未知结果只重试冻结原请求。
+  Core 明确失败与成功缺失回执查询可以结算原 Promise；仅本次重试被拒绝不能抹掉此前未知提交。
+- 生产 `WebConnectionRecovery` 保持页面与弹窗挂载，拦截底层键盘快捷键，使用中性主操作。
+  刷新丢失上传内容时保留意图并允许重选原文件，不无限锁定页面。
+- 验证命令：`pnpm exec vitest run apps/web/src`（54 项）、`pnpm typecheck`、`pnpm build:web`、
+  `pnpm test:host-web-recovery`、`pnpm test:host-web-recovery-live`，以及通用文档门禁。
+  故障注入 HTTP fixture 拥有回执丢失、冻结原提交、明确失败解锁、模态／快捷键、双主题和手机布局；
+  Live 用例另用正式 WebEntry／BusinessApp 与真实 Host 验证停服重启、原 Composer DOM／草稿和 Session 保留，
+  并检查刷新后的原提交恢复不阻断导航初始化。
+  首轮 Rust 未修改、Live 复用已有 Host，仅通过重命名恢复，不能证明公共发送核对与草稿清理闭环。
+  复审后补齐 `commands.reconcile.operation` 的 Thread/Camp 归一化、公共草稿按原提交匹配清理与
+  已挂载 Composer 同步，并接入界面语言、移除额外 focus-visible 描边。
+  本次重新构建当前 worktree 的 Host；Live 增补真实 Core 校验失败的原 Promise 结算、真实提交丢响应
+  的零重发核对、刷新后公共草稿清理和后续编辑保留，报告记录二进制 SHA-256。
+  `web_commands` 新增低成本 serde 兼容入口 owner：修复前 canonical Thread 名不进入既有核对分支，
+  原 task 字段拒绝 owner 不拥有名称兼容；定向命令为 `cargo test -p rovai-core --lib application::web_commands::`。
+  `host-web.test.mjs` 扩展既有真实接口 owner 的新旧名称、recorded/unknown 回执覆盖，未新增 Rust 数据库 fixture。
+  定向 Web／草稿／语言测试 62 项、默认 Rust workspace 474 项通过（已有 1 项忽略）。没有调用 Runtime，
+  不据此宣称实体手机网络切换或跨平台发布验收通过。日常服务和数据未参与测试。
 
 ## Steer 入队回执与阻塞工具核验（2026-10-15）
 
@@ -2776,3 +3172,438 @@ Codex 子进程错误分类 owner、前端 12 文件 123 项、两项 Composer �
 验证结果以 [JSON 索引](steer-verification.json) 为准。完整 12 Case 语义 Gate 缺固定 Judge 未运行，
 保留证据不足。扩展套件中的 macOS provenance / IdentityChanged 失败在实施前 HEAD 的独立源码归档
 中复现，没有修改或跳过该安全检查；不能将整套扩展测试写为全绿。
+
+## 执行行原消息引用（2026-10-18）
+
+按确认的交互稿在生产 `ConversationRunPresence` 接入原消息引用，沿用现有消息引用、批量输入列表、
+Footer 与消息动作。来源严格使用 Run 的输入 ID，与时间线定位锚点和流式进展分离；支持首条摘要、
+去重后的批量来源、用户／队员消息和纯附件，旧记录与撤回／缺失来源明确回退。
+
+`useRunSourceNavigation` 只在用户定位时读取既有 `thread.messages.around`，保留一个有界消息窗口，
+按版本合入时间线。新定位、其他会话导航与发送使旧请求失效，原消息聚焦、高亮和返回均不改草稿。
+返回时先取消平滑滚动，再恢复原 Run 位置，避免浏览器已排队的滚动帧覆盖返回结果。
+规范见 [Run Process Detail Surface v55](../../contracts/run-process-detail-surface-v55.md)。
+
+扩展现有生产组件浏览器 owner，直接断言来源 ID、作者、数量、精确定位、可见焦点、草稿及迟到响应，
+同时继续执行原有 Run 位置、身份／模型、执行详情、停止／重试、日夜主题和窄宽度场景。
+本次默认测试发现主线 Product Contract Fingerprint 仍期待 schema 157；主线代码早已为 158，
+仅将该旧断言同步到 158，不更改 Core schema 或迁移。
+
+验证结果：类型检查、完整 `pnpm test`（247 个 Vitest 文件／2742 项；Node owner 356 passed、2 个平台 skip）、
+默认 Rust workspace（474 passed、1 个既有 ignored）和 Web 构建通过。生产组件浏览器 owner 通过，
+覆盖 38 个既有状态、6 组主题／窗口组合及新增来源交互；可见焦点、快速返回和粗指针目标均通过。
+`pnpm docs:test`、`pnpm docs:check` 与以 `102b24f12a66af8151cb5b43cc4bb8e5feaafa69` 为基线的
+`pnpm docs:check:ci` 通过。
+
+## 撤回智能体检测简化（2026-10-18）
+
+按 User seq17 要求，完整反向应用 PR #797 的合并提交 `7358905fcedfe52b8e28576c66b52f48e53f9096`，
+恢复合入前的智能体管理界面和检测行为。回退在 `rovai/revert-runtime-detection-simplification` 独立 worktree
+进行，基线为 `dc2863086c7ea397fd980e0c2e7735f80f6d08c2`；后续其他功能和业务数据不回滚。
+31 个原变更文件的反向范围及增删行数逐项吻合；生产 `MemberManagement`、`RuntimeInstallationGuide` 和
+`BusinessApp` 与 PR 合入前版本一致。没有新增表、迁移、缓存或替代实现。
+
+测试退役依据：`independent_diagnostics_reuse_environment_and_same_target_check` 与
+`supervisor_failure_belongs_only_to_the_captured_installation` 两个 slow owner 随其新增生产路径和合同一起撤回，
+不以忽略或放宽断言保留。其余既有 owner 恢复原用例，保留程序选择、配置变更围栏、文件替换与本地保存等
+原有检查；默认层没有新增或删除 owner。最低回归为 `pnpm test:rust:pr`、
+`cargo test -p rovai-core --features slow-tests --lib application::runtime_check_environment::tests::`，
+以及恢复后的静态发现与程序替换 owner。TypeScript、Vitest、桌面构建和文档门禁按当前开发规范执行。
+
+
+## 文件预览读取复用（2026-10-18）
+
+按 User seq15 确认的三项范围实施。独立分支 `rovai/preview-read-reuse`，worktree 为
+`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-preview-read-reuse`，基线
+`35cbc308dba33d02031bb21f93fa3b217bbf9b73`；无主线治理先行要求。
+
+- Desktop 在现有 handle 中增加一条最近成功定位记录，只有相同 offset 命中才复用行号；原读取前后校验保持。
+- Web 在现有 Analysis 保存大小和原始修改时间。分页/定位从块行号选定区间读取；属性变化、缺失匹配 Analysis、
+  短读直接失败，不重新分析或全文哈希回退；其他读取继续完整摘要。没有全文字节缓存。
+- 共享 reload 在 HTML 资源预留前确认同一文件及两端既有版本字段；仅健康、有内容和句柄的自动刷新可短路。
+  候选由既有 finally 释放，只消费开始水位，手动/错误/无句柄恢复完整加载。
+
+当前规范由 [File Preview v23](../../contracts/file-preview-v23.md)、[Host Web v8](../../contracts/host-web-v8.md)
+和对应架构拥有。旧已接受合同冻结，新增继承条款并更新现有导航；没有新增公开字段、协议版本、依赖、调度或重试系统。
+
+效果计数都在现有测试夹具中，不建立基准测试框架：
+
+| 场景 | 修改前 | 修改后 |
+| --- | --- | --- |
+| Desktop 第 524289 行，3.5 MiB 前缀 | 定位 3.5 MiB，分页再次读 3.5 MiB 前缀及 256 KiB 正文 | 定位一次，随后只读 256 KiB 正文 |
+| Web 2165539 字节文件，第 250000 行 | 候选、定位、分页三次全文扫描/摘要，共 6496617 字节 | 候选 2165539 字节/1 次摘要，定位 65536 字节/0 次，分页 308200 字节/0 次 |
+| 慢 HTML 的同版本重复通知 | 同一个新版本准备两次 HTML | 准备一次；补刷仅取得并释放同版本候选 |
+
+Desktop 与 HTML 修改前由本 Thread 的临时夹具复现；Web 修改前依据原 scanner 三次完整读取路径，
+修改后均由实际读盘字节和摘要/HTML 准备计数断言。分页读取包含块内前缀和最多三个 UTF-8 边界字节。
+
+Rust 扩展既有 `resources::content::tests` owner 并按当前合同改名，没有新增或删除测试函数；
+只替换已退出的“同候选分页必须拒绝等属性改写”断言。保留并扩展完整读取摘要拒绝、原始时间精度、
+读中变化、UTF-8 跨块、长行、缩短和空文件；Host 集成同步接口约定。
+共享控制器继续保留后台不读、失败不重试与迟到结果释放，并补同版本、水位推进、文件身份、摘要差异和强制恢复。
+
+验证已通过：类型检查，五个相关 TypeScript 文件的 144 项测试，Web 读取 owner 定向测试，
+完整 `pnpm test`（246 个 Vitest 文件／2793 项，脚本 357 passed／2 个既有平台 skip），
+默认 Rust workspace（474 passed／1 个既有 ignored），Desktop/Web 构建，以及
+现有 Host HTTP 集成 `node --test --test-name-pattern='Desktop and Web share' scripts/lib/host-web.test.mjs`。
+Host 验收使用独立临时 data、Skill Library 与 MCP 路径，不启动模型。
+`pnpm docs:test`、`pnpm docs:check`、以上述真实 base 为输入的 `docs:check:ci` 与 `git diff --check` 通过。
+
+## 智能体检测减重第一批（2026-10-18）
+
+按 User seq25 从撤回后的实现逐项实施公共减重与 Codex，工作基线为
+`9a5127ed8a26531808a61c62565c097cf498fd43`，使用独立 `rovai/runtime-check-weight` 分支。
+保留“重新检测”“检查状态”的名称、位置、文案、状态映射、安装／登录引导、参数选择与平台准入。
+本批不包含 MiniMax 参数工作移位、ZCode/Grok/Claude/Antigravity 的后续局部优化或冷启动顺序调整。
+没有新增表、迁移、后台服务、持久字段、缓存体系、第二套 generation 或检查管理器。
+
+### 删除或合并的工作
+
+- 单项检查复用当前有效入口与搜索环境，无有效入口才补充搜索；显式重新检测捕获一次环境。
+  有效输入未变化时保留搜索 generation，同目标请求继续由既有 pending/active 队列合并。
+- 静态发现直接复用已有文件身份，原生稳定文件完整哈希为未变 0 次、首次或升级 1 次。
+  必要校验与手动版本补读均留在各 Runtime 工作任务，形成既有 `VerifiedDiscoveredRuntimeEntry` 后短提交；
+  收集循环不再执行第二遍完整哈希或等待版本命令。正常候选成功时不构建保存路径的备用候选。
+- 完整检查复用同轮入口指纹，移除 health 层重复完整哈希，保留结束前的身份复核。
+  Windows shim、解释器和 ZCode bundle 依赖继续按原有规则校验，不套用普通原生程序的 0/1 计数。
+- Codex 删除独立 `login status` 和第二个 app-server；一个临时进程依次完成初始化响应校验、
+  `initialized` 通知、现有 Host 认证判定及分页模型读取。必要版本与 Schema 能力检查继续保留。
+- 设置页改为行级 pending/error；完成后按钮与事件共用 `runtime.status.get` 和统一安装列表读取，
+  一个在途 Promise 加补刷标记处理读取期间及补刷期间的新事件。取消这条路径对 Overview、导航、记忆、
+  `health.check` 中 Git 探针的等待。
+
+### 保留的正确性边界
+
+自动启动发现和页面打开仍静态；手动重新检测只补读未知或新程序的有界版本，未变可信版本直接复用。
+版本命令期间程序变化则丢弃该结果，后续显式重扫可读取新程序；未知版本不构成额外执行禁用条件。
+静态结果不写完整 Ready，同一程序的检查失败不会被普通重扫清除。真实 Host、消息投递和权限行为不变。
+
+合并及写回复用现有安装 ID/version、文件身份与 locator；路径消失／恢复只在实际变化时推进 version。
+当前安装身份决定安装是否变化，健康快照决定旧 Ready／认证／能力是否有效，旧 F1 快照不会让已发现 F2
+在检查开头再次推进版本。Supervisor 在数据库锁外观察文件，返回后复核原目标才写失败；无法证明归属的
+错误只交给原请求。公开错误也按当前已记录指纹筛选，防止旧快照保留 F1 错误或隐藏 F2 的合法超时；
+该读取只用现有数据库身份，不做文件 I/O。没有不断改变 active attempt 目标，也没有新失效层。
+
+首次 Pi 目录请求从未知安装变成已建立安装时，后来的请求保守排队一次；已知同目标请求继续合并。
+本批不为消除这个首次重复增加例外管理。
+
+### 定向回归与 owner
+
+复用 `runtime_check_refresh_tests` 的 Core／临时进程夹具，增加三个 slow owner：
+
+- `independent_checks_reuse_environment_and_same_target_check`：原正式／草稿用例覆盖配置切换，不能证明
+  同代次 A/B 独立结束、同目标合并及 F1 健康快照 → 静态 F2 → 检查 F2 的版本稳定。
+- `supervisor_failure_belongs_only_to_the_captured_installation`：普通完成路径不经过 Supervisor 超时分支；
+  该 owner 控制文件检查与数据库提交间的替换，验证旧错误归属、合法失败持久化及锁外文件检查。
+- `manual_rescan_reuses_versions_and_discards_replaced_version_responses`：现有纯发现 owner 不拥有版本持久化，
+  用同一临时程序验证被动发现零进程、重复重扫只补读一次、升级重读、检查失败保留及版本执行期间替换。
+
+这些失败涉及现有管理器、数据库和子进程之间的时序，纯 helper 测试无法覆盖；全部沿用已有夹具与 slow 层，
+没有新增默认层 owner 或测试框架。原发现 owner 补充 0/1 哈希计数，原发现提交 owner 补迟到缺失／恢复／升级；
+Codex 原认证 owner 扩展为认证、通知、分页、Schema 分支和进程回收矩阵，原目录 owner 保留“目录成功不替代完整检查”。
+
+最小相关命令：
+
+```sh
+cargo test -p rovai-core --features slow-tests --lib application::runtime_check_environment::tests::
+cargo test -p rovai-core --features slow-tests --lib discovered_runtime_verification_keeps_database_available_and_identity_after_restart
+cargo test -p rovai-core --features slow-tests --lib agent_profile::slow_tests::
+cargo test -p rovai-core --features slow-tests --lib codex_catalog_waiters_share_refresh_without_satisfying_full_validation
+cargo test -p rovai-core --features slow-tests --lib pi_catalog_observations_are_independent_of_health_and_fenced_by_identity
+cargo test -p rovai-core --features slow-tests --lib runtime_check_task_ids_clear_activity_after_success_panic_abort_and_shutdown
+cargo test -p rovai-core --features slow-tests --lib application::tests::runtime_check_manager_
+cargo test -p rovai-core --features extended-tests --lib codex_probe_requires_login_unless_native_provider_explicitly_waives_it
+cargo test -p rovai-core --features extended-tests --lib installed_catalog_discovery_runs_only_bounded_identity_commands
+```
+
+设置页专项使用生产 `RuntimeInstallationsPanel`，覆盖行级等待、错误隔离、按钮路由、启动设置和原有状态文案。
+其 `onReload` 为夹具回调，因此不据此声称验证了真实 BusinessApp 全链路；生产接线另以源码核查确认只调用
+Runtime 聚合及安装列表。刷新函数用受控 Promise 验证首读与补刷期间的连续事件，以及失败后的补刷／重试。
+夹具中原已过期的环境编辑器、隐藏 Cline 和通知数量断言按当前页面纠正，不改生产界面。
+
+### 验收结果与同机计时
+
+本地定向 Rust 共 49 项通过，包含上述 owner、既有程序替换后的有界重试 owner 以及 32 项 managed 安装／快照
+回归。默认 `cargo test --workspace` 为 474 passed、0 failed、1 个既有 ignored；类型检查、Web 构建及设置页
+生产组件专项通过。完整 `pnpm test` 为 246 个 Vitest 文件／2784 项通过，Node owner 为 357 passed、2 个平台 skip。
+提交前合入主线 `6554b12fffec44835843fc480c9b436e79540a2a` 的独立文件预览变更，继续运行类型、Node、
+Web Rust 和差异文档门禁。最终错误归属修正后，7 项并发／环境 owner、32 项安装／快照 owner、
+2 项错误投影 owner 再次通过；Web Rust 11 项通过。
+
+同步主线后的完整 Vitest 为 2794 passed、1 failed：文件预览既有真实 watcher 用例等待通知超时。
+该 owner 在本 worktree 单独复测 59 项通过，在未修改主线源码归档中也通过，但整套运行仍出现失败，
+包括关闭 Vitest 缓存的一次运行。保留该本机验收限制，不改或跳过该测试，也不将其认定为已证明的基线失败。
+
+计数与竞态结论：
+
+| 验收 | 结果与证据范围 |
+| --- | --- |
+| 普通原生未变／首次／升级发现 | 既有发现夹具完整哈希计数分别 0／1／1，提交路径不再补一遍哈希；不是 Windows 多文件入口计数 |
+| 版本补读 | 被动发现 0 命令；同一目标三次手动重扫只读一次版本；升级重读；命令期间替换的结果不入库 |
+| Codex 直接启动 | 未复用版本的夹具为 3 次，可选 experimental Schema 分支 4 次；相对原流程 5／6 次，删除 login 与第二个 app-server；可信版本再少一次 |
+| 并发与归属 | A 尚未结束时 B 已结束；同目标合并；同 generation 迟到扫描、路径缺失／恢复、F1 快照与 F2 安装、旧超时及异常均通过 |
+| 刷新终态 | 首次读取、补刷期间连续事件均读到终态；检查后读取只接 Runtime 数据，生产接线源码核查无 Overview／导航／记忆／Git |
+| 清理与功能 | Codex 临时进程回收、取消／panic／shutdown、目录请求不替代完整检查通过；参数、权限、默认模型及失效目录的原有测试保留 |
+
+同一 macOS arm64 机器、相同现有登录及默认配置，以独立全新数据库／Skill Library／MCP／runtimeFilesRoot
+启动改前 Debug Core（`9a5127ed8`）与改后 Debug Core，先等首次静态发现结束，再依次做三次重新检测、
+三次 Codex 完整检查，每次分别读取 Runtime 与安装列表。前后 16 个已发现入口的路径及指纹逐项相同，
+Codex 为 `0.162.1`；不向模型提交 Prompt。以下为 RPC 发出至回复耗时，单位 ms：
+
+| 场景 | 改前 | 改后 |
+| --- | --- | --- |
+| 初始化后首次手动重新检测 | 7637 | 924（包含未知版本补读） |
+| 后续两次重新检测 | 7631／6396 | 70／68（可信版本复用） |
+| 三次重新检测后的数据读取 | 24／14／16 | 3／4／4 |
+| 三次 Codex 完整检查 | 2285／2132／1736 | 2297／1940／2032 |
+| 三次 Codex 检查后的数据读取 | 15／15／16 | 5／4／4 |
+| 全新 Debug Core／数据库启动到首轮发现完成 | 13295 | 14765 |
+
+改后最终复测日志中的首轮静态发现阶段为 4155 ms，首次手动发现阶段为 840 ms，重复发现阶段为 11／12 ms；
+它们不含各自前置等待，不能替代上表总 RPC／启动耗时。改前没有相同发现阶段日志，不推算阶段提升。
+数据读取的改前入口为 `health.check` 加安装列表，改后为 `runtime.status.get` 加安装列表，表示实际接线变化。
+
+计时表使用最终错误投影修正后的重新构建。第一次改后样本的重新检测为 748／71／73 ms，Codex 为
+3766／1986／2080 ms，冷启动为 12148 ms；同样保留该样本，不只选择更快的数据。
+重复重新检测已明显减少等待；Codex 完整检查和冷启动耗时没有稳定下降，不能仅凭减少两次进程就宣称端到端提速。
+首次版本补读、实际认证／网络／模型 RPC、Schema、完整检查的结束前文件复核及最后短读取仍需等待。
+全新数据库与可选子系统初始化仍保留，首轮全量发现完成也不等于首个智能体可用或 UI 开始响应。
+本轮没有测桌面真实点击到渲染总耗时，没有实测 Windows，亦未重跑整个 Rust 扩展／慢速集；这些边界不写成通过。
+
+
+### PR #807 前端终态恢复补验（2026-10-19）
+
+本次修订只涉及三处现有前端生产文件，不再改后端或后续智能体批次：
+
+- 行操作锁只由本行实际 pending 请求持有。服务端徽标仍使用原状态映射；请求结束而最终读取失败时，旧 `checking` 快照不能继续禁用“检查状态”和“启动设置”，错误仍留在对应行，重复请求继续由 Core 合并。
+- 共享安装列表改为复用已有 `createRuntimeRefresh`。该函数只增加返回最后一次读取结果的能力；Overview、成员与 Runtime 共享一个在途请求和补刷标记。终态刷新加入旧列表请求时，必须补读后才向所有等待者返回最后结果，补刷期间的新事件也按原规则处理。
+- 按钮名称、位置、文案、状态映射、安装登录引导和平台准入不变；没有新增表、持久字段、缓存、队列或协调器。
+
+定向验证：
+
+- 现有设置页 Electron 夹具挂载生产 `RuntimeInstallationsPanel`：先显示真实组件的 checking 快照，结束本行请求，再令替代 `onReload` 失败；原行错误保留，检查与启动设置重新可用，点击原行能重新发起检查，另一行的错误不受影响。此项仍是受控回调的组件验证。
+- 现有 `runtime-check.test.ts` 补充生产所用两个刷新函数的组合时序：较早安装列表尚未返回 → 检查完成 → Runtime 终态刷新 → 旧列表返回 → 再读新列表。验证新状态与新列表一致，先前列表等待者也收到最终列表；原有首轮、补刷期间连续事件及失败恢复用例继续通过。这不是完整 BusinessApp 挂载测试；生产接线另按源码及下述真实 App 核对。
+- `pnpm typecheck`、定向 Vitest 191 项、`pnpm test:settings-workspace` 通过。完整 `pnpm test`：246 个文件 / 2796 项 Vitest 全通过；Node 357 passed、2 个既有 skipped。本次整套文件预览 watcher 用例通过，未对其做任何修改；上次超时记录保留。
+
+真实 App 验收使用 `pnpm dev`、macOS arm64、独立全新 userData / Skill Library / MCP 配置、实际 Debug Core 与本机 Codex 0.162.1、Claude Code 2.1.287；没有发送 Prompt。计时从真实鼠标点击事件到本行按钮恢复后的第二个 animation frame：
+
+| 操作 | 点击到恢复操作 | Core 检查 RPC | 结果 |
+| --- | ---: | ---: | --- |
+| Codex 普通检查 1 | 2096 ms | 2073 ms | 本行恢复；另一行检查和设置可操作 |
+| Codex 普通检查 2 | 1998 ms | 1968 ms | 同上 |
+| Codex 普通检查 3 | 2215 ms | 2194 ms | 同上 |
+| Codex 检查期间点击 Claude 检查 | 1890 ms | 1866 ms | 两行独立结束 |
+| Codex 最终读取故障注入 | 1894 ms | 1881 ms | 行内错误保留，检查与设置恢复 |
+| 故障解除后原行重试 | 2124 ms | 2095 ms | 检查成功，行内错误清除 |
+
+故障注入仅在验收进程内临时拦截 Renderer 的 `runtime.status.get` / `runtime.installations.list`：先收到 Core 真实 `checking: true` 快照，再拒绝后续读取；`runtime.product.check` 始终调用真实 Core。未向产品加入注入开关。截图确认原有页面内容与可操作入口。
+
+各次检查 RPC 结束到该行恢复期间只发起 Runtime 状态和安装列表读取，没有等待 Overview、记忆或 Git 探针。全 App 在第三次检查期间另有既有导航、使命与通知轮询，与检查完成回调分开；最初把整个 App 期间都断言为“没有导航请求”过宽，因此按真实完成区间核对，未为此修改生产逻辑。
+
+以上为开发版 App 的实际操作样本，没有旧版桌面点击到渲染对照，不能据此证明单项检查稳定提速，也不替代 Windows 或打包 Release 验收。主要等待仍在约 1.9–2.2 秒的完整检查 RPC；本次不继续扩展后端验证或增加性能平台。
+
+## 单项检查必要工作减重（2026-10-19）
+
+基于主线 `7000026f3ed148233591c00dcc44784525c0835e`，在独立 worktree 的
+`rovai/runtime-check-simplify` 分支实施。没有恢复此前撤回的界面改动；“重新检测”“检查状态”、
+页面布局／文案／状态映射、安装登录引导与平台准入保持。PR #807 的行级等待和 Runtime 刷新不重做。
+当前边界同步到 [Runtime Launch v64](../../contracts/runtime-launch-and-verification-v64.md)。
+
+### 删除与复用的实际工作
+
+- MiniMax 普通检查保留 initialize、认证、一次必要 session/new、当前模型及目录一致性，删除逐模型
+  set_config_option 和最后恢复；仅原 CatalogOpen 请求保留完整参数遍历。同一 Check Manager 的
+  pending/active 用既有 trigger 区分 MiniMax 意图，同意图／同目标继续合并；首次目录回退仍传递目录意图。
+- 健康成功与完整目录成功使用既有字段分别写入。普通检查保留同一有效身份／配置的完整目录和原时间；
+  无完整目录只保存已读信息，不以健康成功时间回填 MiniMax 目录时间。现有 unavailable/invalidated
+  使部分结果不参与已保存参数过滤，没有新增目录状态或持久字段。复用成功写入 helper 删除原重复 SQL。
+- Pi 删除 new_session/get_state/switch_session/get_state 四次演练 RPC 及专用 locator 记录；
+  Grok 删除 resume 与重复 set_model，Kiro 删除重复 set_model；同步收窄普通 Ready 要求，不伪造实测标志。
+  ZCode 由明确 probe 入口跳过 subscribe/setMode；正式 new/resume 保持，未以有无 Prompt 判断。
+- 将既有可信版本传给现有检查函数；成功、同身份、未失效能力快照可复用 Claude/Antigravity help 与
+  Codex 普通 Schema 证据。动态认证、模型读取、最低版本/启动代际门槛仍保留。OpenCode 版本为空时沿
+  既有代际门槛失败，不再运行第二遍版本命令。Codex 仍一个 app-server 完成通知、认证及模型分页，
+  可选 Fast 缺证据时仍可单独导出 experimental Schema，失败不降级普通能力。
+- 安装 ID/version、locator、文件身份与锁外复核沿已合入流程；正式运行、恢复、权限及模型应用未删改。
+  没有新表、迁移、缓存体系、后台服务、检查模式、第二套代次、管理器或性能平台。
+
+### 定向验收与计数
+
+新增一个 MiniMax 集成 owner，使用现有 Core/DB/Check Manager 与临时协议进程；准入原因及旧测试要求
+退役记录见 [Rust 测试准入](../../development/testing.md#单项-runtime-检查减重)。其他情况扩展原测试。
+
+| 验收项 | 结果 |
+| --- | --- |
+| MiniMax 2/8 模型、检查先到/目录先到 | 普通检查模型设置 0、恢复 0；目录请求为 N+1；各 probe 仅一次 session/new、Prompt 0；pending/active 同类合并、异类不冒充完成 |
+| 首次目录及参数保留 | 无健康快照时完整检查回退取得全部参数；部分结果 unavailable；完整目录内容/时间保留；失效后部分结果不复活旧目录；前端保存参数不被过滤 |
+| Pi/Grok/Kiro/ZCode | 既有协议夹具计数分别删除 4/2/1/2 次 RPC，必要初始化成功；Grok/Kiro 当前模型缺失仍失败；Pi/ZCode 正式会话与 ACP 恢复测试保持 |
+| 静态证据与版本 | 可信版本不运行版本命令，未知值仅一次；Claude 4→2、Antigravity 3→1 个直接进程；Codex 可信版本/普通 Schema 证据时 1 个 app-server，可选缺证据分支另加 1 个进程；动态认证/模型失败仍失败 |
+| 安装变更/并发 | 既有环境、版本命令期间替换、Supervisor 旧失败归属、同 generation 安装变更用例通过；原安装 ID/version 与身份保护未绕开 |
+
+进程/RPC 精确计数来自受控协议进程夹具与生产调用路径，不称为对真实 CLI 后代进程的采样计数。
+
+已通过：默认 Rust workspace 474 passed、1 ignored；health 24 passed、3 ignored；OpenCode 空版本
+定向用例；ACP 正式协议 67 passed、2 ignored；Pi Host 15 passed、1 ignored；ZCode transport 5 passed；
+Adapter 25 passed；环境/管理器 8 passed；安装/快照 32 passed；最终 MiniMax 集成 owner；Renderer 参数
+36 passed；类型检查、Debug App 构建、cargo fmt、差异空白检查，以及 docs:test/docs:check/docs:check:ci。
+各集合有交叉，不将重复执行累加成总覆盖数。
+
+### 同机真实 App 前后对比
+
+使用同一 macOS arm64 与原生程序/账号配置，前后各运行隔离 `pnpm dev` Electron + Debug Core，
+等待静态发现完成，再对每款依次执行首次检查和三次重复检查。Core RPC 包围真实 runtime.product.check；
+UI 时间从真实鼠标点击事件到本行按钮恢复后的第二个 animation frame。前后安装列表的路径、指纹、
+版本逐项相同；所有检查 Prompt 为 0。不是夹具耗时，也不是打包 Release 测试。
+
+原生版本：MiniMax 0.6.12、Pi 1.1.0、Grok 1.0.50、Kiro 2.21.1、ZCode 0.16.9、Claude 2.1.287、
+Antigravity 1.4.2、Codex 0.162.1。每格「UI / RPC」，单位 ms；超时样本保留：
+
+| 智能体 | 阶段 | 首轮 | 重复 1 | 重复 2 | 重复 3 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| MiniMax | 改前 | 1666 / 1619 | 1549 / 1510 | 1549 / 1509 | 1516 / 1481 |
+| MiniMax | 改后 | 1649 / 1615 | 1433 / 1392 | 1416 / 1377 | 1400 / 1360 |
+| Pi | 改前 | 766 / 720 | 501 / 482 | 516 / 487 | 616 / 589 |
+| Pi | 改后 | 515 / 481 | 332 / 307 | 315 / 301 | 332 / 308 |
+| Grok | 改前 | 749 / 716 | 766 / 739 | 749 / 715 | 749 / 716 |
+| Grok | 改后 | 815 / 781 | 699 / 661 | 683 / 652 | 682 / 646 |
+| Kiro | 改前 | 4285 / 4252 | 2017 / 1988 | 2050 / 2009 | 2050 / 2017 |
+| Kiro | 改后 | 2334 / 2297 | 2067 / 2037 | 2084 / 2050 | 2117 / 2081 |
+| ZCode | 改前 | 4469 / 4428 | 1400 / 1360 | 1400 / 1358 | 1400 / 1367 |
+| ZCode | 改后 | 1400 / 1367 | 1067 / 1028 | 883 / 853 | 866 / 839 |
+| Claude | 改前 | 1166 / 1134 | 933 / 892 | 932 / 902 | 916 / 890 |
+| Claude | 改后 | 1149 / 1114 | 883 / 847 | 883 / 849 | 850 / 825 |
+| Antigravity | 改前 | 9856 / 9813 | 31658 / 31616（超时） | 9939 / 9885 | 7145 / 7104 |
+| Antigravity | 改后 | 5169 / 5133 | 6687 / 6658 | 6071 / 6041 | 5487 / 5456 |
+| Codex | 改前 | 3301 / 3263 | 1867 / 1829 | 1834 / 1798 | 4853 / 4830 |
+| Codex | 改后 | 2250 / 2219 | 1717 / 1682 | 1728 / 1684 | 2451 / 2416 |
+
+三次重复 UI 中位数：MiniMax 1549→1416、Pi 516→332、Grok 749→683、Kiro 2050→2084、
+ZCode 1400→883、Claude 932→883、Antigravity 9939→6071、Codex 1867→1728 ms。
+MiniMax 确实取消了本机 7 模型原来的 8 次设置，但只减少约 0.13 秒；Kiro 没有观察到提速。
+Antigravity 改前包含一次超时，Codex 也有波动，不能用三次样本宣称稳定网络性能收益。
+
+本机额外验证 MiniMax：四次普通检查后目录仍 unavailable，目录首次请求用约 1410 ms 补全参数并成为
+fresh；随后普通检查保留完整内容和目录成功时间、更新健康成功时间，按钮与启动设置可操作。额外操作的
+animation-frame 监听等待超时，后续直接读取真实 RPC 完成和按钮状态确认功能；这次补验没有
+混入上述计时样本。既有 TTL 后目录自然 stale，没有用健康检查刷新时间。参数保存和请求竞态使用上述
+定向夹具验证，不将帧监听超时误记为 Core 超时。
+
+首次指隔离数据库的首次健康检查，不代表 OS 冷启动或原生首次安装；前后顺序测试仍受原生缓存/网络影响。
+本轮没有单独测程序升级耗时、Windows、打包 Release 或真实用户任务恢复，升级身份由已有定向测试覆盖。
+认证/初始化/当前模型读取、进程回收、完整检查结束前文件复核及最终 Runtime 数据读取仍需等待；MiniMax
+完整目录打开仍执行全参数读取。未压缩超时、提前结束等待或在后台继续原普通检查。验收 App 已受控退出，
+独立 userData/Skill Library/MCP 未触及日常 App。完整计时 JSON、身份清单与截图随本次 Thread 附件交付。
+
+## 单项检查末尾复核与 Codex Fast 导出减重（2026-10-19）
+
+本次以 PR #812 的 `543ac8f63` 为对照，只补两项实际工作删减，保留前述 MiniMax、Pi、Grok、Kiro、
+ZCode 等已完成的调整。没有再改协议范围、目录、Renderer 或界面，没有新增数据表、迁移、缓存、后台服务、
+检查模式或管理层。
+
+- 末尾 `verify_runtime_entry` 接收本轮 `VerifiedDiscoveredRuntimeEntry` 中与指纹成对验证的文件身份，
+  直接使用既有 `verify_executable_integrity` 的 `Unchanged` 分支；保留执行条件、locator、安装 ID/version、
+  搜索代次和替换后的旧结果拒收。I/O 仍在数据库锁外。Windows 命令包装入口沿用原依赖完整校验例外。
+- 删除 Codex 为 Fast 单独执行的 `generate-json-schema --experimental`。普通 Schema 顺带提供的 Fast
+  字段及同程序已有正向证据可以保留，缺字段不启动补证进程。必要普通 Schema、初始化响应校验、
+  `initialized` 通知、原生认证、分页模型读取和清理保持。Fast 保存／冻结／真实参数下发没有改动。
+- 只在原函数加起止时间日志：原生检查（含回收）、有界命令及回收、末尾复核、提交发布；不输出参数、
+  原生认证内容或新增计时服务。异常提前退出不保证产生全部阶段日志，缺日志不能当作耗时为零。
+
+### 工作量与回归
+
+原有发现夹具的线程内计数覆盖：稳定普通入口首次／升级发现加末尾复核共 1 次完整哈希，未变的重复
+发现加末尾复核共 0 次；替换文件时完整复核并拒收旧结果。Core 正常单候选检查在入口与末尾连接该规则，
+深检继续消费同一指纹。此计数不概括 Windows 包装依赖、构造异常或候选替换／重试路径。
+
+Codex 原进程夹具覆盖普通 Schema 有／无 Fast 字段、有效账号、明确无需 OpenAI 认证、缺认证字段、
+错误 RPC、分页及清理：可信版本和普通静态证据有效时仅 1 个 app-server；Fast 专用导出均为 0。
+首次且版本／普通静态证据均未知时仍为版本、app-server、普通 Schema 共 3 个直接进程。
+真实运行的 Fast 偏好不以该标志准入；原 Fast 保存与参数映射用例通过。
+
+沿用既有 owner，通过 Codex 进程、普通发现计数、环境／管理器 8 项、替换身份、进程回收 5 项、Fast 2 项、
+安装持久化与数据库锁可用性、成功／失败 rebind，以及平台证据 5 项定向测试。
+补跑时修正两处原 PR 的验证遗漏：版本命令替换夹具原先预置可信版本，已改为未知版本以真正触发替换；
+兼容登记文档已在前一提交更新但摘要仍旧，按现有规则同步摘要，不更改任何平台准入名单。
+最终 `cargo test --workspace` 为 474 passed、1 ignored；Debug App 构建、`cargo fmt`、差异空白检查、
+`docs:test`（10 passed）和 `docs:check:ci` 通过。测试集合有交叉，不累计成覆盖总数。
+
+### 真实 App 采样与范围
+
+同一 macOS arm64、同一隔离开发版 `pnpm dev`、同一 userData／Skill Library／MCP、同一原生程序和账号
+配置。前后版本、路径及指纹逐项相同：MiniMax 0.6.12、Kiro 2.21.1、Antigravity 1.4.2、Codex 0.162.1。
+改前为 `543ac8f63` 加相同计时日志；测量期间没有并行运行本任务的编译或测试。每组第一轮单列，三次重复取中位数；
+第一轮是已有健康快照的 App 启动后检查，不代表新安装／升级或冷数据库。
+
+下表每格为「UI / RPC」，单位 ms。UI 从 DOM 点击事件到按钮恢复后的第二个 animation frame；RPC 包围
+真实 `runtime.product.check`。改前使用自动鼠标点击，改后窗口可见后使用原生辅助功能点击。后者逐次确认
+状态，调用间隔更长，不能把这组前后差值当作同节奏的 UI 性能因果结论。所有成功样本原样保留：
+
+| 智能体 | 阶段 | 首轮 | 重复 1 | 重复 2 | 重复 3 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| MiniMax Code | 改前自动点击 | 1781 / 1750 | 1556 / 1525 | 1614 / 1583 | 1565 / 1527 |
+| MiniMax Code | 改后原生点击 | 2498 / 2457 | 1981 / 1945 | 2264 / 2218 | 2032 / 1996 |
+| Kiro | 改前自动点击 | 4522 / 4487 | 2139 / 2109 | 2607 / 2573 | 2149 / 2120 |
+| Kiro | 改后原生点击 | 2825 / 2788 | 2559 / 2515 | 2463 / 2409 | 2472 / 2433 |
+| Antigravity | 改前自动点击 | 6639 / 6612 | 5107 / 5079 | 5531 / 5502 | 4206 / 4183 |
+| Antigravity | 改后原生点击 | 6675 / 6626 | 5840 / 5782 | 3990 / 3938 | 6663 / 6624 |
+| Codex CLI | 改前自动点击 | 3930 / 3899 | 1839 / 1811 | 1856 / 1830 | 1797 / 1761 |
+| Codex CLI | 改后原生点击 | 4390 / 4346 | 3359 / 3308 | 3097 / 3058 | 7509 / 7434 |
+
+改前→改后原生点击的 UI 中位数为 MiniMax 1565→2032、Kiro 2149→2472、Antigravity 5107→5840、
+Codex 1839→3359 ms；本组没有证明 UI 总耗时改善，不能隐去这些样本或将后端时间替代它们。
+改后采样最初有一次窗口隐藏：Core 已约 1679 ms 完成、按钮已恢复，但绘制帧计时未结束。保存原始记录，
+不计入有效 UI 样本；可见窗口重新采集首轮加三次重复，没有修改生产加载逻辑或禁用后台限速。
+
+为减少输入驱动和采样间隔对解释的干扰，另用相同 Desktop client 连续提交 Core 请求，每次完成后间隔
+100 ms，首轮加三次重复；与改前自动连续点击的 RPC 时间对照。此组只测 Core RPC，**不作为点击到渲染
+耗时**，不替换上面的 UI 数据；系统负载、原生缓存及动态服务没有被严格控制，三次小样本不证明稳定收益。
+
+| 智能体 | 连续补测首轮 | 重复 1 | 重复 2 | 重复 3 | 改前 RPC 中位数 | 补测 RPC 中位数 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| MiniMax Code | 1519 | 1462 | 1452 | 1952 | 1527 | 1462 |
+| Kiro | 2194 | 2245 | 1950 | 1930 | 2120 | 1950 |
+| Antigravity | 5449 | 5590 | 3960 | 4293 | 5079 | 4293 |
+| Codex CLI | 1685 | 1380 | 1251 | 1468 | 1811 | 1380 |
+
+阶段中位数如下（ms），右侧使用连续 RPC 补测。原生检查包含启动、协议／模型读取和清理，不把它全称为
+网络时间；清理已包含在该列中，不能再次相加：
+
+| 智能体 | 原生检查（含清理）改前→补测 | 末尾复核改前→补测 | 提交发布改前→补测 |
+| --- | ---: | ---: | ---: |
+| MiniMax Code | 1505.346 → 1439.358 | 0.143 → 0.082 | 0.639 → 0.616 |
+| Kiro | 1911.097 → 1929.708 | 184.937 → 0.080 | 0.588 → 0.512 |
+| Antigravity | 4713.899 → 4267.418 | 343.254 → 0.105 | 0.498 → 0.881 |
+| Codex CLI | 1336.462 → 1355.406 | 455.202 → 0.170 | 0.587 → 1.074 |
+
+Codex 与 Kiro 连续 RPC 的差值基本对应移除的末尾完整哈希；MiniMax 的入口仅 274 字节，末尾原已不足
+1 ms，不能把其约 65 ms 差值归因于哈希。Antigravity 的 `agy models` 原生命令仍在秒级波动，移除约
+343 ms 文件校验并不能解释全部差值。各组清理为毫秒级，没有固定等待 2 秒；提交发布也只在毫秒级。
+
+本机改前重复样本未触发 Fast 专用 Schema，不能把这组 Codex 节省归因于删除 experimental 导出，更不能
+声称省去其 5 秒上限。缺 Fast 标志时零额外进程由受控夹具证明。
+
+仍需等待真实初始化、认证、动态模型读取、进程回收和最终 Runtime 读取。未减少超时、提前结束转圈或让
+原检查转入后台；没有继续删除 MiniMax／Kiro 会话步骤或增加预热。Windows 真机、打包 Release、首次安装／
+升级耗时与真实任务未在本次复测；替换归属与 Fast 下发语义使用原定向测试。验收 App 已受控退出，日常 App
+及数据未操作。完整原始计时、分段日志、无效窗口样本与安装身份清单随 Thread 附件交付。
+
+## Send 输入文件退出文件变化卡片（2026-10-19）
+
+User 在本轮确认按实际 Send 输入路径过滤，并授权独立 worktree、PR 与 main 合入。
+来源通过内部 IPC 绑定到已认证 Run/epoch，写入现有 Evidence JSON；无 SQL migration。过滤发生在原有终态
+归约后，覆盖 snapshot/fallback、项目内外路径、多个 Send、统计与空卡片；成功来源推进原有失效水位。
+
+新增纯归约 owner `successful_send_sources_filter_snapshot_and_operation_files_with_exact_paths`：原实现不能
+消费成功 Send 来源；既有 managed-output owner 只处理 ingress unavailable，不能拥有“已准入文件被成功
+业务来源排除”的不同语义。最小命令为 `cargo test -p rovai-core --lib --features extended-tests successful_send_sources`。
+持久化／迟到／重启扩展现有 `terminal_runs_in_a_non_git_directory_project_independent_replayable_cards`，
+复用其 SQLite fixture，因为纯归约不能证明 JSON 保存和水位恢复。CLI 来源扩展既有 `send_file_` 和
+`send-file-input.test.mjs` owner；replay 来源绑定扩展既有 Built-in lease owner。
+
+验证通过：`cargo check --workspace`、`cargo fmt --all --check`、
+`cargo test -p rovai-core --lib --features extended-tests agent_run_file_change::`（22 passed）、
+`cargo test -p rovai-core --bin rovai send_file_`（2 passed）、`pnpm test:send-input-file`（1 passed）、
+`pnpm test:rust:pr`（474 passed，1 项既有手动 Runtime smoke ignored）、`pnpm typecheck`、
+`pnpm test`（Vitest 2,798 passed；组合脚本 357 passed、2 项平台相关 skip）及文档治理门禁。
+新增断言在首次验证时修正了 snapshot／operation 输出顺序假设及 macOS 临时目录 cwd 别名，未改变生产
+路径身份规则。未启动真实 Runtime、模型或 Renderer；本项不宣称真实 Session 或 UI 点击验收。

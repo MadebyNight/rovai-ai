@@ -40,6 +40,20 @@ pub struct RuntimeFailureView {
     pub retryable: bool,
 }
 
+/// A Core input-budget rejection happens before handing this input to Runtime.
+/// Use fixed public copy; neither the input nor internal diagnostics belong here.
+pub fn context_payload_too_large_failure(runtime_kind: AdapterKind) -> RuntimeFailureView {
+    RuntimeFailureView::new(
+        runtime_kind,
+        RuntimeFailureOrigin::Rovai,
+        RuntimeFailurePhase::Execution,
+        "context_payload_too_large",
+        "输入内容过大，未开始执行。",
+        Some("输入内容过大，无法开始执行。请改用文件附件，或拆分后发送。".into()),
+        false,
+    )
+}
+
 impl RuntimeFailureView {
     pub fn new(
         runtime_kind: AdapterKind,
@@ -406,6 +420,7 @@ fn runtime_display_name(runtime_kind: AdapterKind) -> &'static str {
         AdapterKind::TraeCnCli => "TRAE CLI",
         AdapterKind::CursorAgent => "Cursor Agent",
         AdapterKind::KimiCodeCli => "Kimi Code",
+        AdapterKind::MinimaxCodeCli => "MiniMax Code",
         AdapterKind::GrokBuild => "Grok Build",
         AdapterKind::DeepseekHarness => "DeepSeek Harness",
         AdapterKind::ClineCli => "Cline",

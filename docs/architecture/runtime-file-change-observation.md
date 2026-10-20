@@ -3,12 +3,12 @@ document_type: architecture
 architecture: runtime-file-change-observation
 authority: command-and-agent-run-file-change-boundaries
 status: accepted
-last_updated: 2026-10-05
+last_updated: 2026-10-19
 ---
 
 # Runtime File Change Observation 架构
 
-字段、归约与授权接口见 [Runtime File Change Observation v7](../contracts/runtime-file-change-observation-v7.md)。
+字段、归约与授权接口见 [Runtime File Change Observation v9](../contracts/runtime-file-change-observation-v9.md)。
 本架构只消费 Runtime 明确报告的文件变化，不读取当前文件、不扫描工作区，也不依赖 Git。
 
 ## 产品模型
@@ -101,6 +101,17 @@ checkpoint ref 或 filesystem capture；Git 与非 Git execution root 使用相�
   execution epoch 至多一张当前卡片；取消 barrier 无法在期限内证明完成时保留缺失 projection，不提前写
   `no_changes`。重算失败保留上一份可读结果并标 stale，由后续维护或读取重试。
 
+### Send 输入文件用途过滤
+
+CLI 按 [Transport v43](../contracts/builtin-tool-transport-v43.md) 将实际 `--input-file` 的规范化绝对路径
+保存到本次 Send 已有的输入 Evidence。成功终态和成功 Envelope 共同证明该来源可用于本轮排除。
+AgentRun projector 在既有 Evidence 遍历中收集同 Run/epoch 来源，归约完成后精确过滤最终文件列表，
+再计算 summary/detail/counts；全部排除保存 `no_changes`。不存在额外数据库查询、文件读取或 Run 路径表。
+
+这是用途规则：正文文件和完整请求文件都可被排除，包括已有项目文档；`--file` 附件没有这种隐含语义。
+当前磁盘是否仍存在不影响过滤，symlink 别名和名称相似不推断。原始操作与 Command Diff 继续保留。
+成功来源推进既有 file-facts 水位，迟到结果、replay、重启与投影恢复沿用当前机制；旧无来源记录不回填。
+
 ### Read Side 与 Renderer
 
 - Camp open 投影每个 Run 的卡片摘要；Renderer 将卡片锚定到来源 Run 的最后一条公开消息，没有公开消息时才按
@@ -143,6 +154,15 @@ checkpoint ref 或 filesystem capture；Git 与非 Git execution root 使用相�
 - ToolCall 的唯一 location 命中当前 managed output root 时，path-only 与绑定的单 entry Diff 都 fail closed；
   其他 ToolCall 和普通 root 外路径不受影响。
 
+### MiniMax Code ACP
+
+MiniMax 的 `content.type=diff` 是带行号、省略号的预览，不能走 ACP 完整状态路径，replacement input 也不作
+完整状态回退。同一成功 write/edit 的 `rawOutput.details.patch` 经双侧路径、hunk 与预算校验后复用既有
+unified diff 投影；write 的 Index 前缀同样必须对齐。已省略、失败或不完整的 patch 保持 path-only。
+成功 write 的 Boolean `details.created` 与同调用输入路径共同证明 add/update；新建没有 patch 时只显示新增行。
+read/write/edit 的唯一原生路径可补齐相对 location；共享 normalizer 继续拥有 root 和 managed output 排除。
+这些映射不读取磁盘、不改变其他 Runtime、不新增 Renderer 分支，详细准入见 v8。
+
 ### Pi JSONL RPC
 
 - 同一 `toolCallId` 累计 start/update 的 `toolName + args.path`，只有成功 `tool_execution_end` 才发布 typed
@@ -178,7 +198,7 @@ checkpoint ref 或 filesystem capture；Git 与非 Git execution root 使用相�
 
 ## 相关规范
 
-- [Runtime File Change Observation v7](../contracts/runtime-file-change-observation-v7.md)
+- [Runtime File Change Observation v9](../contracts/runtime-file-change-observation-v9.md)
 - [Execution Evidence 与 Canonical Activity 不变量](foundational-invariants.md#evidence-canonical-activity)
 - [Camp 会话工作区](../ui/components/conversation-workspace.md)
 - [v1.29 决定](../versions/v1.29/decisions.md#v1-29-d08)

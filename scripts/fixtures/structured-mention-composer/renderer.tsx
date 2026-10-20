@@ -5,7 +5,7 @@ import { ThreadClientProvider, type ThreadClient } from '../../../apps/desktop/s
 import type { ComposerDocument } from '@contracts'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { $getSelection, $isNodeSelection, $isRangeSelection, getNearestEditorFromDOMNode } from 'lexical'
+import { $getRoot, $getSelection, $isNodeSelection, $isRangeSelection, getNearestEditorFromDOMNode } from 'lexical'
 import {
   StructuredMentionComposer,
   type StructuredMentionComposerHandle,
@@ -219,6 +219,13 @@ function Harness() {
         focusEnd() { composerRef.current?.focus('end') },
         focusStart() { composerRef.current?.focus('start') },
         selectText,
+        replaceText(needle: string, replacement: string) {
+          getNearestEditorFromDOMNode(editor()).update(() => {
+            const node = $getRoot().getAllTextNodes().find(node => node.getTextContent().includes(needle))
+            if (!node) throw new Error('Missing text to replace: ' + needle)
+            node.setTextContent(node.getTextContent().replace(needle, replacement))
+          }, { discrete: true })
+        },
         captureEditor() { capturedEditor = editor() },
         paste(text: string, structured = '', html = '') {
           const clipboardData = new DataTransfer()
@@ -372,5 +379,12 @@ function Harness() {
 }
 
 // The fixture has no Core or managed avatars; formal shared components still receive an explicit client.
-const fixtureClient = new Proxy({} as ThreadClient, { get: (_target, key) => { if (key === 'editingRecovery') return undefined; throw new Error(`Unexpected fixture capability: ${String(key)}`) } })
+const fixtureClient = new Proxy({} as ThreadClient, { get: (_target, key) => {
+  if (key === 'editingRecovery' || key === 'onEvent' || key === 'onInvalidated') return undefined
+  if (key === 'request') return async (method: string) => {
+    if (method === 'preferences.tasks.get') return { enabled: false, headsUpAfterSequence: 0, observedThroughChangeSequence: 0 }
+    throw new Error(`Unexpected fixture request: ${method}`)
+  }
+  throw new Error(`Unexpected fixture capability: ${String(key)}`)
+} })
 createRoot(document.getElementById('root')!).render(<ThreadClientProvider client={fixtureClient}><Harness /></ThreadClientProvider>)

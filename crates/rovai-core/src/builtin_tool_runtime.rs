@@ -182,6 +182,14 @@ impl BuiltinToolProcessConfig {
     }
 
     fn write_context(&self, lease: Option<BuiltinToolLeaseContext>) -> Result<()> {
+        self.write_context_with_tasks(lease, false)
+    }
+
+    fn write_context_with_tasks(
+        &self,
+        lease: Option<BuiltinToolLeaseContext>,
+        tasks_enabled: bool,
+    ) -> Result<()> {
         let document = BuiltinToolCliContext {
             contract_version: BUILTIN_TOOL_CONTRACT_VERSION,
             ipc_protocol_version: BUILTIN_TOOL_IPC_PROTOCOL_VERSION,
@@ -189,6 +197,7 @@ impl BuiltinToolProcessConfig {
             process_id: self.inner.process_id.clone(),
             process_token: self.inner.process_token.clone(),
             lease,
+            tasks_enabled,
         };
         atomic_write_private_json(&self.inner.context_path, &document)
     }
@@ -216,6 +225,7 @@ struct ActiveLease {
     agent_run_id: String,
     execution_epoch: i64,
     native_binding: BuiltinToolBindingCredential,
+    execution_root: String,
     run_tmp: PathBuf,
     replay: HashMap<String, ReplayEntry>,
     replay_order: VecDeque<String>,
@@ -295,6 +305,7 @@ impl BuiltinToolLeaseRegistry {
                 agent_run_id: agent_run_id.to_string(),
                 execution_epoch,
                 native_binding: native_binding.clone(),
+                execution_root: execution_root.to_string(),
                 run_tmp,
                 replay: HashMap::new(),
                 replay_order: VecDeque::new(),
@@ -327,6 +338,36 @@ impl BuiltinToolLeaseRegistry {
         };
         schedule_retired_run_tmp_cleanup(retired_run_tmp.into_iter().collect());
         binding
+    }
+
+    /// Called under the invocation gate after reading the current instance state.
+    /// A failed projection refresh cannot revoke a lease or cancel execution.
+    pub(crate) async fn refresh_tasks(
+        &self,
+        enabled_runs: &std::collections::HashSet<String>,
+    ) -> bool {
+        let processes = self.processes.lock().await;
+        let mut refreshed = true;
+        for process in processes.values() {
+            let Some(active) = &process.active else {
+                continue;
+            };
+            let context = BuiltinToolLeaseContext {
+                execution_root: active.execution_root.clone(),
+                run_tmp: active.run_tmp.to_string_lossy().into_owned(),
+                lease_id: active.lease_id.clone(),
+                lease_generation: active.lease_generation,
+                lease_token: active.lease_token.clone(),
+            };
+            if let Err(error) = process.config.write_context_with_tasks(
+                Some(context),
+                enabled_runs.contains(&active.agent_run_id),
+            ) {
+                eprintln!("Task CLI discovery refresh failed: {error:#}");
+                refreshed = false;
+            }
+        }
+        refreshed
     }
 
     pub(crate) async fn unbind(&self, process_id: &str, agent_run_id: &str, execution_epoch: i64) {
@@ -655,12 +696,22 @@ pub(crate) fn builtin_tool_endpoint() -> LocalIpcEndpoint {
         .clone()
 }
 
-pub(crate) fn request_digest(operation: &str, input: &serde_json::Value) -> Result<String> {
-    canonical_json_digest(&json!({
+pub(crate) fn request_digest(
+    operation: &str,
+    input: &serde_json::Value,
+    send_input_file_path: Option<&str>,
+) -> Result<String> {
+    let mut request = json!({
         "domain": "rovai.builtin-tool-request.v1",
         "operation": crate::thread_compat::stored_operation(operation),
         "input": crate::thread_compat::stored_builtin_input(operation, input)?,
-    }))
+    });
+    // Preserve existing digests when metadata is absent; a replay cannot switch
+    // the file whose changes will be excluded while retaining the same request.
+    if let Some(path) = send_input_file_path {
+        request["sendInputFilePath"] = json!(path);
+    }
+    canonical_json_digest(&request)
 }
 
 fn run_not_bound() -> BuiltinToolLeaseError {
@@ -817,9 +868,17 @@ mod tests {
         let legacy = json!({"campId":"same-id", "thread":"same-message", "limit":20});
         let current = json!({"threadId":"same-id", "replyChain":"same-message", "limit":20});
         let expected = canonical_json_digest(&json!({"domain":"rovai.builtin-tool-request.v1", "operation":"camp.read", "input":legacy})).unwrap();
-        assert_eq!(request_digest("camp.read", &legacy).unwrap(), expected);
-        assert_eq!(request_digest("thread.read", &current).unwrap(), expected);
-        assert!(request_digest("thread.read", &json!({"campId":"a","threadId":"a"})).is_err());
+        assert_eq!(
+            request_digest("camp.read", &legacy, None).unwrap(),
+            expected
+        );
+        assert_eq!(
+            request_digest("thread.read", &current, None).unwrap(),
+            expected
+        );
+        assert!(
+            request_digest("thread.read", &json!({"campId":"a","threadId":"a"}), None).is_err()
+        );
         let root =
             std::env::temp_dir().join(format!("rovai-builtin-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
@@ -838,6 +897,26 @@ mod tests {
         let lease = context.lease.unwrap();
         assert_eq!(Path::new(&lease.execution_root), root);
         assert_eq!(Path::new(&lease.run_tmp), config.run_tmp());
+        // A projection write can fail while the original Run/lease stays usable.
+        // Retrying the same desired state repairs that process without rebinding.
+        let saved_context = config.context_path().with_extension("saved");
+        fs::rename(config.context_path(), &saved_context).unwrap();
+        fs::create_dir(config.context_path()).unwrap();
+        let enabled_runs = std::collections::HashSet::from(["run-1".to_string()]);
+        assert!(!registry.refresh_tasks(&enabled_runs).await);
+        assert!(registry.authenticate(&first).await.is_ok());
+        fs::remove_dir(config.context_path()).unwrap();
+        fs::rename(saved_context, config.context_path()).unwrap();
+        assert!(registry.refresh_tasks(&enabled_runs).await);
+        let repaired: BuiltinToolCliContext =
+            serde_json::from_slice(&fs::read(config.context_path()).unwrap()).unwrap();
+        assert!(repaired.tasks_enabled);
+        assert_eq!(repaired.lease.unwrap().lease_id, first.lease_id);
+        assert!(registry.refresh_tasks(&Default::default()).await);
+        let disabled: BuiltinToolCliContext =
+            serde_json::from_slice(&fs::read(config.context_path()).unwrap()).unwrap();
+        assert!(!disabled.tasks_enabled);
+        assert!(registry.authenticate(&first).await.is_ok());
         let member_image = rovai_core::member_avatar::materialize_member_avatar(
             &root,
             config.run_tmp(),
@@ -903,6 +982,50 @@ mod tests {
                 .unwrap(),
             Some(envelope)
         );
+        // Retired Send association remains part of the raw transport identity.
+        // It never changes business routing, but cannot reuse a different request's receipt.
+        let send_id = "7b5db24c-4a43-4cab-9217-d982b08f7692";
+        let send_input = json!({"body": "Same message", "taskId": "retained-task"});
+        let send_digest = request_digest("camp.message.send", &send_input, None).unwrap();
+        let source_digest =
+            request_digest("camp.message.send", &send_input, Some("/tmp/reply.md")).unwrap();
+        assert_ne!(send_digest, source_digest);
+        assert_ne!(
+            source_digest,
+            request_digest("camp.message.send", &send_input, Some("/tmp/other.md")).unwrap()
+        );
+        let send_receipt = BuiltinToolInvocationEnvelope::success(
+            "camp.message.send",
+            send_id,
+            json!({"messageId": "committed-message"}),
+        )
+        .unwrap();
+        registry
+            .record(&rotated, send_id, &send_digest, &send_receipt)
+            .await
+            .unwrap();
+        assert_eq!(
+            registry
+                .replay(&rotated, send_id, &send_digest)
+                .await
+                .unwrap(),
+            Some(send_receipt)
+        );
+        for changed in [
+            json!({"body": "Same message", "taskId": "another-task"}),
+            json!({"body": "Same message", "taskId": null}),
+            json!({"body": "Same message"}),
+        ] {
+            let changed_digest = request_digest("camp.message.send", &changed, None).unwrap();
+            assert_eq!(
+                registry
+                    .replay(&rotated, send_id, &changed_digest)
+                    .await
+                    .unwrap_err()
+                    .code,
+                "builtin_tool.idempotency_conflict"
+            );
+        }
         registry.unbind(config.process_id(), "run-1", 1).await;
         assert!(registry.authenticate(&rotated).await.is_err());
         assert!(!config.run_tmp().exists());

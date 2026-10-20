@@ -105,7 +105,7 @@ values and evidence.
 
 ## Layout
 
-The desktop shell uses a default 270px navigation rail, a 50px top row (38px for Camp) and a flexible content column.
+The desktop shell uses a default 270px navigation rail, a 50px top row (38px for Thread) and a flexible content column.
 macOS and Web settings use a fixed 270px rail without collapse, resize or history controls.
 macOS preserves an inherited collapsed rail with an expand button. Web settings always expand their categories
 and remove the native drag spacer above the brand; leaving settings restores the ordinary-page layout. Ordinary pages show back/forward
@@ -150,14 +150,14 @@ without extra focus outlines or halos; higher contrast preferences restore the s
 ## Components
 
 - **Buttons:** compact, direct and text-first. Primary actions use Steel by default. Conversation send, conversation/project renaming, new-conversation dialog creation, task creation and member creation/invitation use
-  the neutral `--conversation-action` family, as do first-run onboarding, teammate Runtime permission switches, Host workspace confirmation, teammate save, Memory, Automation and MCP/Skills actions. Teammate saves and avatar crop sliders use the neutral primary action; workspace creation entries use light tonal buttons. Home creation uses a quiet tonal entry; danger marks destructive actions and sidebar removal. Active buttons move down 1px; disabled controls retain legible content at
+  the neutral `--conversation-action` family, as do Web connection recovery, first-run onboarding, teammate Runtime permission switches, Host workspace confirmation, teammate save, Memory, Automation and MCP/Skills actions. Teammate saves and avatar crop sliders use the neutral primary action; workspace creation entries use light tonal buttons, except the Memory add/revise pair, which uses the neutral primary action. Home creation uses a quiet tonal entry; danger marks destructive actions and sidebar removal. Active buttons move down 1px; disabled controls retain legible content at
   reduced opacity. Floating return-to-latest icon controls keep their hit area stationary while pressed;
   their face uses a tonal change for feedback. Mission creation/start buttons also keep their position
   when pressed; their primary actions use the neutral `--conversation-action` family.
   Conversation teammate selection and saving the default team use the same neutral action family for checked controls.
 - **Inputs:** use the raised/input surface and a perceivable control boundary. DOM focus supports typing, IME and keyboard navigation without extra outlines, halos or focus-only border changes. Search inputs do not add a focus underline.
 - **Navigation:** rows and selection surfaces establish location. Selected conversation and teammate rows omit
-  the left rail and use neutral text. Memory and Automation use `--neutral-selected` and `--neutral-hover`; sidebar backgrounds stay unchanged. Hover is supplementary;
+  the left rail and use neutral text. Memory uses the achromatic `--memory-*` family for its workspace, notices and dialogs; Automation uses `--neutral-selected` and `--neutral-hover`; Memory also applies its neutral rail variant while active; other sidebar backgrounds stay unchanged. Hover is supplementary;
   selected state and actions remain understandable from text, icons and placement.
 - **Resizable boundaries:** navigation, member roster, file preview, MCP/Skills, Automation and execution-panel splitters
   share a single `1px` line. Hover and dragging change the entire boundary to neutral `--resize-line`,
@@ -181,7 +181,7 @@ without extra focus outlines or halos; higher contrast preferences restore the s
 - **Evidence:** uses the dedicated evidence and diff tokens, monospaced type where appropriate, and
   structural `+`/`-`, line numbers or labels in addition to color.
 - **Code:** shared SafeMarkdown surfaces use a quiet inline canvas with `0 2px` padding and a `3px`
-  radius; fenced code uses the matching block canvas with an evidence border. Camp message prose,
+  radius; fenced code uses the matching block canvas with an evidence border. Thread message prose,
   Runtime process copy in both execution placements and Markdown file previews share the
   component-owned Mist Gray treatment. Release notes and other SafeMarkdown surfaces retain the
   quiet shared defaults; other bounded evidence surfaces keep the stronger evidence canvas.

@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-10-15
+last_updated: 2026-10-19
 ---
 
 # Runtime Catalog Boundaries
@@ -17,6 +17,12 @@ last_updated: 2026-10-15
 [Runtime Launch and Verification v64](../contracts/runtime-launch-and-verification-v64.md)。实测版本和能力只由
 [Runtime 兼容性清单](../runtime-compatibility.md)记录。
 
+## Antigravity 执行边界
+
+Antigravity 适配器通过 `--print-timeout 0` 等待原生整轮结束，保留独立的初始化与清理期限。
+原生超时返回的部分文本不能凭零退出码成为完整成功；精确失败证据与错误合同见
+[Runtime Launch v64](../contracts/runtime-launch-and-verification-v64.md#antigravity-整轮执行时限)。
+
 ## 四层权威
 
 | 层 | 真源 | 可以驱动 | 不能驱动 |
@@ -26,7 +32,7 @@ last_updated: 2026-10-15
 | Product Runtime Availability | Core 对某一 Product Runtime 的 discovery、静态身份或 deep-verification snapshot | light ready、checking、legacy installed unverified、ready、needs login、not installed、incompatible、transient failure 等当前机器状态 | 新产品身份、把静态可尝试误作深检 Ready 或静默 Runtime fallback |
 | Settings Runtime Preview Catalog | Renderer 内受审查的静态 presentation rows | Runtime 设置页中的名称、图标、`待支持`文案和 disabled 状态 | Contracts、Core request、数据库、成员选择、诊断、Probe、AgentRun 或支持数量 |
 
-Product Runtime Catalog 当前包含十八种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
+Product Runtime Catalog 当前包含十九种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
 Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64、macOS x64、
 Windows x64 与 Linux x64 分别绑定平台专属证据并取得 qualified。
 产品目录的机器可判数量、全量检查、诊断分母和
@@ -450,7 +456,8 @@ Grok/MiniMax `<think>` 若由 Runtime 作为普通 `agent_message_chunk` 发出�
 进入执行台 Evidence、Camp final 与 Missing-Send，不做 provider-specific 清洗或重分类。`_x.ai/*`
 notification 只作为已知 Session metadata/lifecycle 安全路由。Runtime Fleet LRU 保留 compatible warm
 Host/Session。三个宿主平台共享 `grok >= 1.0.0` 最低版本门；light discovery 低于门槛时为 `light_failed`，
-Deep Probe 与 Ready 必须观察 `initialize.agentCapabilities.sessionCapabilities.resume` 对象。cold continuation
+普通检查验证必要认证、初始化与当前模型，不演练恢复或重复设置模型；协议声明恢复支持不等于本次实测，
+见 [Runtime Launch v64](../contracts/runtime-launch-and-verification-v64.md#单项检查的必要工作)。cold continuation
 只调用 exact `session/resume`；Grok 不声明或选择 `session.load` 产品能力，失败后只允许一次 fresh fallback。
 其他 Runtime 的通用 load/HistoryRestore 路径不变。
 
@@ -494,8 +501,9 @@ drop 不影响启动，不同 Run/Runtime 可以并发。Stop 使用短锁 Mark�
 和配置完全不参与 Pi compatibility 或复用。恢复只使用
 Core 私有完整 canonical session file，实际调用 `switch_session` 后核对 full ID/file/cwd；公开 read/event/diagnostic
 只允许不可逆 digest。失败 Host 不进 LRU；只有 locator/文件/identity/cwd 或明确 switch target 不可用等
-`ResumeContinuityLost` 才最多创建一个 replacement，Host/RPC/model/binding 等失败不降级。Deep Probe 同样执行 exact
-switch，但用 `--session-dir <probe-root>/sessions` 隔离并清理测试 Session。
+`ResumeContinuityLost` 才最多创建一个 replacement，Host/RPC/model/binding 等失败不降级。普通检查只验证初始
+Session 身份、目录归属、扩展和当前模型，不演练新建/切回；仍用 `--session-dir <probe-root>/sessions`
+隔离并清理测试 Session。
 
 Windows Pi Host 在自己的启动边界使用 `dunce::simplified` 将可安全表示的 canonical 本地 cwd 转为普通盘符路径，
 避免 Pi 默认 Session 目录编码保留 `\\?\` 中的 `?`。Camp、Fleet 与 Session 校验仍使用原 canonical identity；
@@ -738,3 +746,62 @@ output 与 reasoning。缺失字段与 cost 保持 unknown，不从占用或模�
 平台范围见 [DSH Parity Matrix](../research/deepseek-harness-runtime/acp-0.1.5-parity.md)；macOS arm64 与 Windows x64
 使用独立自动化目标主机证据，Linux x64 同样独立闭合 14 轴；macOS x64 记录维护者目标主机验收与发布批准。
 四个平台各自绑定 digest，不能用一行证据替代另一平台；Machine Ready 继续逐机 fail closed。
+
+
+## MiniMax Code ACP 实施边界
+
+`minimax-code-cli` 对应独立的 `@minimax-ai/code` / `mcode acp`。沿用共享 ACP Host、Fleet、
+精确 Session continuation、Run 冻结、审批、Action、Usage 和 Built-in CLI，不新增进程池或上下文副本。
+Migration 205 将 schema 154 升为 155，只扩展 Runtime 与 Skill group `minimax` 的闭合集合。
+macOS arm64 开放 Preview，保留 `qualification_evidence_missing` 和空 evidence revision。
+macOS x64 按 2026-10-18 User seq43 的验收确认标记 Qualified，绑定独立的
+[维护者确认记录](../../qualification/runtime-platform/macos-x64-minimax-code-v1.json)摘要。Linux x64 与
+Windows x64 分别经独立目标机验证进入 Qualified，各自绑定
+[Linux 证据](../../qualification/runtime-platform/linux-x64-minimax-code-v1.json)和
+[Windows 证据](../../qualification/runtime-platform/windows-x64-minimax-code-v1.json)。
+各平台资格不增加未记录的目标机结果或继承其他平台证据。
+实现和实测边界见[接入对照](../research/minimax-code-runtime/README.md)，
+初始 Preview 取舍见 [V1.72-D50](../versions/v1.72/decisions.md#v1-72-d50)。
+
+完整 Bootstrap 通过私有 `--append-system-prompt-file` 追加到原生 System。文件由 Host 持有，
+相同内容继续复用；内容真实变化时替换 Host，并恢复同一 Native Session。Bootstrap digest 只参与
+Host 兼容判断，不成为 Session 恢复资格。Dynamic Context、Steer 与同 Run 恢复继续使用既有准备字节。
+原生系统提示独立于历史，策略为 `native_system_prompt_preserved`；Linux 的手动、自动、checkpoint
+overflow 重试、Core Run 取消及 cold 恢复实测范围由独立准入记录拥有，不外推原生管理命令取消。
+Windows 私有 Bootstrap 目录沿统一 private storage DACL 准备；Skill 的模型可见路径去除无需保留的
+verbatim 前缀，冻结 sourcePath 和 canonical 身份不变。Usage cwd 比较仅规范化等价 Windows 路径。
+
+模型 ID 原样保留 Provider、模型和 variant 的不透明组合，通过 `session/set_config_option` 选择并
+校验 ACK。`thinkingEffort` 只属于原生实际广告的模型；探测某候选失败不抹去可用的目录或原生默认。
+普通检查只读取初始 Session 的当前模型参数，全模型参数由现有完整目录请求读取；健康成功不替代目录
+成功，也不覆盖同一有效身份下的完整参数，见 [Runtime Launch v64](../contracts/runtime-launch-and-verification-v64.md#minimax-健康结果与完整参数目录)。
+权限采用原生 process scope `permissionMode`，会话模式采用 `default/plan`；前者参与既有 Host
+兼容判断。`plan` 是原生流程模式，不等于只读沙箱；显式 `bypassPermissions` 下仍可写文件，
+不由 Core Workspace access 静默替换权限。MiniMax 明确拒绝 ACP `additionalDirectories`，new/resume/load 均不发送该扩展；
+附件仍经过共享授权和可访问路径，原生 Tool 的访问行为受原生权限约束，不宣称原生额外目录沙箱。
+原生 permission ID 与 tool-call ID 不同，只在同一 Session/Prompt 以完整输入和名称唯一配对，
+后续用确切 alias；歧义 fail closed。公开输出只取原生 content，命令退出码按原生明确字段归约，
+不遍历私有 details，native stderr 仅排空。
+文件观察另按 [File Change v8](../contracts/runtime-file-change-observation-v8.md) 窄取成功原生
+Write 的 Boolean `created` 与 Write/Edit 的结果 `details.patch`；编号/截断的展示 Diff 不是完整文件状态。
+相对路径只从同调用唯一结构化路径补齐，缺 patch 不从输入或磁盘重建；
+实测与其他 18 款的差异见[完整对照](../research/minimax-code-runtime/full-parity-2026-10-16.md)。
+
+原生问卷暂不承接为 Rovai 表单。客户端不广告 elicitation form，MiniMax 无可用答题路径时由
+原生 dismiss；`questionnaire:` permission options 在普通审批和免审批之前返回 `cancelled`，
+不能用允许执行代替选择答案。已观察到未承接问卷的 Prompt 不因非空文字或已公开发送而成功；
+原生错误与取消仍先按各自终态处理。正常 `end_turn` 下公开失败为
+`runtime_questionnaire_unsupported`，说明问卷不受支持、未提交答案并引导 User 发新消息继续。
+已发消息保留，问卷 Run 不自动重放；后继沿既有 Session/Fleet 路径运行，不额外换 Host。
+这不等于隐藏工具或自动转为 Thread 提问，不修改日常原生配置，各平台准入分别按上文记录。
+
+运行中输入使用 `mcode/session/steer(text, clientRequestId)`，只在冻结版本已验证且当前 Prompt
+已接受时发送。原生 `steered` ACK 与活跃 Run/epoch 共同确认；歧义结果保持 unknown，不自动重发。
+沿用 ACP 插话后 Host 退役策略，下一次以同一 Session 恢复，不能把普通 warm reuse 结论外推至插话后。
+图片插话交付授权路径，未实现该扩展不具备的 image block。按 User 要求不提供 Fast。
+
+Usage 通过 Host 冻结的原生 data root、SQLite 精确 Session/cwd/root 身份和只读 journal baseline
+采集 assistant 数值，排除历史、子 Session、重复和错误/中止占位记录；正文不进入 Usage。
+沿共享异步 baseline/poll 策略，短 Run 或结束尾部可能缺数；未观测保持未知，不以零补齐。
+ACP Session 累计费用仅作 Session gauge，不冒充 Run 费用。Skills 只读发现原生 `.minimax`、
+`.claude`、`.codex`、`.agents` 兼容来源，MCP 使用 ACP Session 追加投影；完整隔离和真实模型资格仍按矩阵记录。
