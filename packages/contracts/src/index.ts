@@ -1022,6 +1022,7 @@ export type ThreadChannelSource =
 
 export interface NavigationThreadItem {
   id: string
+  navigationGroupKey?: string
   title: string
   channelSource?: ThreadChannelSource | null
   activationState: ThreadActivationState
@@ -1038,7 +1039,7 @@ export interface NavigationThreadItem {
 }
 
 export type NavigationThreadTarget = Pick<NavigationThreadItem,
-  'id' | 'title' | 'channelSource' | 'activationState' | 'projectBindingKind' | 'projectPath'>
+  'id' | 'title' | 'channelSource' | 'activationState' | 'projectBindingKind' | 'projectPath' | 'navigationGroupKey'>
 
 export interface NavigationThreadGroup {
   totalCount: number
@@ -1066,6 +1067,7 @@ export interface NavigationSnapshot {
   schemaVersion: 3
   throughGlobalSequence: number
   quickChat: NavigationThreadGroup
+  chatBot?: NavigationThreadGroup
   projects: ProjectNavigationGroup[]
 }
 
@@ -2479,6 +2481,7 @@ export interface ThreadSnapshot {
   throughGlobalSequence: number
   thread: {
     id: string
+    navigationGroupKey?: string
     title: string
     missionId?: string | null
     channelSource?: ThreadChannelSource | null

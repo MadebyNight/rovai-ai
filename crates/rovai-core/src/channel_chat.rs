@@ -620,6 +620,10 @@ impl ChannelChatService {
             "INSERT INTO channel_chat_input(inbound_id,camp_message_id,camp_id) VALUES(?1,?2,?3)",
             params![inbound_id, admission.camp_message_id, admission.camp_id],
         )?;
+        transaction.execute(
+            "UPDATE camp SET navigation_is_chat_bot = 1 WHERE id = ?1",
+            [&admission.camp_id],
+        )?;
         transaction.commit()?;
         Ok(ChatTurnSubmitResult {
             camp_id: admission.camp_id,
@@ -1667,6 +1671,37 @@ mod tests {
             )
             .unwrap();
         assert!(stale.is_none());
+        let navigation = crate::read_model::ReadModelService;
+        let snapshot = navigation.navigation_snapshot(&mut database).unwrap();
+        assert_eq!(snapshot.chat_bot.total_count, 1);
+        assert!(snapshot.projects.is_empty());
+        assert_eq!(snapshot.chat_bot.recent_camps[0].id, first.camp_id);
+
+        // Rebinding the same external chat must not move its earlier history into Projects.
+        let next_root = materials_root();
+        enable_chat(&mut database, &next_root);
+        command.external_message_id = "om_rebound_navigation".into();
+        inbound.external_message_id = command.external_message_id.clone();
+        service.inbound(&mut database, &inbound).unwrap();
+        let replacement = service.submit_turn(&mut database, &command).unwrap();
+        assert_ne!(first.camp_id, replacement.camp_id);
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_profile SET chat_bot_enabled = 0 WHERE id = 'agent_1'",
+                [],
+            )
+            .unwrap();
+        let snapshot = navigation.navigation_snapshot(&mut database).unwrap();
+        assert_eq!(snapshot.chat_bot.total_count, 2);
+        assert!(snapshot.projects.is_empty());
+        assert!(
+            snapshot
+                .chat_bot
+                .recent_camps
+                .iter()
+                .all(|camp| camp.navigation_group_key == "chat-bot")
+        );
     }
 
     #[test]
