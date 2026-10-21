@@ -35607,6 +35607,49 @@ fn downgrade_current_schema_to_v148_source_for_test(connection: &Connection) {
             .execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
             .unwrap();
     }
+    // Additive chat storage must be absent before its receipts are removed.
+    // v170 fixtures never had it; current fixtures must contain no chat history.
+    let has_chat_storage: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_chat_bot')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if has_chat_storage {
+        for table in [
+            "channel_chat_target_grant",
+            "channel_chat_tool_request",
+            "channel_chat_input",
+            "channel_chat_conversation",
+            "channel_chat_outbound",
+            "channel_chat_item",
+            "channel_chat_turn",
+            "channel_chat_message",
+            "channel_chat_credential",
+            "channel_chat_bot",
+        ] {
+            let count: i64 = transaction
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                count, 0,
+                "historical source fixture contains chat rows in {table}"
+            );
+            transaction
+                .execute_batch(&format!("DROP TABLE {table}"))
+                .unwrap();
+        }
+        transaction
+            .execute_batch(
+                "ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled;
+                 ALTER TABLE agent_profile DROP COLUMN chat_materials_path;
+                 ALTER TABLE conversation DROP COLUMN permission_override_json;",
+            )
+            .unwrap();
+    }
     for table in ["skill_group_assignment", "skill_projection_observation"] {
         transaction
             .execute(&format!("DELETE FROM {table} WHERE group_key='zcode'"), [])

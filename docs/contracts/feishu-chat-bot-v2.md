@@ -30,6 +30,9 @@ last_updated: 2026-10-21
 - 通讯录查询使用当前 Bot 的 tenant_access_token：先读取 contact/v3/scopes，再读取授权用户、授权部门及其子部门。禁止固定以根部门0代表实际权限范围，禁止使用应用令牌调用仅支持用户令牌的search/v1/user。
 - 可用范围和通讯录数据范围分别由平台控制；数据范围配置为跟随可用范围时，发布后以实际返回的授权范围为准。不读取授权之外的用户，不申请额外敏感字段。
 
+聊天 Bot 的本地发布记录删除遵循 [Feishu Channel v17](feishu-channel-v17.md#4-本地删除发布绑定)：
+清除旧发布意图和 App 凭据后可重新创建应用，保留队员的聊天开关、资料目录与历史会话，不删除远端 Bot。
+
 ## 2.1 会话投递
 
 - 每个外部 (provider, app_id, chat_id) 复用一个聊天线程：create_channel_camp 以

@@ -36,6 +36,12 @@ console.info = (label, ...values) => {
 }
 window.rovai = {
   platform: 'darwin',
+  channels: {
+    selectChatMaterialsDirectory: async () => {
+      calls.push({ method: 'channels.selectChatMaterialsDirectory' })
+      return 'C:/验收资料/团队备忘录'
+    }
+  },
   currentUserProfile: {
     get: async () => JSON.parse(localStorage.getItem('fixture-current-user-profile') ?? '{"displayName":"","avatarDataUrl":null}'),
     save: async (draft) => {
@@ -145,6 +151,10 @@ window.rovai = {
       if (method === 'members.runtime.set') {
         const { adapterKind, model, permissions } = command
         next.runtimeConfiguration = { adapterKind, model, permissions }
+      }
+      if (method === 'members.chat.set') {
+        next.chatBotEnabled = command.enabled
+        next.chatMaterialsPath = command.materialsPath
       }
       if (method === 'members.runtime.clear') next.runtimeConfiguration = null
       if (method === 'members.presence.set') next.presence = command.presence

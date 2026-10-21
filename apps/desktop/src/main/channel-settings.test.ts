@@ -325,6 +325,85 @@ function normalizedMessage(input: {
 }
 
 describe('channel settings service', () => {
+  it('deletes only the local binding while disconnected and allows a fresh publication', async () => {
+    const owner = identity()
+    const account = connectedAccount(owner)
+    const credentials = memoryCredentialStore({ 'old-ref': { appId: 'cli_old', appSecret: 'old-secret' } })
+    const invalidatePublished = vi.fn()
+    const inspect = developerSession(owner)
+    const provision = vi.fn(async () => ({ appId: 'cli_new', appSecret: 'new-secret', ownerOpenId: 'ou_owner', botDisplayName: 'New Bot', publishedVersionId: 'version-new' }))
+    const channels = controlledChannels({ cli_old: { openId: 'ou_old', name: 'Old Bot' }, cli_new: { openId: 'ou_new', name: 'New Bot' } })
+    const calls: Array<{ method: string; command: any }> = []
+    let removed = false
+    let connected = false
+    const oldBot = { agentId: 'agent-a', accountId: account.accountId, brand: 'feishu', appId: 'cli_old', credentialRef: 'old-ref', status: 'published', version: 4, botDisplayName: 'Old Bot', failureCode: null }
+    const service = new ChannelSettingsService({
+      ...inertInterval(), credentialStore: { ...credentials, invalidatePublished }, developerSession: inspect,
+      memberBotProvisioner: { create: provision }, createChannel: channels.createChannel,
+      core: channelCore((method, raw: any) => {
+        calls.push({ method, command: raw?.command })
+        if (method === 'channels.feishu.snapshot') return coreSnapshot({
+          account: connected ? account : null, memberBots: removed ? [] : [oldBot],
+          publicationIntents: removed ? [] : [{ publicationIntentId: 'old-intent', agentId: 'agent-a', accountId: account.accountId, remoteAppId: 'cli_old', credentialRef: 'old-ref', state: 'completed', version: 1 }]
+        })
+        if (method === 'channels.feishu.memberBot.delete') { removed = true; credentials.values.delete('old-ref') }
+        if (method === 'members.get') return presentAgent()
+        if (method === 'channels.chat.pending' || method === 'channels.chat.tools.claim' || method === 'channels.chat.outbound.claim') return []
+        return { status: 'applied', payload: {} }
+      })
+    })
+    try {
+      await service.start()
+      expect(channels.handlers.has('cli_old:message')).toBe(true)
+      inspect.inspect.mockClear()
+      const after = await service.deleteMemberBot('agent-a', 'cli_old')
+      expect(after.channels[0].memberBots).toEqual([])
+      expect(credentials.values.has('old-ref')).toBe(false)
+      expect(channels.handlers.has('cli_old:message')).toBe(false)
+      expect(invalidatePublished).toHaveBeenCalledOnce()
+      expect(inspect.inspect).not.toHaveBeenCalled()
+      expect(provision).not.toHaveBeenCalled()
+      expect(channels.createMessage).not.toHaveBeenCalled()
+      expect(calls.find(call => call.method === 'channels.feishu.memberBot.delete')?.command)
+        .toEqual({ agentId: 'agent-a', expectedAppId: 'cli_old', expectedVersion: 4 })
+      connected = true
+      await service.publishMemberBot('agent-a')
+      expect(provision).toHaveBeenCalledOnce()
+      expect(calls.some(call => call.method === 'channels.feishu.publicationIntent.create')).toBe(true)
+    } finally { await service.stop() }
+  })
+
+  it.each([
+    ['feishu_member_bot.binding_conflict', 'Bot 绑定已变化，请重新读取后再试。'],
+    ['feishu_publication_intent.active_conflict', '已有渠道发布正在进行，请查看原发布进度。'],
+    ['channel_credential.identity_conflict', '本地 Bot 凭据存在冲突，未删除发布记录。'],
+    ['channel_credential.still_referenced', '本地 Bot 凭据存在冲突，未删除发布记录。'],
+    ['unexpected_code', '未能删除本地发布记录，请重新读取后再试。']
+  ])('projects local deletion rejection %s without exposing raw errors', async (code, message) => {
+    const credentials = { ...memoryCredentialStore(), invalidatePublished: vi.fn() }
+    const request = vi.fn(async (method: string) => method === 'channels.feishu.snapshot'
+      ? coreSnapshot({ memberBots: [{ agentId: 'agent-a', appId: 'cli_current', version: 2, credentialRef: 'ref', status: 'published', brand: 'feishu', failureCode: null }] })
+      : { status: 'rejected', code, payload: { message: 'private Core diagnostic' } })
+    const service = new ChannelSettingsService({ ...inertInterval(), credentialStore: credentials, core: { request } as ChannelHostDependencies['core'] })
+    await expect(service.deleteMemberBot('agent-a', 'cli_current')).rejects.toThrow(message)
+    expect(credentials.invalidatePublished).not.toHaveBeenCalled()
+    expect((await service.get()).channels[0].memberBots[0]?.appId).toBe('cli_current')
+  })
+
+  it('does not delete a changed binding or pretend a rejected local delete succeeded', async () => {
+    const request = vi.fn(async (method: string) => method === 'channels.feishu.snapshot'
+      ? coreSnapshot({ memberBots: [{ agentId: 'agent-a', appId: 'cli_current', version: 2, credentialRef: 'ref', status: 'published', brand: 'feishu', failureCode: null }] })
+      : { status: 'rejected', code: 'feishu_member_bot.binding_conflict', payload: {} })
+    const credentials = { ...memoryCredentialStore(), invalidatePublished: vi.fn() }
+    const service = new ChannelSettingsService({ ...inertInterval(), credentialStore: credentials, core: { request } as ChannelHostDependencies['core'] })
+    await expect(service.deleteMemberBot('agent-a', 'cli_stale')).rejects.toThrow('绑定已变化')
+    expect(request.mock.calls.some(([method]) => method === 'channels.feishu.memberBot.delete')).toBe(false)
+    await expect(service.deleteMemberBot('agent-a', 'cli_current')).rejects.toThrow()
+    expect(credentials.invalidatePublished).not.toHaveBeenCalled()
+    const lark = new ChannelSettingsService({ ...inertInterval(), profile: LARK_PROVIDER_PROFILE, credentialStore: credentials, core: { request } as ChannelHostDependencies['core'] })
+    await expect(lark.deleteMemberBot('agent-a', 'cli_current')).rejects.toThrow('channel_local_delete_not_supported')
+  })
+
   it.each([FEISHU_PROVIDER_PROFILE, LARK_PROVIDER_PROFILE])('$kind runs private contact jobs and sends explicit target kinds through the SDK once', async (profile) => {
     const harness = controlledChannels({ cli_a: { openId: 'ou_bot_a', name: '审阅员' } })
     const credentials = memoryCredentialStore({ 'private-ref': { appId: 'cli_a', appSecret: 'private-secret' } }, () => profile.kind)

@@ -3294,6 +3294,7 @@ export interface ChannelsApi {
   disconnect(kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
   publishMemberBot(agentId: string, kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
   retryMemberBot(agentId: string, kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
+  deleteMemberBot(agentId: string, expectedAppId: string, kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
   selectPublicationApprover(
     agentId: string,
     userId: string,
@@ -4321,6 +4322,7 @@ export type CoreMethod =
   | 'channels.feishu.publicationIntent.advance'
   | 'channels.feishu.publicationIntent.storeCredential'
   | 'channels.feishu.memberBot.upsert'
+  | 'channels.feishu.memberBot.delete'
   | 'channels.feishu.owner.verify'
   | 'channels.feishu.dm.startNew'
   | 'channels.feishu.pendingBinding.resolve'

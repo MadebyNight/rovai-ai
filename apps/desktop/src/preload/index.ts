@@ -246,6 +246,9 @@ const api: RovaiApi = {
     publishMemberBot(agentId, kind) {
       return ipcRenderer.invoke('rovai:channels-publish-member-bot', agentId, kind)
     },
+    deleteMemberBot(agentId, expectedAppId, kind) {
+      return ipcRenderer.invoke('rovai:channels-delete-member-bot', agentId, expectedAppId, kind)
+    },
     retryMemberBot(agentId, kind) {
       return ipcRenderer.invoke('rovai:channels-retry-member-bot', agentId, kind)
     },

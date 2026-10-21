@@ -1542,6 +1542,13 @@ ipcMain.handle('rovai:channels-publish-member-bot', (
   return channelSettings.publishMemberBot(agentId, optionalChannelKind(kind))
 })
 
+ipcMain.handle('rovai:channels-delete-member-bot', (event, agentId: unknown, expectedAppId: unknown, kind: unknown) => {
+  requireMainWindow(event.sender)
+  if (typeof agentId !== 'string' || !agentId || agentId.length > 256) throw new Error('Invalid Agent ID')
+  if (typeof expectedAppId !== 'string' || !expectedAppId || expectedAppId.length > 256) throw new Error('Invalid App ID')
+  return channelSettings.deleteMemberBot(agentId, expectedAppId, optionalChannelKind(kind))
+})
+
 ipcMain.handle('rovai:channels-retry-member-bot', (event, agentId: unknown, kind: unknown) => {
   requireMainWindow(event.sender)
   if (typeof agentId !== 'string' || !agentId) throw new Error('Invalid Agent ID')

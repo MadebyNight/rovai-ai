@@ -306,6 +306,7 @@ export class ChannelSettingsService {
   readonly #now: () => number
   readonly #listeners = new Set<(snapshot: ChannelSettingsSnapshot) => void>()
   readonly #managedChannels = new Map<string, ManagedChannel>()
+  readonly #deletingApps = new Set<string>()
   readonly #chatServices = new Map<string, ChannelChatService>()
   #chatFlushTimer: ReturnType<typeof setInterval> | null = null
   readonly #publicationFailures = new Map<string, string>()
@@ -618,6 +619,51 @@ export class ChannelSettingsService {
 
   async #publishMemberBot(agentId: string): Promise<ChannelSettingsSnapshot> {
     return this.#publishNewMemberBot(agentId, 'publish')
+  }
+
+  async deleteMemberBot(agentId: string, expectedAppId: string): Promise<ChannelSettingsSnapshot> {
+    this.#requireHost()
+    if (this.#profile.kind !== 'feishu') throw new Error('channel_local_delete_not_supported')
+    if (this.#activeProvisioning && !['completed', 'failed', 'unknown_remote_state'].includes(this.#activeProvisioning.stage)) {
+      throw new Error('已有一名队员正在发布。')
+    }
+    const snapshot = await this.#coreSnapshot()
+    const bot = snapshot.memberBots.find(candidate => candidate.agentId === agentId)
+    if (!bot || bot.appId !== expectedAppId) throw new Error('Bot 绑定已变化，请重新读取后再试。')
+    if (this.#deletingApps.has(bot.appId)) throw new Error('channel_publication_busy')
+    this.#deletingApps.add(bot.appId)
+    try {
+      const managed = this.#managedChannels.get(bot.appId)
+      if (managed) {
+        this.#managedChannels.delete(bot.appId)
+        await this.#disconnectManaged(managed)
+      }
+      const chat = this.#chatServices.get(bot.appId)
+      chat?.stop()
+      this.#chatServices.delete(bot.appId)
+      const result = await this.#commandWithId('channels.feishu.memberBot.delete', randomUUID(), {
+        agentId, expectedAppId: bot.appId, expectedVersion: bot.version
+      }, false)
+      if (result.status === 'rejected') {
+        switch (result.code) {
+          case 'feishu_member_bot.binding_conflict':
+            throw new Error('Bot 绑定已变化，请重新读取后再试。')
+          case 'feishu_publication_intent.active_conflict':
+            throw new Error('已有渠道发布正在进行，请查看原发布进度。')
+          case 'channel_credential.identity_conflict':
+          case 'channel_credential.still_referenced':
+            throw new Error('本地 Bot 凭据存在冲突，未删除发布记录。')
+          default:
+            throw new Error('未能删除本地发布记录，请重新读取后再试。')
+        }
+      }
+      this.#dependencies!.credentialStore.invalidatePublished?.()
+      this.#publicationFailures.delete(agentId)
+      if (this.#activeProvisioning?.agentId === agentId) this.#activeProvisioning = null
+      return await this.#emit()
+    } finally {
+      this.#deletingApps.delete(bot.appId)
+    }
   }
 
   async retryMemberBot(agentId: string): Promise<ChannelSettingsSnapshot> {
@@ -1739,13 +1785,14 @@ export class ChannelSettingsService {
         reason
       })
     }
-    if (this.#stopped) {
+    if (this.#stopped || this.#deletingApps.has(managed.appId)) {
       reject('host_stopped')
       return
     }
     this.#hostPump?.wake()
     const raw = (message.raw ?? {}) as RawInboundEvent
     const coreSnapshot = await this.#coreSnapshot()
+    if (this.#deletingApps.has(managed.appId) || !coreSnapshot.memberBots.some(bot => bot.appId === managed.appId && bot.status === 'published')) return
     const tenantKey = raw.sender?.tenant_key || raw.tenant_key
     if (!tenantKey) {
       reject('tenant_key_missing')

@@ -58,7 +58,7 @@ export function MemberChatBotSettings({
   }
   return (
     <div className="member-chat-bot">
-      <label className="runtime-parameter-switch" title={!materialsPath ? uiAttribute("请先选择文件夹") : undefined}>
+      <label className="runtime-parameter-switch" title={!materialsPath ? uiAttribute("请先选择资料文件夹，再开启聊天 Bot。") : undefined}>
         <span><UiText zh={"聊天 Bot"} /></span>
         <input
           type="checkbox"
@@ -71,7 +71,9 @@ export function MemberChatBotSettings({
       <button className="quiet-button compact" type="button" disabled={busy} onClick={() => void chooseFolder()}>
         <UiText zh={"资料文件夹"} />
       </button>
-      {materialsPath && <span className="member-chat-bot-path" title={materialsPath}>{materialsPath}</span>}
+      {materialsPath
+        ? <span className="member-chat-bot-path" title={materialsPath}>{materialsPath}</span>
+        : <span className="member-chat-bot-hint"><UiText zh={"请先选择资料文件夹，再开启聊天 Bot。"} /></span>}
     </div>
   )
 }

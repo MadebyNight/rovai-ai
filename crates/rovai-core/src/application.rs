@@ -756,6 +756,7 @@ fn channel_request_host_component(method: &str) -> Result<&'static str> {
         | "channels.feishu.publicationIntent.advance"
         | "channels.feishu.publicationIntent.storeCredential"
         | "channels.feishu.memberBot.upsert"
+        | "channels.feishu.memberBot.delete"
         | "channels.feishu.owner.verify"
         | "channels.feishu.dm.startNew"
         | "channels.feishu.pendingBinding.resolve"
@@ -8639,6 +8640,21 @@ impl Core {
                             params.command,
                         ),
                     )?;
+                Ok(serde_json::to_value(execution.result)?)
+            }
+            "channels.feishu.memberBot.delete" => {
+                let params: UserCommandParams<rovai_core::channel::DeleteFeishuMemberBotCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                let execution = ChannelService::default().delete_feishu_member_bot(
+                    &mut database,
+                    &system_command_envelope(
+                        params.command_id,
+                        channel_request_host_component(&request.method)?,
+                        None,
+                        params.command,
+                    ),
+                )?;
                 Ok(serde_json::to_value(execution.result)?)
             }
             "channels.feishu.memberBot.upsert" => {
@@ -27586,6 +27602,7 @@ mod tests {
     #[test]
     fn lark_actor_routes_are_closed_and_payload_cannot_supply_authority() {
         for (method, host_component) in [
+            ("channels.feishu.memberBot.delete", "feishu-channel-host"),
             (
                 "channels.inbound.attachments.complete",
                 "feishu-channel-host",
@@ -27634,6 +27651,8 @@ mod tests {
         ] {
             assert!(validate_lark_request_actor(disconnect, &payload).is_err());
         }
+        assert!(channel_request_host_component("channels.lark.memberBot.delete").is_err());
+        assert!(channel_request_host_component("channels.dingtalk.memberBot.delete").is_err());
         assert!(channel_request_host_component("channels.lark.futureMutation").is_err());
         assert!(channel_request_host_component("channels.lark.inbound.observe.extra").is_err());
     }
