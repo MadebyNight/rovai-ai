@@ -92,7 +92,12 @@ pub(super) struct WindowsManagedProcess {
 
 impl WindowsManagedProcess {
     pub(super) fn spawn(spec: &ManagedProcessLaunchSpec) -> Result<Self> {
-        let application = wide_nul(spec.application().as_os_str(), "application")?;
+        // Keep the canonical path for identity checks, but avoid exposing a verbatim
+        // module path to native tools (Git uses it to locate its installation config).
+        let application = wide_nul(
+            dunce::simplified(spec.application()).as_os_str(),
+            "application",
+        )?;
         let working_directory = match spec.windows_entrypoint() {
             WindowsRuntimeEntrypoint::CommandShim { .. } => {
                 command_shim_working_directory(spec.working_directory())?

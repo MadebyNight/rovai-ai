@@ -7052,7 +7052,8 @@ pub(crate) fn downgrade_run_bootstrap_for_test(connection: &Connection) {
         &["native_session_bootstrap_binding_idx"],
     )
     .unwrap();
-    tx.execute_batch("DELETE FROM schema_migration WHERE version>=195; UPDATE rovai_data_contract SET projection_schema_version=144 WHERE singleton=1;").unwrap();
+    // Chat storage and navigation remain in this fixture, so retain their receipts.
+    tx.execute_batch("DELETE FROM schema_migration WHERE version>=195 AND version NOT IN (209,210,211,212); UPDATE rovai_data_contract SET projection_schema_version=144 WHERE singleton=1;").unwrap();
     tx.commit().unwrap();
     connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     connection
