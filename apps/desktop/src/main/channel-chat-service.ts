@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { ContactSearchError, type ChatContact, type ContactSearchErrorCode } from './feishu-contact-search'
 import type { ChatBotView, CoreMethod } from '@contracts'
 
 export type ChatCore = { request<T>(method: CoreMethod, params?: unknown): Promise<T> }
@@ -12,7 +13,9 @@ export type ChatRuntime = {
   appId: string
   core: ChatCore
   /** Sends to a chat id (group/p2p) or an open id for direct messages. */
-  sendText: (target: string, text: string, targetKind: 'chat' | 'open_id') => Promise<ChatSendReceipt>
+  sendText: (target: string, text: string, targetKind: 'chat' | 'open_id', outboundId: string) => Promise<ChatSendReceipt>
+  searchContacts?: (query: string, signal: AbortSignal) => Promise<ChatContact[]>
+  isReady?: () => boolean | Promise<boolean>
   log?: (event: string, detail?: Record<string, unknown>) => void
 }
 
@@ -52,10 +55,13 @@ type ClaimedOutbound = {
   text: string
   source: string
   attempts: number
+  targetKind: 'chat_id' | 'open_id'
+  leaseToken: string
 }
 
 const MAX_REPLY_BYTES = 8 * 1024
-const OUTBOUND_BATCH = 10
+// A single 20s SDK mutation must finish inside the 30s Core lease.
+const OUTBOUND_BATCH = 1
 const TURN_TIMEOUT_MS = 30 * 60_000
 const WAITING_NOTICE_MS = 10 * 60_000
 
@@ -79,16 +85,18 @@ export class ChannelChatService {
   readonly #runtime: ChatRuntime
   readonly #workerId: string
   readonly #pending = new Map<string, PendingTurn>()
+  readonly #abort = new AbortController()
   #flushing = false
   #stopped = false
 
   constructor(runtime: ChatRuntime) {
     this.#runtime = runtime
-    this.#workerId = 'chat-' + runtime.appId + '-' + digest(String(Date.now()))
+    this.#workerId = 'chat-' + randomUUID()
   }
 
   stop(): void {
     this.#stopped = true
+    this.#abort.abort()
     this.#pending.clear()
   }
 
@@ -111,12 +119,15 @@ export class ChannelChatService {
         authorName: input.authorName,
         authorIsOwner: input.isOwner,
         body: input.body,
-        quoteMessageId: input.quoteMessageId
+        quoteMessageId: input.quoteMessageId,
+        mentions: input.mentions.filter((mention) => typeof mention.openId === 'string'
+          && mention.openId.startsWith('ou_') && mention.openId.length <= 128)
+          .slice(0, 20).map((mention) => ({ openId: mention.openId, name: mention.name.slice(0, 200) }))
       }
     })
-    if (recorded.duplicate || recorded.mode !== 'chat') return
+    if (this.#stopped || recorded.mode !== 'chat') return
     const config = await this.snapshot()
-    if (config.ownerOnly) return
+    if (this.#stopped || config.ownerOnly) return
     const turn = await this.#runtime.core.request<{ campMessageId: string }>(
       'channels.chat.submit',
       {
@@ -126,9 +137,11 @@ export class ChannelChatService {
         conversationKind: input.conversationKind,
         chatName: input.chatName,
         authorName: input.authorName,
-        body: input.body
+        body: input.body,
+        externalMessageId: input.externalMessageId
       }
     )
+    if (this.#stopped || this.#pending.has(turn.campMessageId)) return
     this.#pending.set(turn.campMessageId, {
       chatId: input.chatId,
       submittedAt: Date.now(),
@@ -148,15 +161,90 @@ export class ChannelChatService {
     if (this.#stopped || this.#flushing) return []
     this.#flushing = true
     try {
-      await this.#pollTurns()
-      return await this.#flushOutbound()
+      if (!await this.#ready()) return []
+      const [, results] = await Promise.allSettled([
+        this.#searchContacts().catch(() => this.#log('contacts.worker_failed', { code: 'unavailable' })),
+        (async () => {
+          await this.#hydratePending()
+          if (!await this.#ready()) return []
+          await this.#pollTurns()
+          return this.#flushOutbound()
+        })()
+      ])
+      if (results.status === 'rejected') throw results.reason
+      return results.value
     } finally {
       this.#flushing = false
     }
   }
 
+  async #ready(): Promise<boolean> {
+    return !this.#stopped && (await this.#runtime.isReady?.() ?? true) && !this.#stopped
+  }
+
+  async #searchContacts(): Promise<void> {
+    if (!this.#runtime.searchContacts) return
+    const claimed = await this.#runtime.core.request<Array<{ requestId: string; leaseToken: string; query: string }>>(
+      'channels.chat.tools.claim', {
+        provider: this.#runtime.provider, appId: this.#runtime.appId,
+        workerId: this.#workerId, limit: 1
+      }
+    )
+    for (const request of claimed) {
+      if (!await this.#ready()) return
+      let contacts: ChatContact[] = []
+      let errorCode: ContactSearchErrorCode | null = null
+      const deadline = new AbortController()
+      const timer = setTimeout(() => deadline.abort(), 15_000)
+      const signal = AbortSignal.any([this.#abort.signal, deadline.signal])
+      let abort: (() => void) | undefined
+      try {
+        const found = await Promise.race([
+          this.#runtime.searchContacts(request.query, signal),
+          new Promise<never>((_, reject) => {
+            abort = () => reject(new ContactSearchError('unavailable'))
+            if (signal.aborted) abort()
+            else signal.addEventListener('abort', abort, { once: true })
+          })
+        ])
+        if (!Array.isArray(found)) throw new ContactSearchError('invalid_response')
+        contacts = found.slice(0, 20).map((item) => {
+          if (typeof item?.openId !== 'string' || !item.openId.startsWith('ou_') || item.openId.length > 128
+            || typeof item.name !== 'string' || !item.name.trim()) throw new ContactSearchError('invalid_response')
+          return { openId: item.openId, name: item.name.slice(0, 200),
+            ...(typeof item.department === 'string' ? { department: item.department.slice(0, 300) } : {}) }
+        })
+      } catch (error) {
+        contacts = []
+        errorCode = error instanceof ContactSearchError ? error.code : 'unavailable'
+      } finally {
+        clearTimeout(timer)
+        if (abort) signal.removeEventListener('abort', abort)
+      }
+      if (!await this.#ready()) return
+      await this.#runtime.core.request('channels.chat.tools.settle', {
+        provider: this.#runtime.provider, appId: this.#runtime.appId,
+        workerId: this.#workerId, requestId: request.requestId,
+        leaseToken: request.leaseToken, contacts, errorCode
+      })
+    }
+  }
+
+  async #hydratePending(): Promise<void> {
+    const pending = await this.#runtime.core.request<Array<{ campMessageId: string; chatId: string; submittedAt: number }>>(
+      'channels.chat.pending', { provider: this.#runtime.provider, appId: this.#runtime.appId, limit: 50 }
+    )
+    if (this.#stopped) return
+    for (const turn of pending) {
+      if (!this.#pending.has(turn.campMessageId)) {
+        this.#pending.set(turn.campMessageId, { chatId: turn.chatId, submittedAt: turn.submittedAt, waitingSince: null })
+      }
+    }
+  }
+
   async #pollTurns(): Promise<void> {
     for (const [campMessageId, turn] of [...this.#pending]) {
+      if (!await this.#ready()) return
       let result: TurnResult
       try {
         result = await this.#runtime.core.request<TurnResult>('channels.chat.result', {
@@ -165,17 +253,16 @@ export class ChannelChatService {
           campMessageId
         })
       } catch (error) {
-        this.#log('turn.result_failed', { code: errorName(error) })
+        this.#log('turn.result_failed', { code: 'unavailable' })
         continue
       }
       const now = Date.now()
       if (result.status === 'completed') {
-        this.#pending.delete(campMessageId)
         const text = result.text?.trim()
         if (text) {
           await this.#enqueue(campMessageId, turn.chatId, truncateBytes(text, MAX_REPLY_BYTES), 'reply')
         } else {
-          this.#log('turn.empty_result', { reason: result.reason ?? 'unknown' })
+          this.#log('turn.empty_result')
           await this.#enqueue(campMessageId, turn.chatId, '这条消息没有生成可发送的回复。', 'notice')
         }
         continue
@@ -186,30 +273,29 @@ export class ChannelChatService {
           continue
         }
         if (now - turn.waitingSince < WAITING_NOTICE_MS) continue
-        this.#pending.delete(campMessageId)
         await this.#enqueue(
           campMessageId,
           turn.chatId,
           '这条消息需要在应用里确认后才能继续。',
-          'notice'
+          'notice',
+          false
         )
         continue
       }
       if (result.status === 'failed' || result.status === 'cancelled' || result.status === 'unknown') {
-        this.#pending.delete(campMessageId)
-        this.#log('turn.failed', { status: result.status, reason: result.reason ?? null })
+        this.#log('turn.failed', { status: result.status })
         await this.#enqueue(campMessageId, turn.chatId, '暂时无法回复，请稍后再试。', 'notice')
         continue
       }
       if (now - turn.submittedAt > TURN_TIMEOUT_MS) {
-        this.#pending.delete(campMessageId)
         this.#log('turn.timeout', { status: result.status })
-        await this.#enqueue(campMessageId, turn.chatId, '这条消息处理时间过长，请稍后再试。', 'notice')
+        await this.#enqueue(campMessageId, turn.chatId, '这条消息处理时间过长，请稍后再试。', 'notice', false)
       }
     }
   }
 
   async #flushOutbound(): Promise<ChatFlushResult[]> {
+    if (!await this.#ready()) return []
     const claimed = await this.#runtime.core.request<ClaimedOutbound[]>(
       'channels.chat.outbound.claim',
       {
@@ -221,27 +307,32 @@ export class ChannelChatService {
     )
     const results: ChatFlushResult[] = []
     for (const outbound of claimed) {
+      if (!await this.#ready()) break
       let receipt: ChatSendReceipt = { status: 'unknown', messageId: null }
       let failureCode: string | null = null
       try {
         receipt = await this.#runtime.sendText(
           outbound.chatId,
           outbound.text,
-          outbound.chatId.startsWith('ou_') ? 'open_id' : 'chat'
+          outbound.targetKind === 'open_id' ? 'open_id' : 'chat',
+          outbound.id
         )
       } catch (error) {
         receipt = { status: 'unknown', messageId: null }
-        failureCode = errorName(error)
+        failureCode = 'unavailable'
       }
-      await this.#runtime.core.request('channels.chat.outbound.settle', {
-        commandId: 'chat-settle-' + outbound.id,
+      const settled = await this.#runtime.core.request<{ settled: boolean }>('channels.chat.outbound.settle', {
+        commandId: 'chat-settle-' + outbound.id + '-' + outbound.leaseToken,
         command: {
           outboundId: outbound.id,
+          workerId: this.#workerId,
+          leaseToken: outbound.leaseToken,
           status: receipt.status,
           externalMessageId: receipt.messageId,
           failureCode
         }
       })
+      if (!settled.settled) continue
       if (outbound.source === 'reply' && receipt.status === 'sent') {
         await this.#rememberAssistant(outbound.chatId, outbound.text).catch(() => undefined)
       }
@@ -257,7 +348,8 @@ export class ChannelChatService {
     return results
   }
 
-  async #enqueue(campMessageId: string, chatId: string, text: string, source: string): Promise<void> {
+  async #enqueue(campMessageId: string, chatId: string, text: string, source: string, completeTurn = true): Promise<void> {
+    if (!await this.#ready()) return
     const key = digest([this.#runtime.provider, this.#runtime.appId, campMessageId, source, text].join('\0'))
     try {
       await this.#runtime.core.request('channels.chat.outbound.enqueue', {
@@ -269,11 +361,14 @@ export class ChannelChatService {
           text,
           source,
           idempotencyKey: key,
-          usesMaterials: false
+          usesMaterials: false,
+          campMessageId,
+          completeTurn
         }
       })
+      if (completeTurn) this.#pending.delete(campMessageId)
     } catch (error) {
-      this.#log('outbound.enqueue_failed', { code: errorName(error) })
+      this.#log('outbound.enqueue_failed', { code: 'unavailable' })
     }
   }
 
@@ -294,8 +389,4 @@ export class ChannelChatService {
   #log(event: string, detail?: Record<string, unknown>): void {
     this.#runtime.log?.(event, detail)
   }
-}
-
-function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : 'unknown'
 }

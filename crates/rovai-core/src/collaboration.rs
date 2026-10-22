@@ -3112,17 +3112,15 @@ impl CollaborationService {
             .and_then(|target| target.conversation_id.clone())
             .context("chat Bot admission created no Conversation")?;
         transaction.execute(
-            "UPDATE conversation SET permission_override_json = ?2
-             WHERE id = ?1 AND (permission_override_json IS NULL OR permission_override_json <> ?2)",
-            params![conversation_id, input.permission_override_json],
+            "UPDATE conversation SET permission_override_json = NULL WHERE id = ?1 AND permission_override_json IS NOT NULL",
+            [&conversation_id],
         )?;
         let content = normalize_content(vec![StructuredThreadMessageSegment::Text {
             text: input.body.clone(),
         }]);
         let execution = ExecutionRequest {
             task_id: None,
-            purpose: "Answer one Feishu chat message as the member's chat Bot."
-                .to_string(),
+            purpose: "Answer one Feishu chat message as the member's chat Bot.".to_string(),
             completion_role: required_completion_role(),
             budget: None,
         };
@@ -3966,8 +3964,6 @@ pub(crate) struct ChatBotTurnAdmissionInput {
     pub camp_title: String,
     pub project_path: String,
     pub body: String,
-    /// Serialized AdapterPermissionConfig that caps this Run.
-    pub permission_override_json: String,
     pub command_id: String,
     pub now: String,
 }

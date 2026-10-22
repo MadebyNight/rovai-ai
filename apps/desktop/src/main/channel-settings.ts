@@ -21,6 +21,7 @@ import type {
 } from '@contracts'
 import type { CoreClient } from './core-client'
 import { ChannelChatService, type ChatSendReceipt } from './channel-chat-service'
+import { ContactSearchError, searchContacts } from './feishu-contact-search'
 import {
   FEISHU_PROVIDER_PROFILE,
   presentProviderError,
@@ -305,6 +306,7 @@ export class ChannelSettingsService {
   readonly #now: () => number
   readonly #listeners = new Set<(snapshot: ChannelSettingsSnapshot) => void>()
   readonly #managedChannels = new Map<string, ManagedChannel>()
+  readonly #deletingApps = new Set<string>()
   readonly #chatServices = new Map<string, ChannelChatService>()
   #chatFlushTimer: ReturnType<typeof setInterval> | null = null
   readonly #publicationFailures = new Map<string, string>()
@@ -619,6 +621,51 @@ export class ChannelSettingsService {
     return this.#publishNewMemberBot(agentId, 'publish')
   }
 
+  async deleteMemberBot(agentId: string, expectedAppId: string): Promise<ChannelSettingsSnapshot> {
+    this.#requireHost()
+    if (this.#profile.kind !== 'feishu') throw new Error('channel_local_delete_not_supported')
+    if (this.#activeProvisioning && !['completed', 'failed', 'unknown_remote_state'].includes(this.#activeProvisioning.stage)) {
+      throw new Error('已有一名队员正在发布。')
+    }
+    const snapshot = await this.#coreSnapshot()
+    const bot = snapshot.memberBots.find(candidate => candidate.agentId === agentId)
+    if (!bot || bot.appId !== expectedAppId) throw new Error('Bot 绑定已变化，请重新读取后再试。')
+    if (this.#deletingApps.has(bot.appId)) throw new Error('channel_publication_busy')
+    this.#deletingApps.add(bot.appId)
+    try {
+      const managed = this.#managedChannels.get(bot.appId)
+      if (managed) {
+        this.#managedChannels.delete(bot.appId)
+        await this.#disconnectManaged(managed)
+      }
+      const chat = this.#chatServices.get(bot.appId)
+      chat?.stop()
+      this.#chatServices.delete(bot.appId)
+      const result = await this.#commandWithId('channels.feishu.memberBot.delete', randomUUID(), {
+        agentId, expectedAppId: bot.appId, expectedVersion: bot.version
+      }, false)
+      if (result.status === 'rejected') {
+        switch (result.code) {
+          case 'feishu_member_bot.binding_conflict':
+            throw new Error('Bot 绑定已变化，请重新读取后再试。')
+          case 'feishu_publication_intent.active_conflict':
+            throw new Error('已有渠道发布正在进行，请查看原发布进度。')
+          case 'channel_credential.identity_conflict':
+          case 'channel_credential.still_referenced':
+            throw new Error('本地 Bot 凭据存在冲突，未删除发布记录。')
+          default:
+            throw new Error('未能删除本地发布记录，请重新读取后再试。')
+        }
+      }
+      this.#dependencies!.credentialStore.invalidatePublished?.()
+      this.#publicationFailures.delete(agentId)
+      if (this.#activeProvisioning?.agentId === agentId) this.#activeProvisioning = null
+      return await this.#emit()
+    } finally {
+      this.#deletingApps.delete(bot.appId)
+    }
+  }
+
   async retryMemberBot(agentId: string): Promise<ChannelSettingsSnapshot> {
     return this.#translated(() => this.#retryMemberBot(agentId))
   }
@@ -895,6 +942,7 @@ export class ChannelSettingsService {
         publicationIntentId,
         agentId,
         appName: agent.displayName,
+        chatBotEnabled: this.#profile.kind === 'feishu' && agent.chatBotEnabled === true,
         appDescription,
         avatarSource,
         expectedDeveloperIdentity: {
@@ -1096,6 +1144,7 @@ export class ChannelSettingsService {
         agentId: agent.agentId,
         remoteAppId,
         appName: agent.displayName,
+        chatBotEnabled: this.#profile.kind === 'feishu' && agent.chatBotEnabled === true,
         appDescription,
         avatarSource,
         expectedDeveloperIdentity: {
@@ -1614,14 +1663,48 @@ export class ChannelSettingsService {
       core: {
         request: (method, params) => this.#dependencies!.core.request(method, params)
       },
-      sendText: async (target, text, _targetKind) => {
+      isReady: async () => {
         const managed = this.#managedChannels.get(appId)
-        if (!managed) return { status: 'failed', messageId: null }
+        if (!managed || managed.connectionStatus !== 'online') return false
+        const credential = await this.#dependencies!.credentialStore.read(managed.credentialRef)
+        return credential?.appId === appId && !!credential.appSecret
+          && managed.connectionStatus === 'online' && this.#managedChannels.get(appId) === managed
+      },
+      searchContacts: async (query, signal) => {
+        const managed = this.#managedChannels.get(appId)
+        if (!managed || managed.connectionStatus !== 'online') throw new ContactSearchError('unavailable')
+        const credential = await this.#dependencies!.credentialStore.read(managed.credentialRef)
+        if (!credential || credential.appId !== appId || managed.connectionStatus !== 'online'
+          || this.#managedChannels.get(appId) !== managed || signal.aborted) throw new ContactSearchError('unavailable')
+        return searchContacts({ ...credential, domain: provider, query, signal })
+      },
+      sendText: async (target, text, targetKind, outboundId) => {
+        const managed = this.#managedChannels.get(appId)
+        if (!managed || managed.connectionStatus !== 'online') return { status: 'failed', messageId: null }
+        let timer: ReturnType<typeof setTimeout> | undefined
         try {
-          const result = await managed.channel.send(target, { text })
-          return { status: 'sent', messageId: result?.messageId ?? null }
-        } catch (error) {
-          return { status: chatSendFailure(error), messageId: null }
+          return await Promise.race([
+            managed.channel.rawClient.im.v1.message.create({
+              params: { receive_id_type: targetKind === 'open_id' ? 'open_id' : 'chat_id' },
+              data: {
+                receive_id: target, msg_type: 'text', content: JSON.stringify({ text }),
+                uuid: createHash('sha256').update(provider + '\0' + appId + '\0' + outboundId).digest('hex').slice(0, 50)
+              }
+            }).then((result): ChatSendReceipt => {
+              if (result.code !== 0) return { status: 'failed', messageId: null }
+              return result.data?.message_id
+                ? { status: 'sent', messageId: result.data.message_id }
+                : { status: 'unknown', messageId: null }
+            }),
+            new Promise<ChatSendReceipt>((resolve) => {
+              timer = setTimeout(() => resolve({ status: 'unknown', messageId: null }), 20_000)
+            })
+          ])
+        } catch {
+          // A transport exception cannot establish whether the mutation happened.
+          return { status: 'unknown', messageId: null }
+        } finally {
+          if (timer) clearTimeout(timer)
         }
       },
       log: (event, detail) => logFeishuBotDiagnostic('chat.' + event, {
@@ -1688,7 +1771,7 @@ export class ChannelSettingsService {
     } catch (error) {
       logFeishuBotDiagnostic('chat.failed', {
         ...messageDiagnostic(managed, message),
-        reason: channelFailureCode(error)
+        reason: 'unavailable'
       })
     }
     await this.#emit()
@@ -1702,13 +1785,14 @@ export class ChannelSettingsService {
         reason
       })
     }
-    if (this.#stopped) {
+    if (this.#stopped || this.#deletingApps.has(managed.appId)) {
       reject('host_stopped')
       return
     }
     this.#hostPump?.wake()
     const raw = (message.raw ?? {}) as RawInboundEvent
     const coreSnapshot = await this.#coreSnapshot()
+    if (this.#deletingApps.has(managed.appId) || !coreSnapshot.memberBots.some(bot => bot.appId === managed.appId && bot.status === 'published')) return
     const tenantKey = raw.sender?.tenant_key || raw.tenant_key
     if (!tenantKey) {
       reject('tenant_key_missing')
@@ -3045,14 +3129,6 @@ function channelFailureCode(error: unknown): string {
   if (error instanceof LarkChannelError) return error.code
   if (error instanceof Error && /^[a-z][a-z0-9_.-]{1,80}$/i.test(error.message)) return error.message
   return 'unknown'
-}
-
-/** Sending failed before the platform proved delivery: never claim success. */
-function chatSendFailure(error: unknown): 'failed' | 'unknown' {
-  const code = channelFailureCode(error)
-  return ['send_timeout', 'not_connected', 'unknown', 'rate_limited'].includes(code)
-    ? 'unknown'
-    : 'failed'
 }
 
 function recoverableProvisioningDetail(failureCode: string, hasRemoteApp: boolean): string {

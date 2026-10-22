@@ -85,6 +85,10 @@ Windows 执行测试。由于 `cmd.exe` 无法为所有 `%1`/`%*` consumer 无�
 `%` 或末尾 `\` 时必须在 CreateProcess 前 fail closed，不能静默改变 argv 或尝试猜测脚本的二次解析方式。路径中的
 `%!&^` 仍通过冻结的内部环境变量安全传递；已验证 Codex npm/pnpm shim 则绕过 batch，直接启动 native executable。
 
+Windows 原生 EXE 的文件身份仍按 canonical 路径冻结并在启动前复核；传给 `CreateProcessW` 的
+`lpApplicationName` 使用安全可简化的等价普通路径，避免 Git 等工具把 `\\?\` 模块路径错误用于安装配置定位。
+必须保留扩展形式的路径不强行去前缀；不改变结构化 argv、文件锁、identity 比较或 Job 归属。
+
 ## 2. Windows atomic launch
 
 顺序固定：

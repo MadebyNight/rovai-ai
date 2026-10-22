@@ -87,7 +87,8 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
             matches!(
                 classify_database_contract(&tx)?,
                 DatabaseContractClassification::Current(_)
-            ),
+                    | DatabaseContractClassification::SupportedMigrationSource(_)
+            ) && schema_matches(&tx)?,
             "Single Chat facts admission failed"
         );
         tx.commit()?;

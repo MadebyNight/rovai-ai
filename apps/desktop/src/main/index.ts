@@ -207,6 +207,7 @@ const allowedMethods = new Set<CoreMethod>([
   'members.avatar.set',
   'members.runtime.set',
   'members.runtime.clear',
+  'members.chat.set',
   'members.presence.set',
   'members.removalPreview',
   'members.remove',
@@ -1539,6 +1540,13 @@ ipcMain.handle('rovai:channels-publish-member-bot', (
   requireMainWindow(event.sender)
   if (typeof agentId !== 'string' || !agentId) throw new Error('Invalid Agent ID')
   return channelSettings.publishMemberBot(agentId, optionalChannelKind(kind))
+})
+
+ipcMain.handle('rovai:channels-delete-member-bot', (event, agentId: unknown, expectedAppId: unknown, kind: unknown) => {
+  requireMainWindow(event.sender)
+  if (typeof agentId !== 'string' || !agentId || agentId.length > 256) throw new Error('Invalid Agent ID')
+  if (typeof expectedAppId !== 'string' || !expectedAppId || expectedAppId.length > 256) throw new Error('Invalid App ID')
+  return channelSettings.deleteMemberBot(agentId, expectedAppId, optionalChannelKind(kind))
 })
 
 ipcMain.handle('rovai:channels-retry-member-bot', (event, agentId: unknown, kind: unknown) => {

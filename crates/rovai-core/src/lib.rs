@@ -43,6 +43,7 @@ pub mod camp_open;
 pub mod canonical_activity;
 pub mod channel;
 pub mod channel_chat;
+pub mod channel_chat_tools;
 pub mod claude_permission;
 pub mod collaboration;
 pub mod command;

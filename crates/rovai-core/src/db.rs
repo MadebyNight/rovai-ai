@@ -3552,6 +3552,150 @@ fn connection_has_legacy_feishu_migration_collision(
     ))
 }
 
+// The upstream projection marker is unchanged by additive chat migrations.
+// Receipt and layout validation must still precede admission as Current;
+// open_admitted deliberately does not run schema migrations.
+#[cfg(test)]
+pub(crate) fn assert_chat_tool_upgrade_sources(database: &mut Database) {
+    for source in [210, 209, 208] {
+        database.connection.execute_batch("DROP INDEX camp_navigation_window_idx; ALTER TABLE camp DROP COLUMN navigation_is_chat_bot; DELETE FROM schema_migration WHERE version=212; CREATE INDEX camp_navigation_window_idx ON camp (CASE WHEN project_binding_kind='directory' THEN 'directory:'||project_path ELSE 'quick-chat' END,COALESCE(navigation_activity_at,created_at) DESC,navigation_activity_sequence DESC,id) WHERE deletion_operation_id IS NULL;").unwrap();
+        database.connection.execute_batch("DROP TABLE channel_chat_target_grant; DROP TABLE channel_chat_tool_request; DROP TABLE channel_chat_input; ALTER TABLE channel_chat_message DROP COLUMN mentions_json; ALTER TABLE channel_chat_outbound DROP COLUMN target_kind; ALTER TABLE channel_chat_outbound DROP COLUMN lease_token; ALTER TABLE channel_chat_outbound DROP COLUMN item_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_run_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_execution_epoch; DELETE FROM schema_migration WHERE version=211;").unwrap();
+        if source < 210 {
+            database.connection.execute_batch("DROP TABLE channel_chat_conversation; ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled; ALTER TABLE agent_profile DROP COLUMN chat_materials_path; ALTER TABLE conversation DROP COLUMN permission_override_json; DELETE FROM schema_migration WHERE version=210;").unwrap();
+        }
+        if source < 209 {
+            database.connection.execute_batch("DROP TABLE channel_chat_outbound; DROP TABLE channel_chat_item; DROP TABLE channel_chat_turn; DROP TABLE channel_chat_message; DROP TABLE channel_chat_credential; DROP TABLE channel_chat_bot; DELETE FROM schema_migration WHERE version=209;").unwrap();
+        }
+        assert!(
+            matches!(
+                classify_database_contract(database.connection()).unwrap(),
+                DatabaseContractClassification::SupportedMigrationSource(_)
+            ),
+            "source {source}"
+        );
+        database.migrate(false).unwrap();
+        assert!(
+            matches!(
+                classify_database_contract(database.connection()).unwrap(),
+                DatabaseContractClassification::Current(_)
+            ),
+            "upgraded {source}"
+        );
+        assert!(crate::channel_chat_tools::schema_matches(database.connection()).unwrap());
+    }
+}
+
+fn chat_tool_schema_absent(connection: &Connection) -> rusqlite::Result<bool> {
+    connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name IN ('channel_chat_input','channel_chat_tool_request','channel_chat_target_grant')) AND NOT EXISTS(SELECT 1 FROM pragma_table_info('channel_chat_message') WHERE name='mentions_json') AND NOT EXISTS(SELECT 1 FROM pragma_table_info('channel_chat_outbound') WHERE name IN ('target_kind','lease_token','item_id','source_run_id','source_execution_epoch'))", [], |r| r.get(0))
+}
+
+fn chat_bot_navigation_schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    let column: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('camp') WHERE name='navigation_is_chat_bot' AND type='INTEGER' AND [notnull]=1 AND dflt_value='0')", [], |r| r.get(0),
+    )?;
+    let table: String = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='camp'",
+        [],
+        |r| r.get(0),
+    )?;
+    let index: Option<String> = connection.query_row("SELECT sql FROM sqlite_master WHERE type='index' AND name='camp_navigation_window_idx'",[],|r|r.get(0)).optional()?;
+    let normalize = |sql: &str| {
+        sql.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+    };
+    Ok(column && normalize(&table).contains("CHECK(navigation_is_chat_botIN(0,1))")
+        && index.is_some_and(|sql| normalize(&sql) == "CREATEINDEXcamp_navigation_window_idxONcamp(CASEWHENnavigation_is_chat_bot=1THEN'chat-bot'WHENproject_binding_kind='directory'THEN'directory:'||project_pathELSE'quick-chat'END,COALESCE(navigation_activity_at,created_at)DESC,navigation_activity_sequenceDESC,id)WHEREdeletion_operation_idISNULL"))
+}
+
+fn chat_bot_navigation_schema_absent(connection: &Connection) -> rusqlite::Result<bool> {
+    let absent: bool = connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM pragma_table_info('camp') WHERE name='navigation_is_chat_bot')",[],|r|r.get(0))?;
+    let index: Option<String> = connection.query_row("SELECT sql FROM sqlite_master WHERE type='index' AND name='camp_navigation_window_idx'",[],|r|r.get(0)).optional()?;
+    Ok(absent && index.is_some_and(|sql| sql.chars().filter(|c| !c.is_whitespace()).collect::<String>() == "CREATEINDEXcamp_navigation_window_idxONcamp(CASEWHENproject_binding_kind='directory'THEN'directory:'||project_pathELSE'quick-chat'END,COALESCE(navigation_activity_at,created_at)DESC,navigation_activity_sequenceDESC,id)WHEREdeletion_operation_idISNULL"))
+}
+
+fn classify_chat_schema(
+    connection: &Connection,
+    marker: DatabaseContractMarker,
+) -> rusqlite::Result<DatabaseContractClassification> {
+    let (
+        chat_receipt,
+        member_receipt,
+        chat_tables,
+        member_columns,
+        conversation_columns,
+        mapping_tables,
+    ): (bool, bool, i64, i64, i64, i64) = connection.query_row(
+        "SELECT
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=209),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=210),
+            (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (
+                'channel_chat_bot','channel_chat_credential','channel_chat_message',
+                'channel_chat_turn','channel_chat_item','channel_chat_outbound')),
+            (SELECT COUNT(*) FROM pragma_table_info('agent_profile')
+                WHERE name IN ('chat_bot_enabled','chat_materials_path')),
+            (SELECT COUNT(*) FROM pragma_table_info('conversation')
+                WHERE name='permission_override_json'),
+            (SELECT COUNT(*) FROM sqlite_master WHERE type='table'
+                AND name='channel_chat_conversation')",
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
+    )?;
+    let chat_valid = if chat_receipt {
+        chat_tables == 6 && crate::channel_chat::schema_matches(connection)?
+    } else {
+        chat_tables == 0
+    };
+    let member_valid = if member_receipt {
+        chat_receipt && chat_bot_member_reuse_v210_schema_matches(connection)?
+    } else {
+        member_columns == 0 && conversation_columns == 0 && mapping_tables == 0
+    };
+    let (tool_receipt, navigation_receipt): (bool, bool) = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=211), EXISTS(SELECT 1 FROM schema_migration WHERE version=212)", [], |r| Ok((r.get(0)?,r.get(1)?)),
+    )?;
+    let tool_layout = crate::channel_chat_tools::schema_matches(connection)?;
+    let tools_absent = chat_tool_schema_absent(connection)?;
+    let navigation_layout = chat_bot_navigation_schema_matches(connection)?;
+    let navigation_absent = chat_bot_navigation_schema_absent(connection)?;
+    // Two released branches used 211. Only complete, known layouts identify the
+    // historical receipt; partial layouts must never be silently repaired.
+    let tool_valid = if tool_receipt {
+        member_receipt
+            && (tool_layout || (tools_absent && navigation_layout && !navigation_receipt))
+    } else {
+        tools_absent
+    };
+    let navigation_valid = if navigation_receipt {
+        member_receipt && navigation_layout
+    } else {
+        navigation_absent || (member_receipt && tool_receipt && navigation_layout)
+    };
+    Ok(
+        if !chat_valid || !member_valid || !tool_valid || !navigation_valid {
+            DatabaseContractClassification::Unknown(Some(marker))
+        } else if chat_receipt
+            && member_receipt
+            && tool_receipt
+            && tool_layout
+            && navigation_receipt
+        {
+            DatabaseContractClassification::Current(marker)
+        } else {
+            DatabaseContractClassification::SupportedMigrationSource(marker)
+        },
+    )
+}
+
 pub(crate) fn classify_database_contract(
     connection: &Connection,
 ) -> rusqlite::Result<DatabaseContractClassification> {
@@ -3659,7 +3803,7 @@ pub(crate) fn classify_database_contract(
         return Ok(if !valid {
             DatabaseContractClassification::Unknown(Some(marker))
         } else if marker.projection_schema_version == CURRENT_PROJECTION_SCHEMA_VERSION {
-            DatabaseContractClassification::Current(marker)
+            classify_chat_schema(connection, marker)?
         } else {
             DatabaseContractClassification::SupportedMigrationSource(marker)
         });
@@ -3830,7 +3974,7 @@ pub(crate) fn classify_database_contract(
         && marker.projection_schema_version == CURRENT_PROJECTION_SCHEMA_VERSION
         && marker.classifier_version == V147_CLASSIFIER_VERSION
     {
-        Ok(DatabaseContractClassification::Current(marker))
+        classify_chat_schema(connection, marker)
     } else {
         Ok(DatabaseContractClassification::SupportedMigrationSource(
             marker,
@@ -5074,7 +5218,9 @@ fn chat_bot_member_reuse_v210_schema_matches(connection: &Connection) -> rusqlit
              AND EXISTS(SELECT 1 FROM pragma_table_info('conversation')
                        WHERE name = 'permission_override_json' AND type = 'TEXT')
              AND EXISTS(SELECT 1 FROM sqlite_master
-                       WHERE type = 'table' AND name = 'channel_chat_conversation')",
+                       WHERE type = 'table' AND name = 'channel_chat_conversation')
+             AND (SELECT COUNT(*) FROM pragma_table_info('channel_chat_conversation')
+                       WHERE name IN ('provider','app_id','chat_id','camp_id','created_at')) = 5",
         [],
         |row| row.get(0),
     )
@@ -6906,7 +7052,8 @@ pub(crate) fn downgrade_run_bootstrap_for_test(connection: &Connection) {
         &["native_session_bootstrap_binding_idx"],
     )
     .unwrap();
-    tx.execute_batch("DELETE FROM schema_migration WHERE version>=195; UPDATE rovai_data_contract SET projection_schema_version=144 WHERE singleton=1;").unwrap();
+    // Chat storage and navigation remain in this fixture, so retain their receipts.
+    tx.execute_batch("DELETE FROM schema_migration WHERE version>=195 AND version NOT IN (209,210,211,212); UPDATE rovai_data_contract SET projection_schema_version=144 WHERE singleton=1;").unwrap();
     tx.commit().unwrap();
     connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
     connection
@@ -9373,6 +9520,13 @@ impl Database {
             if !self.schema_migration_applied(210)? {
                 migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
             }
+            self.reconcile_chat_navigation_receipt()?;
+            if !self.schema_migration_applied(211)? {
+                migration_step!("migration_211", crate::channel_chat_tools::migrate(self));
+            }
+            if !self.schema_migration_applied(212)? {
+                migration_step!("migration_212", self.migrate_chat_bot_navigation());
+            }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
             {
@@ -10225,6 +10379,13 @@ impl Database {
         if !self.schema_migration_applied(210)? {
             migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
         }
+        self.reconcile_chat_navigation_receipt()?;
+        if !self.schema_migration_applied(211)? {
+            migration_step!("migration_211", crate::channel_chat_tools::migrate(self));
+        }
+        if !self.schema_migration_applied(212)? {
+            migration_step!("migration_212", self.migrate_chat_bot_navigation());
+        }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
         {
@@ -10444,6 +10605,74 @@ impl Database {
             "INSERT INTO schema_migration VALUES(210,datetime('now'))",
             [],
         )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn reconcile_chat_navigation_receipt(&mut self) -> Result<()> {
+        if !self.schema_migration_applied(211)? || self.schema_migration_applied(212)? {
+            return Ok(());
+        }
+        if !chat_bot_navigation_schema_matches(self.connection())? {
+            return Ok(());
+        }
+        let tools = crate::channel_chat_tools::schema_matches(self.connection())?;
+        anyhow::ensure!(
+            tools || chat_tool_schema_absent(self.connection())?,
+            "partial chat tool schema"
+        );
+        let tx = self
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tools {
+            tx.execute("INSERT INTO schema_migration(version,applied_at) SELECT 212,applied_at FROM schema_migration WHERE version=211",[])?;
+        } else {
+            // Preserve the old navigation receipt and its timestamp under its
+            // unambiguous number before applying the still-missing tools.
+            tx.execute(
+                "UPDATE schema_migration SET version=212 WHERE version=211",
+                [],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn migrate_chat_bot_navigation(&mut self) -> Result<()> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        anyhow::ensure!(
+            chat_bot_navigation_schema_absent(&transaction)?,
+            "navigation migration requires complete previous layout"
+        );
+        add_migration_column_if_missing(
+            &transaction,
+            "camp",
+            "navigation_is_chat_bot",
+            "navigation_is_chat_bot INTEGER NOT NULL DEFAULT 0 CHECK(navigation_is_chat_bot IN (0, 1))",
+        )?;
+        // Preserve the origin even when a later Bot configuration replaces the binding.
+        transaction.execute_batch(
+            "UPDATE camp SET navigation_is_chat_bot = 1
+             WHERE id IN (SELECT camp_id FROM channel_chat_conversation);
+             DROP INDEX camp_navigation_window_idx;
+             CREATE INDEX camp_navigation_window_idx ON camp (
+                 CASE WHEN navigation_is_chat_bot = 1 THEN 'chat-bot'
+                      WHEN project_binding_kind = 'directory' THEN 'directory:' || project_path
+                      ELSE 'quick-chat' END,
+                 COALESCE(navigation_activity_at, created_at) DESC,
+                 navigation_activity_sequence DESC, id
+             ) WHERE deletion_operation_id IS NULL;",
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migration VALUES(212,datetime('now'))",
+            [],
+        )?;
+        anyhow::ensure!(
+            chat_bot_navigation_schema_matches(&transaction)?,
+            "navigation migration layout mismatch"
+        );
         transaction.commit()?;
         Ok(())
     }
@@ -35379,6 +35608,49 @@ fn downgrade_current_schema_to_v148_source_for_test(connection: &Connection) {
             .execute_batch(&format!("DROP TRIGGER \"{}\"", name.replace('"', "\"\"")))
             .unwrap();
     }
+    // Additive chat storage must be absent before its receipts are removed.
+    // v170 fixtures never had it; current fixtures must contain no chat history.
+    let has_chat_storage: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_chat_bot')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    if has_chat_storage {
+        for table in [
+            "channel_chat_target_grant",
+            "channel_chat_tool_request",
+            "channel_chat_input",
+            "channel_chat_conversation",
+            "channel_chat_outbound",
+            "channel_chat_item",
+            "channel_chat_turn",
+            "channel_chat_message",
+            "channel_chat_credential",
+            "channel_chat_bot",
+        ] {
+            let count: i64 = transaction
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                count, 0,
+                "historical source fixture contains chat rows in {table}"
+            );
+            transaction
+                .execute_batch(&format!("DROP TABLE {table}"))
+                .unwrap();
+        }
+        transaction
+            .execute_batch(
+                "ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled;
+                 ALTER TABLE agent_profile DROP COLUMN chat_materials_path;
+                 ALTER TABLE conversation DROP COLUMN permission_override_json;",
+            )
+            .unwrap();
+    }
     for table in ["skill_group_assignment", "skill_projection_observation"] {
         transaction
             .execute(&format!("DELETE FROM {table} WHERE group_key='zcode'"), [])
@@ -35481,7 +35753,24 @@ fn downgrade_runtime_session_context_for_test(connection: &Connection) {
 
 #[cfg(test)]
 fn downgrade_navigation_summary_for_test(connection: &Connection) {
+    // The historical projection helpers do not remove additive chat storage.
+    // Preserve its receipts too; otherwise this fixture invents partial corruption.
+    let chat_receipts = connection
+        .prepare("SELECT version, applied_at FROM schema_migration WHERE version IN (209,210,211)")
+        .unwrap()
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
     downgrade_runtime_session_context_for_test(connection);
+    for (version, applied_at) in chat_receipts {
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO schema_migration(version,applied_at) VALUES(?1,?2)",
+                params![version, applied_at],
+            )
+            .unwrap();
+    }
     let applied: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=177)",
@@ -35503,7 +35792,8 @@ fn downgrade_navigation_summary_for_test(connection: &Connection) {
         ALTER TABLE camp DROP COLUMN navigation_activity_sequence;
         ALTER TABLE camp DROP COLUMN navigation_activity_at;
         ALTER TABLE camp DROP COLUMN navigation_completion_sequence;
-        DELETE FROM schema_migration WHERE version=177;
+        ALTER TABLE camp DROP COLUMN navigation_is_chat_bot;
+        DELETE FROM schema_migration WHERE version IN (177, 212);
         UPDATE rovai_data_contract SET projection_schema_version=126 WHERE singleton=1;",
         )
         .unwrap();
@@ -40159,6 +40449,58 @@ mod tests {
             )
             .unwrap(),
             expected
+        );
+        // The additive Bot origin migration derives only from the durable chat binding.
+        let before_bot_migration = tables(&reopened);
+        reopened.connection().execute_batch(
+            "INSERT INTO channel_chat_conversation(provider,app_id,chat_id,camp_id,created_at)
+             VALUES ('feishu','bot','chat','nav-b',0);
+             INSERT INTO camp(id,title,project_binding_kind,project_path,created_at,updated_at)
+             VALUES ('nav-worker','Worker','directory','/repo','2026-01-02','2026-01-02');
+             DROP INDEX camp_navigation_window_idx;
+             ALTER TABLE camp DROP COLUMN navigation_is_chat_bot;
+             DELETE FROM schema_migration WHERE version=212;
+             CREATE INDEX camp_navigation_window_idx ON camp (
+                 CASE WHEN project_binding_kind = 'directory' THEN 'directory:' || project_path ELSE 'quick-chat' END,
+                 COALESCE(navigation_activity_at, created_at) DESC, navigation_activity_sequence DESC, id
+             ) WHERE deletion_operation_id IS NULL;
+             CREATE TEMP TRIGGER reject_bot_navigation_receipt BEFORE INSERT ON schema_migration
+             WHEN NEW.version=212 BEGIN SELECT RAISE(ABORT,'Bot navigation receipt failure'); END;",
+        ).unwrap();
+        assert!(reopened.migrate_chat_bot_navigation().is_err());
+        assert!(!reopened.schema_migration_applied(212).unwrap());
+        assert_eq!(reopened.connection().query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('camp') WHERE name='navigation_is_chat_bot'",
+            [], |row| row.get::<_, i64>(0),
+        ).unwrap(), 0);
+        reopened
+            .connection()
+            .execute_batch("DROP TRIGGER reject_bot_navigation_receipt")
+            .unwrap();
+        drop(reopened);
+        let mut migrated = Database::open(&directory).unwrap();
+        assert!(migrated.schema_migration_applied(212).unwrap());
+        assert_eq!(tables(&migrated), before_bot_migration);
+        let bots = crate::read_model::ReadModelService
+            .navigation_snapshot(&mut migrated)
+            .unwrap();
+        assert_eq!(bots.chat_bot.total_count, 1);
+        assert_eq!(bots.chat_bot.recent_camps[0].id, "nav-b");
+        assert_eq!(bots.projects[0].total_count, 1);
+        assert_eq!(bots.projects[0].recent_camps[0].id, "nav-worker");
+        migrated
+            .connection()
+            .execute("DELETE FROM channel_chat_conversation", [])
+            .unwrap();
+        drop(migrated);
+        let mut reopened = Database::open(&directory).unwrap();
+        assert_eq!(
+            crate::read_model::ReadModelService
+                .navigation_snapshot(&mut reopened)
+                .unwrap()
+                .chat_bot
+                .total_count,
+            1
         );
         drop(reopened);
         std::fs::remove_dir_all(directory).unwrap();

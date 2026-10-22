@@ -990,50 +990,6 @@ impl AgentRuntimeAdapterRegistry {
         }
     }
 
-    /// Chat Bot Runs are unattended, so they never inherit a member's interactive
-    /// bypass profile. Each adapter gets its most permissive *non-bypass* preset
-    /// that still allows writes inside the Workspace; Rovai workspace scope remains
-    /// the outer bound.
-    pub fn chat_permission_ceiling(&self, kind: AdapterKind) -> Value {
-        match kind {
-            AdapterKind::CodexCli => json!({
-                "sandbox_mode": "workspace-write",
-                "approval_policy": "never",
-            }),
-            AdapterKind::Pi => json!({}),
-            AdapterKind::ZcodeApp => json!({ "permission_mode": "build" }),
-            AdapterKind::ClineCli => json!({ "mode": "act", "auto_approve": "false" }),
-            AdapterKind::CommandCodeCli => json!({ "permission_mode": "auto-accept" }),
-            AdapterKind::DeepseekHarness => json!({
-                "sandbox_mode": "workspace-write",
-                "approval_policy": "never",
-            }),
-            AdapterKind::OpencodeCli => json!({ "permission": "ask" }),
-            AdapterKind::CopilotCli => json!({ "allow_all": "off" }),
-            AdapterKind::ClaudeCodeCli => json!({ "permission_mode": "acceptEdits" }),
-            AdapterKind::KiroCli => json!({ "trust_all_tools": "off" }),
-            AdapterKind::QoderCli => json!({ "permission_mode": "accept_edits" }),
-            AdapterKind::CodebuddyCli => json!({ "permission_mode": "acceptEdits" }),
-            AdapterKind::QwenCode => json!({ "approval_mode": "auto_edit" }),
-            AdapterKind::TraeCnCli => json!({ "permission_mode": "default" }),
-            AdapterKind::CursorAgent => json!({
-                "execution_mode": "agent",
-                "approval_policy": "default",
-            }),
-            AdapterKind::MinimaxCodeCli => json!({
-                "permission_mode": "auto",
-                "mode": "default",
-            }),
-            AdapterKind::KimiCodeCli => json!({ "permission_mode": "auto" }),
-            AdapterKind::GrokBuild => json!({ "permission_mode": "acceptEdits" }),
-            AdapterKind::AntigravityApp => json!({
-                "mode": "accept-edits",
-                "sandbox": "on",
-                "dangerously_skip_permissions": "off",
-            }),
-        }
-    }
-
     pub fn resolve_runtime(
         &self,
         kind: AdapterKind,

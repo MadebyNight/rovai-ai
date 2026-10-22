@@ -10,8 +10,7 @@ use uuid::Uuid;
 
 use std::str::FromStr;
 
-use crate::agent_profile::{AdapterKind, AdapterPermissionConfig};
-use crate::agent_runtime_adapter::AgentRuntimeAdapterRegistry;
+use crate::agent_profile::AdapterKind;
 use crate::collaboration::{ChatBotTurnAdmissionInput, CollaborationService};
 use crate::db::Database;
 
@@ -67,6 +66,13 @@ pub struct ChatBotConfigView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ChatMention {
+    pub open_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatInboundCommand {
     pub provider: String,
     pub app_id: String,
@@ -79,6 +85,8 @@ pub struct ChatInboundCommand {
     pub author_is_owner: bool,
     pub body: String,
     pub quote_message_id: Option<String>,
+    #[serde(default)]
+    pub mentions: Vec<ChatMention>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +102,7 @@ pub struct ChatInboundResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatTurnSubmitCommand {
+    pub external_message_id: String,
     pub provider: String,
     pub app_id: String,
     pub chat_id: String,
@@ -212,6 +221,10 @@ pub struct ChatOutboundEnqueueCommand {
     pub source: String,
     pub idempotency_key: String,
     #[serde(default)]
+    pub camp_message_id: Option<String>,
+    #[serde(default)]
+    pub complete_turn: bool,
+    #[serde(default)]
     pub uses_materials: bool,
 }
 
@@ -223,6 +236,8 @@ pub struct ChatOutboundView {
     pub text: String,
     pub source: String,
     pub attempts: i64,
+    pub target_kind: String,
+    pub lease_token: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,9 +251,53 @@ pub struct ChatOutboundEnqueueResult {
 #[serde(rename_all = "camelCase")]
 pub struct ChatOutboundSettleCommand {
     pub outbound_id: String,
+    pub worker_id: String,
+    pub lease_token: String,
     pub status: String,
     pub external_message_id: Option<String>,
     pub failure_code: Option<String>,
+}
+
+/// Validate columns used by chat storage without reading message or credential data.
+pub(crate) fn schema_matches(connection: &Connection) -> rusqlite::Result<bool> {
+    for (table, columns) in [
+        (
+            "channel_chat_bot",
+            "provider,app_id,owner_only,model_provider,model_name,model_base_url,materials_path,materials_status,updated_at",
+        ),
+        (
+            "channel_chat_credential",
+            "provider,app_id,api_key,updated_at",
+        ),
+        (
+            "channel_chat_message",
+            "id,provider,app_id,chat_id,conversation_kind,chat_name,author_external_id,author_name,author_is_owner,body,quote_message_id,external_message_id,dedupe_key,received_at",
+        ),
+        (
+            "channel_chat_turn",
+            "id,provider,app_id,chat_id,role,body,materials_only,created_at",
+        ),
+        (
+            "channel_chat_item",
+            "id,provider,app_id,requester_external_id,requester_name,destination_chat_id,destination_kind,target_external_id,target_name,target_is_owner,question,ask_message_id,ask_chat_id,status,last_report_at,created_at,updated_at",
+        ),
+        (
+            "channel_chat_outbound",
+            "id,provider,app_id,chat_id,body,source,idempotency_key,uses_materials,status,attempts,lease_owner,lease_expires_at,external_message_id,failure_code,created_at,updated_at",
+        ),
+    ] {
+        let mut statement = connection.prepare("SELECT name FROM pragma_table_info(?1)")?;
+        let actual = statement
+            .query_map([table], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if columns
+            .split(',')
+            .any(|column| !actual.iter().any(|name| name == column))
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Additive migration 209. Every table is chat-only state and never feeds Camp.
@@ -362,6 +421,14 @@ pub struct ChatScopeParams {
     pub app_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatPendingParams {
+    pub provider: String,
+    pub app_id: String,
+    pub limit: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatContextParams {
@@ -420,7 +487,39 @@ impl ChannelChatService {
     ) -> Result<ChatTurnSubmitResult> {
         validate_identity(&command.provider, &command.app_id)?;
         text(&command.chat_id, "chatId", MAX_CHAT_ID_BYTES)?;
-        text(&command.body, "body", MAX_BODY_BYTES)?;
+        text(
+            &command.external_message_id,
+            "externalMessageId",
+            MAX_CHAT_ID_BYTES,
+        )?;
+        // Immutable inbound receipts own author, content and conversation identity.
+        let (inbound_id, frozen): (String, ChatTurnSubmitCommand) = database.connection().query_row(
+            "SELECT id,chat_id,conversation_kind,chat_name,author_name,body FROM channel_chat_message WHERE provider=?1 AND app_id=?2 AND external_message_id=?3",
+            params![command.provider,command.app_id,command.external_message_id],
+            |row| Ok((row.get(0)?, ChatTurnSubmitCommand { external_message_id: command.external_message_id.clone(), provider:command.provider.clone(), app_id:command.app_id.clone(), chat_id:row.get(1)?, conversation_kind:row.get(2)?,chat_name:row.get(3)?,author_name:row.get(4)?,body:row.get(5)? }))
+        ).optional()?.context("chat inbound receipt is missing")?;
+        anyhow::ensure!(
+            command.chat_id == frozen.chat_id,
+            "chat inbound scope mismatch"
+        );
+        let command = &frozen;
+        if let Some(result) = database
+            .connection()
+            .query_row(
+                "SELECT camp_id,camp_message_id FROM channel_chat_input WHERE inbound_id=?1",
+                [&inbound_id],
+                |row| {
+                    Ok(ChatTurnSubmitResult {
+                        camp_id: row.get(0)?,
+                        camp_message_id: row.get(1)?,
+                        duplicate: true,
+                    })
+                },
+            )
+            .optional()?
+        {
+            return Ok(result);
+        }
         let config = load_config(database.connection(), &command.provider, &command.app_id)?;
         anyhow::ensure!(
             config.mode == CHAT_MODE,
@@ -445,17 +544,11 @@ impl ChannelChatService {
             )
             .optional()?
             .flatten();
-        let adapter_kind = AdapterKind::from_str(
+        AdapterKind::from_str(
             adapter_kind
                 .as_deref()
                 .context("the chat Bot member has no Runtime configuration")?,
         )?;
-        // Unattended chat never inherits the member's interactive bypass profile.
-        let permission_override_json = serde_json::to_string(&AdapterPermissionConfig {
-            adapter_kind,
-            schema_version: 1,
-            values: AgentRuntimeAdapterRegistry::default().chat_permission_ceiling(adapter_kind),
-        })?;
         let now = Utc::now().to_rfc3339();
         let command_id = format!("chat-turn-{}", Uuid::new_v4());
         let body = format!(
@@ -467,6 +560,22 @@ impl ChannelChatService {
         let transaction = database
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(result) = transaction
+            .query_row(
+                "SELECT camp_id,camp_message_id FROM channel_chat_input WHERE inbound_id=?1",
+                [&inbound_id],
+                |row| {
+                    Ok(ChatTurnSubmitResult {
+                        camp_id: row.get(0)?,
+                        camp_message_id: row.get(1)?,
+                        duplicate: true,
+                    })
+                },
+            )
+            .optional()?
+        {
+            return Ok(result);
+        }
         let camp_id = bound_camp(
             &transaction,
             &command.provider,
@@ -483,7 +592,6 @@ impl ChannelChatService {
                 camp_title: camp_title(command),
                 project_path: materials_path.clone(),
                 body,
-                permission_override_json,
                 command_id: command_id.clone(),
                 now: now.clone(),
             },
@@ -508,6 +616,14 @@ impl ChannelChatService {
                 now_millis(),
             ],
         )?;
+        transaction.execute(
+            "INSERT INTO channel_chat_input(inbound_id,camp_message_id,camp_id) VALUES(?1,?2,?3)",
+            params![inbound_id, admission.camp_message_id, admission.camp_id],
+        )?;
+        transaction.execute(
+            "UPDATE camp SET navigation_is_chat_bot = 1 WHERE id = ?1",
+            [&admission.camp_id],
+        )?;
         transaction.commit()?;
         Ok(ChatTurnSubmitResult {
             camp_id: admission.camp_id,
@@ -526,6 +642,7 @@ impl ChannelChatService {
     ) -> Result<ChatTurnResultView> {
         validate_identity(provider, app_id)?;
         let connection = database.connection();
+        anyhow::ensure!(connection.query_row("SELECT EXISTS(SELECT 1 FROM channel_chat_input b JOIN channel_chat_message m ON m.id=b.inbound_id WHERE b.camp_message_id=?1 AND m.provider=?2 AND m.app_id=?3)",params![camp_message_id,provider,app_id],|r|r.get::<_,bool>(0))?,"chat turn scope mismatch");
         let delivery = connection
             .query_row(
                 r#"
@@ -536,12 +653,7 @@ impl ChannelChatService {
                 LIMIT 1
                 "#,
                 [camp_message_id],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                    ))
-                },
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .optional()?;
         let Some((delivery_status, agent_run_id)) = delivery else {
@@ -618,6 +730,12 @@ impl ChannelChatService {
         )?;
         text(&command.body, "body", MAX_BODY_BYTES)?;
         let config = load_config(database.connection(), &command.provider, &command.app_id)?;
+        anyhow::ensure!(command.mentions.len() <= 20, "too many mentions");
+        for mention in &command.mentions {
+            text(&mention.open_id, "mention openId", 512)?;
+            text(&mention.name, "mention name", 256)?;
+        }
+        let mentions_json = serde_json::to_string(&command.mentions)?;
         let dedupe_key = format!(
             "{}\u{0}{}\u{0}{}",
             command.provider, command.app_id, command.external_message_id
@@ -631,8 +749,8 @@ impl ChannelChatService {
             INSERT INTO channel_chat_message(
                 id, provider, app_id, chat_id, conversation_kind, chat_name,
                 author_external_id, author_name, author_is_owner, body,
-                quote_message_id, external_message_id, dedupe_key, received_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                quote_message_id, external_message_id, dedupe_key, received_at, mentions_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
             ON CONFLICT(dedupe_key) DO NOTHING
             "#,
             params![
@@ -649,7 +767,8 @@ impl ChannelChatService {
                 command.quote_message_id,
                 command.external_message_id,
                 dedupe_key,
-                now
+                now,
+                mentions_json
             ],
         )?;
         let duplicate = inserted == 0;
@@ -967,7 +1086,23 @@ impl ChannelChatService {
         text(&command.idempotency_key, "idempotencyKey", 512)?;
         let now = now_millis();
         let id = Uuid::new_v4().to_string();
-        let inserted = database.connection().execute(
+        let tx = database
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(message) = command.camp_message_id.as_deref() {
+            let previous:Option<Option<String>>=tx.query_row("SELECT b.reply_outbound_id FROM channel_chat_input b JOIN channel_chat_message m ON m.id=b.inbound_id WHERE b.camp_message_id=?1 AND m.provider=?2 AND m.app_id=?3 AND m.chat_id=?4",params![message,command.provider,command.app_id,command.chat_id],|r|r.get(0)).optional()?;
+            match previous {
+                Some(Some(outbound_id)) => {
+                    return Ok(ChatOutboundEnqueueResult {
+                        outbound_id,
+                        duplicate: true,
+                    });
+                }
+                Some(None) => {}
+                None => anyhow::bail!("chat reply input scope mismatch"),
+            }
+        }
+        let inserted = tx.execute(
             r#"
             INSERT INTO channel_chat_outbound(
                 id, provider, app_id, chat_id, body, source, idempotency_key,
@@ -988,20 +1123,25 @@ impl ChannelChatService {
                 now
             ],
         )?;
-        if inserted == 1 {
-            return Ok(ChatOutboundEnqueueResult {
-                outbound_id: id,
-                duplicate: false,
-            });
+        let outbound_id = if inserted == 1 {
+            id
+        } else {
+            tx.query_row("SELECT id FROM channel_chat_outbound WHERE idempotency_key=?1 AND provider=?2 AND app_id=?3 AND chat_id=?4 AND body=?5 AND source=?6",params![command.idempotency_key,command.provider,command.app_id,command.chat_id,command.text,command.source],|row|row.get::<_,String>(0)).optional()?.context("outbound idempotency conflict")?
+        };
+        if let Some(message) = command
+            .camp_message_id
+            .as_deref()
+            .filter(|_| command.complete_turn)
+        {
+            tx.execute(
+                "UPDATE channel_chat_input SET reply_outbound_id=?2 WHERE camp_message_id=?1",
+                params![message, outbound_id],
+            )?;
         }
-        let existing: String = database.connection().query_row(
-            "SELECT id FROM channel_chat_outbound WHERE idempotency_key = ?1",
-            [&command.idempotency_key],
-            |row| row.get(0),
-        )?;
+        tx.commit()?;
         Ok(ChatOutboundEnqueueResult {
-            outbound_id: existing,
-            duplicate: true,
+            outbound_id,
+            duplicate: inserted == 0,
         })
     }
 
@@ -1016,10 +1156,17 @@ impl ChannelChatService {
         validate_identity(provider, app_id)?;
         text(worker_id, "workerId", 256)?;
         let limit = limit.clamp(1, 50);
+        let config = load_config(database.connection(), provider, app_id)?;
+        if config.mode != CHAT_MODE {
+            return Ok(vec![]);
+        }
         let now = now_millis();
         let transaction = database
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // An expired send is ambiguous, not permission to send again. Retain its
+        // exact worker/token so a late truthful receipt can still be recorded.
+        transaction.execute("UPDATE channel_chat_outbound SET status='unknown',failure_code='lease_expired',updated_at=?3 WHERE provider=?1 AND app_id=?2 AND status='pending' AND lease_expires_at<=?3",params![provider,app_id,now])?;
         let ids: Vec<String> = {
             let mut statement = transaction.prepare(
                 r#"
@@ -1038,10 +1185,15 @@ impl ChannelChatService {
         };
         let mut claimed = Vec::with_capacity(ids.len());
         for id in ids {
+            if !crate::channel_chat_tools::outbound_authorized(&transaction, &id)? {
+                transaction.execute("UPDATE channel_chat_outbound SET status='failed',failure_code='scope_unavailable',updated_at=?2 WHERE id=?1",params![id,now])?;
+                continue;
+            }
+            let lease_token = Uuid::new_v4().to_string();
             transaction.execute(
                 r#"
                 UPDATE channel_chat_outbound
-                SET lease_owner = ?2, lease_expires_at = ?3,
+                SET lease_owner = ?2, lease_expires_at = ?3, lease_token = ?6,
                     attempts = attempts + 1, updated_at = ?4
                 WHERE id = ?1 AND status = ?5
                 "#,
@@ -1050,11 +1202,12 @@ impl ChannelChatService {
                     worker_id,
                     now + OUTBOUND_LEASE_MILLIS,
                     now,
-                    OUTBOUND_PENDING
+                    OUTBOUND_PENDING,
+                    lease_token
                 ],
             )?;
             let view = transaction.query_row(
-                "SELECT id, chat_id, body, source, attempts FROM channel_chat_outbound WHERE id = ?1",
+                "SELECT id, chat_id, body, source, attempts, target_kind, lease_token FROM channel_chat_outbound WHERE id = ?1",
                 [&id],
                 |row| {
                     Ok(ChatOutboundView {
@@ -1063,6 +1216,8 @@ impl ChannelChatService {
                         text: row.get(2)?,
                         source: row.get(3)?,
                         attempts: row.get(4)?,
+                        target_kind: row.get(5)?,
+                        lease_token: row.get(6)?,
                     })
                 },
             )?;
@@ -1076,7 +1231,7 @@ impl ChannelChatService {
         &self,
         database: &mut Database,
         command: &ChatOutboundSettleCommand,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         anyhow::ensure!(
             matches!(
                 command.status.as_str(),
@@ -1084,22 +1239,36 @@ impl ChannelChatService {
             ),
             "unsupported outbound status"
         );
-        database.connection().execute(
+        let tx = database
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let updated = tx.execute(
             r#"
             UPDATE channel_chat_outbound
             SET status = ?2, external_message_id = ?3, failure_code = ?4,
-                lease_owner = NULL, lease_expires_at = NULL, updated_at = ?5
-            WHERE id = ?1
+                lease_expires_at = NULL, updated_at = ?5
+            WHERE id = ?1 AND lease_owner=?6 AND lease_token=?7
+              AND (status='pending' OR (status='unknown' AND ?2='sent'))
             "#,
             params![
                 command.outbound_id,
                 command.status,
                 command.external_message_id,
                 command.failure_code,
-                now_millis()
+                now_millis(),
+                command.worker_id,
+                command.lease_token
             ],
         )?;
-        Ok(())
+        if updated == 1 && command.status == OUTBOUND_SENT {
+            tx.execute("UPDATE channel_chat_item SET ask_message_id=?2,ask_chat_id=(SELECT chat_id FROM channel_chat_outbound WHERE id=?1) WHERE id=(SELECT item_id FROM channel_chat_outbound WHERE id=?1 AND target_kind='open_id')",params![command.outbound_id,command.external_message_id])?;
+            tx.execute("UPDATE channel_chat_item SET last_report_at=?2,updated_at=?2 WHERE id=(SELECT item_id FROM channel_chat_outbound WHERE id=?1 AND target_kind='chat_id')",params![command.outbound_id,now_millis()])?;
+        }
+        if updated == 1 && command.status == OUTBOUND_FAILED {
+            tx.execute("UPDATE channel_chat_item SET status='paused',updated_at=?2 WHERE id=(SELECT item_id FROM channel_chat_outbound WHERE id=?1 AND target_kind='open_id') AND status='waiting'",params![command.outbound_id,now_millis()])?;
+        }
+        tx.commit()?;
+        Ok(updated == 1)
     }
 
     pub fn cancel_pending(
@@ -1110,7 +1279,7 @@ impl ChannelChatService {
     ) -> Result<()> {
         validate_identity(provider, app_id)?;
         database.connection().execute(
-            "UPDATE channel_chat_outbound SET status = ?3, updated_at = ?4
+            "UPDATE channel_chat_outbound SET status = CASE WHEN lease_owner IS NULL THEN ?3 ELSE 'unknown' END, failure_code='mode_closed', updated_at = ?4
              WHERE provider = ?1 AND app_id = ?2 AND status = ?5",
             params![
                 provider,
@@ -1335,7 +1504,10 @@ mod tests {
         // A member without a materials folder can never reach chat mode.
         database
             .connection()
-            .execute("UPDATE agent_profile SET chat_materials_path = NULL WHERE id = 'agent_1'", [])
+            .execute(
+                "UPDATE agent_profile SET chat_materials_path = NULL WHERE id = 'agent_1'",
+                [],
+            )
             .unwrap();
         assert_eq!(
             service.snapshot(&mut database, PROVIDER, APP).unwrap().mode,
@@ -1349,7 +1521,8 @@ mod tests {
         let service = ChannelChatService;
         let root = materials_root();
         enable_chat(&mut database, &root);
-        let command = ChatTurnSubmitCommand {
+        let mut command = ChatTurnSubmitCommand {
+            external_message_id: "om_submit_1".to_string(),
             provider: PROVIDER.to_string(),
             app_id: APP.to_string(),
             chat_id: "oc_chat".to_string(),
@@ -1358,7 +1531,28 @@ mod tests {
             author_name: "请求者".to_string(),
             body: "帮我记一条备忘".to_string(),
         };
+        let mut inbound = ChatInboundCommand {
+            provider: command.provider.clone(),
+            app_id: command.app_id.clone(),
+            external_message_id: command.external_message_id.clone(),
+            chat_id: command.chat_id.clone(),
+            conversation_kind: command.conversation_kind.clone(),
+            chat_name: None,
+            author_external_id: "ou_requester".into(),
+            author_name: command.author_name.clone(),
+            author_is_owner: false,
+            body: command.body.clone(),
+            quote_message_id: None,
+            mentions: vec![],
+        };
+        service.inbound(&mut database, &inbound).unwrap();
         let first = service.submit_turn(&mut database, &command).unwrap();
+        let replay = service.submit_turn(&mut database, &command).unwrap();
+        assert!(replay.duplicate);
+        assert_eq!(replay.camp_message_id, first.camp_message_id);
+        command.external_message_id = "om_submit_2".into();
+        inbound.external_message_id = command.external_message_id.clone();
+        service.inbound(&mut database, &inbound).unwrap();
         let second = service.submit_turn(&mut database, &command).unwrap();
         assert_eq!(first.camp_id, second.camp_id);
         assert_ne!(first.camp_message_id, second.camp_message_id);
@@ -1390,17 +1584,50 @@ mod tests {
             .unwrap();
         assert_eq!(deliveries, 2);
         let pending = service
-            .turn_result(
-                &mut database,
-                PROVIDER,
-                APP,
-                &first.camp_message_id,
-            )
+            .turn_result(&mut database, PROVIDER, APP, &first.camp_message_id)
             .unwrap();
         assert_eq!(pending.status, "pending");
+        let mut notice = ChatOutboundEnqueueCommand {
+            provider: PROVIDER.into(),
+            app_id: APP.into(),
+            chat_id: command.chat_id.clone(),
+            text: "approval required".into(),
+            source: "notice".into(),
+            idempotency_key: "waiting-notice".into(),
+            camp_message_id: Some(first.camp_message_id.clone()),
+            complete_turn: false,
+            uses_materials: false,
+        };
+        service.enqueue(&mut database, &notice).unwrap();
+        let ack: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT reply_outbound_id FROM channel_chat_input WHERE camp_message_id=?1",
+                [&first.camp_message_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            ack.is_none(),
+            "waiting notice must not complete the durable turn"
+        );
+        notice.text = "final reply".into();
+        notice.source = "reply".into();
+        notice.idempotency_key = "final-reply".into();
+        notice.complete_turn = true;
+        let final_reply = service.enqueue(&mut database, &notice).unwrap();
+        let ack: String = database
+            .connection()
+            .query_row(
+                "SELECT reply_outbound_id FROM channel_chat_input WHERE camp_message_id=?1",
+                [&first.camp_message_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ack, final_reply.outbound_id);
+        assert!(service.enqueue(&mut database, &notice).unwrap().duplicate);
 
-        // Unattended chat must not inherit the member's bypass profile.
-        let override_json: String = database
+        let override_json: Option<String> = database
             .connection()
             .query_row(
                 "SELECT permission_override_json FROM conversation LIMIT 1",
@@ -1408,9 +1635,73 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(override_json.contains("workspace-write"));
-        assert!(!override_json.contains("danger-full-access"));
-        assert!(!override_json.contains("bypass"));
+        assert!(override_json.is_none());
+        let conversation_id: String = database
+            .connection()
+            .query_row("SELECT id FROM conversation LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let saved: String = database
+            .connection()
+            .query_row(
+                "SELECT default_permission_config_json FROM agent_profile WHERE id='agent_1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let saved: crate::agent_profile::AdapterPermissionConfig =
+            serde_json::from_str(&saved).unwrap();
+        // Old chat rows must not override the member after an upgrade either.
+        database.connection().execute("UPDATE conversation SET permission_override_json='not-current-permissions' WHERE id=?1",[&conversation_id]).unwrap();
+        let tx = database.connection_mut().transaction().unwrap();
+        let frozen = crate::agent_profile::resolve_frozen_runtime(&tx, &conversation_id, "agent_1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(frozen.permissions, saved);
+        tx.commit().unwrap();
+        command.external_message_id = "om_after_permissions_fix".into();
+        inbound.external_message_id = command.external_message_id.clone();
+        service.inbound(&mut database, &inbound).unwrap();
+        service.submit_turn(&mut database, &command).unwrap();
+        let stale: Option<String> = database
+            .connection()
+            .query_row(
+                "SELECT permission_override_json FROM conversation WHERE id=?1",
+                [&conversation_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(stale.is_none());
+        let navigation = crate::read_model::ReadModelService;
+        let snapshot = navigation.navigation_snapshot(&mut database).unwrap();
+        assert_eq!(snapshot.chat_bot.total_count, 1);
+        assert!(snapshot.projects.is_empty());
+        assert_eq!(snapshot.chat_bot.recent_camps[0].id, first.camp_id);
+
+        // Rebinding the same external chat must not move its earlier history into Projects.
+        let next_root = materials_root();
+        enable_chat(&mut database, &next_root);
+        command.external_message_id = "om_rebound_navigation".into();
+        inbound.external_message_id = command.external_message_id.clone();
+        service.inbound(&mut database, &inbound).unwrap();
+        let replacement = service.submit_turn(&mut database, &command).unwrap();
+        assert_ne!(first.camp_id, replacement.camp_id);
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_profile SET chat_bot_enabled = 0 WHERE id = 'agent_1'",
+                [],
+            )
+            .unwrap();
+        let snapshot = navigation.navigation_snapshot(&mut database).unwrap();
+        assert_eq!(snapshot.chat_bot.total_count, 2);
+        assert!(snapshot.projects.is_empty());
+        assert!(
+            snapshot
+                .chat_bot
+                .recent_camps
+                .iter()
+                .all(|camp| camp.navigation_group_key == "chat-bot")
+        );
     }
 
     #[test]
@@ -1431,6 +1722,7 @@ mod tests {
             author_is_owner: false,
             body: "你好".to_string(),
             quote_message_id: None,
+            mentions: vec![],
         };
         let first = service.inbound(&mut database, &command).unwrap();
         assert!(!first.duplicate);
@@ -1449,6 +1741,7 @@ mod tests {
     fn outbound_enqueue_is_idempotent_and_a_lease_prevents_double_claim() {
         let mut database = seeded_runtime_database_owned();
         let service = ChannelChatService;
+        enable_chat(&mut database, &materials_root());
         let command = ChatOutboundEnqueueCommand {
             provider: PROVIDER.to_string(),
             app_id: APP.to_string(),
@@ -1456,6 +1749,8 @@ mod tests {
             text: "已收到".to_string(),
             source: "reply".to_string(),
             idempotency_key: "turn-1-reply".to_string(),
+            camp_message_id: None,
+            complete_turn: false,
             uses_materials: false,
         };
         let first = service.enqueue(&mut database, &command).unwrap();
@@ -1476,11 +1771,52 @@ mod tests {
                 .is_empty()
         );
 
+        assert!(
+            !service
+                .settle(
+                    &mut database,
+                    &ChatOutboundSettleCommand {
+                        outbound_id: first.outbound_id.clone(),
+                        worker_id: "worker-2".into(),
+                        lease_token: claimed[0].lease_token.clone(),
+                        status: OUTBOUND_SENT.into(),
+                        external_message_id: Some("wrong".into()),
+                        failure_code: None
+                    }
+                )
+                .unwrap()
+        );
+        database
+            .connection()
+            .execute(
+                "UPDATE channel_chat_outbound SET lease_expires_at=0 WHERE id=?1",
+                [&first.outbound_id],
+            )
+            .unwrap();
+        assert!(
+            service
+                .claim(&mut database, PROVIDER, APP, "new-worker", 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT status FROM channel_chat_outbound WHERE id=?1",
+                    [&first.outbound_id],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "unknown"
+        );
         service
             .settle(
                 &mut database,
                 &ChatOutboundSettleCommand {
                     outbound_id: first.outbound_id,
+                    worker_id: "worker-1".into(),
+                    lease_token: claimed[0].lease_token.clone(),
                     status: OUTBOUND_SENT.to_string(),
                     external_message_id: Some("om_sent".to_string()),
                     failure_code: None,
@@ -1495,9 +1831,503 @@ mod tests {
         );
     }
 
+    // Independent security boundary: authenticated Run/input capabilities and the
+    // atomic ask/outbox transaction are not owned by the Host transcript tests.
+    #[test]
+    fn runtime_tools_bind_inputs_and_fence_atomic_communication() {
+        use crate::channel_chat_tools::{
+            QueryClaim, QueryContact, QuerySettle, claim, execute, settle,
+        };
+        use crate::team_tool::AuthenticatedTeamToolRun;
+        use serde_json::json;
+        let mut database = seeded_runtime_database_owned();
+        let root = materials_root();
+        enable_chat(&mut database, &root);
+        let service = ChannelChatService;
+        let mut inbound = ChatInboundCommand {
+            provider: PROVIDER.into(),
+            app_id: APP.into(),
+            external_message_id: "om_runtime".into(),
+            chat_id: "oc_runtime".into(),
+            conversation_kind: "p2p".into(),
+            chat_name: None,
+            author_external_id: "ou_requester".into(),
+            author_name: "Requester".into(),
+            author_is_owner: false,
+            body: "Ask the contact for a progress report".into(),
+            quote_message_id: None,
+            mentions: vec![ChatMention {
+                open_id: "ou_mention".into(),
+                name: "Mention".into(),
+            }],
+        };
+        service.inbound(&mut database, &inbound).unwrap();
+        let submit = |inbound: &ChatInboundCommand| ChatTurnSubmitCommand {
+            external_message_id: inbound.external_message_id.clone(),
+            provider: inbound.provider.clone(),
+            app_id: inbound.app_id.clone(),
+            chat_id: inbound.chat_id.clone(),
+            conversation_kind: inbound.conversation_kind.clone(),
+            chat_name: None,
+            author_name: "untrusted".into(),
+            body: "untrusted".into(),
+        };
+        let submitted = service
+            .submit_turn(&mut database, &submit(&inbound))
+            .unwrap();
+        let run_ids =
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut database, 10).unwrap();
+        assert_eq!(run_ids.len(), 1);
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status='running',execution_epoch=1 WHERE id=?1",
+                [&run_ids[0]],
+            )
+            .unwrap();
+        let runtime = crate::runtime::ExecutionRuntimeService::default();
+        let execution = runtime
+            .load_agent_run_execution(&database, &run_ids[0], 1)
+            .unwrap()
+            .unwrap();
+        let bind = runtime
+            .bind_native_session(
+                &mut database,
+                &crate::command::CommandEnvelope {
+                    command_id: "chat-bind-test".into(),
+                    actor: crate::command::ActorRef::System {
+                        component_id: "runtime-adapter:codex-cli".into(),
+                    },
+                    camp_id: Some(submitted.camp_id.clone()),
+                    expected_versions: vec![],
+                    execution_epoch: None,
+                    payload: crate::runtime::BindNativeSessionCommand {
+                        conversation_id: execution.conversation_id.clone(),
+                        agent_run_id: run_ids[0].clone(),
+                        expected_conversation_version: execution.conversation_version,
+                        expected_execution_epoch: 1,
+                        previous_adapter_installation_id: None,
+                        previous_native_session_id: None,
+                        previous_binding_compatibility_digest: None,
+                        proposed_binding_id: None,
+                        adapter_installation_id: execution.runtime.installation_id.clone(),
+                        native_session_id: "chat-native-fixture".into(),
+                        binding_compatibility_digest: execution
+                            .runtime
+                            .binding_compatibility_digest,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            bind.result.status,
+            crate::command::CommandResultStatus::Applied
+        );
+        let team = crate::team_tool::TeamToolService::default();
+        let credential = team
+            .issue_binding_credential(&mut database, &run_ids[0], 1)
+            .unwrap();
+        assert!(
+            team.authenticate_attested_binding(
+                &database,
+                &credential.native_binding_id,
+                "wrong-credential",
+                "chat-auth",
+                &run_ids[0],
+                1
+            )
+            .is_err()
+        );
+        let run = team
+            .authenticate_attested_binding(
+                &database,
+                &credential.native_binding_id,
+                &credential.binding_credential,
+                "chat-auth",
+                &run_ids[0],
+                1,
+            )
+            .unwrap();
+        let status = execute(&mut database, &run, "status", "feishu.status", &json!({})).unwrap();
+        assert_eq!(status["status"], "ready", "{status}");
+        assert_eq!(status["inputs"][0]["authorName"], "Requester");
+        assert_eq!(status["contacts"][0]["name"], "Mention");
+        let input_ref = status["inputs"][0]["inputRef"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "bad-target",
+                "feishu.forward",
+                &json!({"targetRef":"ou_arbitrary","text":"no"})
+            )
+            .unwrap()["errorCode"],
+            "target_not_authorized"
+        );
+        let queued = execute(
+            &mut database,
+            &run,
+            "search",
+            "feishu.search",
+            &json!({"query":"Contact"}),
+        )
+        .unwrap();
+        assert_eq!(queued["status"], "queued");
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "search",
+                "feishu.search",
+                &json!({"query":"Contact"})
+            )
+            .unwrap(),
+            queued
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "search",
+                "feishu.search",
+                &json!({"query":"Other"})
+            )
+            .unwrap()["errorCode"],
+            "request_conflict"
+        );
+        let claimed = claim(
+            &mut database,
+            &QueryClaim {
+                provider: PROVIDER.into(),
+                app_id: APP.into(),
+                worker_id: "host".into(),
+                limit: 10,
+            },
+        )
+        .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let mut receipt = QuerySettle {
+            provider: PROVIDER.into(),
+            app_id: APP.into(),
+            worker_id: "wrong".into(),
+            request_id: claimed[0]["requestId"].as_str().unwrap().into(),
+            lease_token: claimed[0]["leaseToken"].as_str().unwrap().into(),
+            contacts: vec![QueryContact {
+                open_id: "ou_target".into(),
+                name: "Contact".into(),
+                department: None,
+            }],
+            error_code: None,
+        };
+        assert_eq!(settle(&mut database, &receipt).unwrap()["settled"], false);
+        receipt.worker_id = "host".into();
+        assert_eq!(settle(&mut database, &receipt).unwrap()["settled"], true);
+        let result = execute(
+            &mut database,
+            &run,
+            "poll",
+            "feishu.result",
+            &json!({"requestId":"search"}),
+        )
+        .unwrap();
+        assert_eq!(result["status"], "ready");
+        assert!(!result.to_string().contains("ou_target"));
+        let target = result["contacts"][0]["targetRef"].as_str().unwrap();
+        database.connection().execute_batch("CREATE TRIGGER reject_test_outbound BEFORE INSERT ON channel_chat_outbound BEGIN SELECT RAISE(ABORT,'test atomic rollback'); END;").unwrap();
+        assert!(
+            execute(
+                &mut database,
+                &run,
+                "atomic",
+                "feishu.ask",
+                &json!({"targetRef":target,"question":"Rollback?"})
+            )
+            .is_err()
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM channel_chat_item", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_test_outbound;")
+            .unwrap();
+        let ask = execute(
+            &mut database,
+            &run,
+            "ask",
+            "feishu.ask",
+            &json!({"targetRef":target,"question":"Progress?"}),
+        )
+        .unwrap();
+        assert_eq!(ask["status"], "queued");
+        let item = ask["items"][0]["itemId"].as_str().unwrap().to_string();
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "ask",
+                "feishu.ask",
+                &json!({"targetRef":target,"question":"Progress?"})
+            )
+            .unwrap(),
+            ask
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "ask-new-cli-id",
+                "feishu.ask",
+                &json!({"targetRef":target,"question":"Progress?","inputRef":input_ref})
+            )
+            .unwrap(),
+            ask
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM channel_chat_item", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        // Ordinary successful completion must not discard an already authorized send.
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status='succeeded',ended_at=datetime('now') WHERE id=?1",
+                [&run.agent_run_id],
+            )
+            .unwrap();
+        let outbound = service
+            .claim(&mut database, PROVIDER, APP, "sender", 10)
+            .unwrap();
+        assert_eq!(outbound.len(), 1);
+        assert_eq!(outbound[0].target_kind, "open_id");
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status='running',ended_at=NULL WHERE id=?1",
+                [&run.agent_run_id],
+            )
+            .unwrap();
+        service
+            .settle(
+                &mut database,
+                &ChatOutboundSettleCommand {
+                    outbound_id: outbound[0].id.clone(),
+                    worker_id: "sender".into(),
+                    lease_token: outbound[0].lease_token.clone(),
+                    status: "sent".into(),
+                    external_message_id: Some("om_question".into()),
+                    failure_code: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "poll2",
+                "feishu.result",
+                &json!({"requestId":"ask"})
+            )
+            .unwrap()["status"],
+            "sent"
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "forged-report",
+                "feishu.report",
+                &json!({"itemId":item,"text":"forged"})
+            )
+            .unwrap()["errorCode"],
+            "item_not_authorized"
+        );
+        let mut wrong = run.clone();
+        wrong.agent_id = "agent_2".into();
+        assert_eq!(
+            execute(&mut database, &wrong, "status", "feishu.status", &json!({})).unwrap()["errorCode"],
+            "scope_unavailable"
+        );
+        wrong = run.clone();
+        wrong.execution_epoch = 0;
+        assert_eq!(
+            execute(&mut database, &wrong, "status", "feishu.status", &json!({})).unwrap()["errorCode"],
+            "scope_unavailable"
+        );
+        inbound.external_message_id = "om_reply".into();
+        inbound.chat_id = "oc_target".into();
+        inbound.author_external_id = "ou_target".into();
+        inbound.author_name = "Contact".into();
+        inbound.body = "Half done".into();
+        inbound.quote_message_id = Some("om_question".into());
+        service.inbound(&mut database, &inbound).unwrap();
+        let submitted_reply = service
+            .submit_turn(&mut database, &submit(&inbound))
+            .unwrap();
+        let next =
+            crate::delivery_queue::claim_waiting_delivery_batches(&mut database, 10).unwrap();
+        assert_eq!(next.len(), 1);
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status='running',execution_epoch=1 WHERE id=?1",
+                [&next[0]],
+            )
+            .unwrap();
+        let reply_run = AuthenticatedTeamToolRun {
+            camp_id: submitted_reply.camp_id,
+            agent_id: "agent_1".into(),
+            agent_run_id: next[0].clone(),
+            execution_epoch: 1,
+        };
+        assert_eq!(
+            execute(
+                &mut database,
+                &reply_run,
+                "cross-request",
+                "feishu.result",
+                &json!({"requestId":"search"})
+            )
+            .unwrap()["errorCode"],
+            "request_not_found"
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &reply_run,
+                "cross-input",
+                "feishu.items",
+                &json!({"inputRef":input_ref})
+            )
+            .unwrap()["errorCode"],
+            "input_not_found"
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &reply_run,
+                "cross-grant",
+                "feishu.ask",
+                &json!({"targetRef":target,"question":"no"})
+            )
+            .unwrap()["errorCode"],
+            "target_not_authorized"
+        );
+        // Quotation wins even with several waiting items; absent quotation cannot guess.
+        let other = execute(
+            &mut database,
+            &run,
+            "ask-other",
+            "feishu.ask",
+            &json!({"targetRef":target,"question":"Another question?"}),
+        )
+        .unwrap();
+        assert_eq!(other["status"], "queued");
+        database.connection().execute("UPDATE channel_chat_message SET quote_message_id=NULL WHERE external_message_id='om_reply'",[]).unwrap();
+        assert_eq!(
+            execute(
+                &mut database,
+                &reply_run,
+                "ambiguous",
+                "feishu.report",
+                &json!({"itemId":item,"text":"No guess"})
+            )
+            .unwrap()["errorCode"],
+            "item_ambiguous"
+        );
+        database.connection().execute("UPDATE channel_chat_message SET quote_message_id='om_question' WHERE external_message_id='om_reply'",[]).unwrap();
+        database.connection().execute("UPDATE channel_chat_outbound SET status='failed' WHERE source_run_id=?1 AND status='pending'",[&run.agent_run_id]).unwrap();
+        let report = execute(
+            &mut database,
+            &reply_run,
+            "report",
+            "feishu.report",
+            &json!({"itemId":item,"text":"Half done"}),
+        )
+        .unwrap();
+        assert_eq!(report["status"], "queued");
+        let rows = service
+            .claim(&mut database, PROVIDER, APP, "reporter", 10)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].chat_id, "oc_runtime");
+        assert_eq!(rows[0].target_kind, "chat_id");
+        database
+            .connection()
+            .execute(
+                "UPDATE channel_chat_item SET status='closed' WHERE id=?1",
+                [&item],
+            )
+            .unwrap();
+        assert_eq!(
+            execute(
+                &mut database,
+                &reply_run,
+                "late-report",
+                "feishu.report",
+                &json!({"itemId":item,"text":"Late"})
+            )
+            .unwrap()["errorCode"],
+            "item_closed"
+        );
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_profile SET chat_bot_enabled=0 WHERE id='agent_1'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            execute(
+                &mut database,
+                &reply_run,
+                "disabled",
+                "feishu.items",
+                &json!({})
+            )
+            .unwrap()["errorCode"],
+            "scope_unavailable"
+        );
+    }
+
     #[test]
     fn migration_210_adds_member_chat_state() {
-        let database = seeded_runtime_database_owned();
+        let mut database = seeded_runtime_database_owned();
+        assert!(crate::channel_chat_tools::schema_matches(database.connection()).unwrap());
+        assert!(matches!(
+            crate::db::classify_database_contract(database.connection()).unwrap(),
+            crate::db::DatabaseContractClassification::Current(_)
+        ));
+        // A receipt without its exact layout is not a migratable old database.
+        database.connection().execute("ALTER TABLE channel_chat_target_grant RENAME COLUMN department TO broken_department",[]).unwrap();
+        assert!(matches!(
+            crate::db::classify_database_contract(database.connection()).unwrap(),
+            crate::db::DatabaseContractClassification::Unknown(_)
+        ));
+        database.connection().execute("ALTER TABLE channel_chat_target_grant RENAME COLUMN broken_department TO department",[]).unwrap();
+        database.connection().execute_batch("DROP TABLE channel_chat_target_grant; DROP TABLE channel_chat_tool_request; DROP TABLE channel_chat_input; ALTER TABLE channel_chat_message DROP COLUMN mentions_json; ALTER TABLE channel_chat_outbound DROP COLUMN target_kind; ALTER TABLE channel_chat_outbound DROP COLUMN lease_token; ALTER TABLE channel_chat_outbound DROP COLUMN item_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_run_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_execution_epoch; DELETE FROM schema_migration WHERE version=211;").unwrap();
+        assert!(matches!(
+            crate::db::classify_database_contract(database.connection()).unwrap(),
+            crate::db::DatabaseContractClassification::SupportedMigrationSource(_)
+        ));
+        crate::channel_chat_tools::migrate(&mut database).unwrap();
+        assert!(matches!(
+            crate::db::classify_database_contract(database.connection()).unwrap(),
+            crate::db::DatabaseContractClassification::Current(_)
+        ));
+        crate::db::assert_chat_tool_upgrade_sources(&mut database);
         let columns: i64 = database
             .connection()
             .query_row(

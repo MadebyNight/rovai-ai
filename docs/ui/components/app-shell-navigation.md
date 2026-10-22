@@ -2,7 +2,7 @@
 document_type: ui-component-contract
 authority: renderer-app-shell-navigation
 status: accepted
-last_updated: 2026-10-19
+last_updated: 2026-10-21
 ---
 
 # App Shell 与统一侧栏
@@ -183,6 +183,13 @@ Active Camp 和带当前 Desktop 客户端 presence 的 Pending Camp 可被查�
 “快速对话”在 Renderer 中是 Project 列表末尾的文件夹式投影，底层仍是 `quick_chat`，不创建
 Project 领域实体。它没有 Project 菜单；其 Camp 行与目录 Project 下的 Camp 使用同一行为。
 产品中文固定使用“快速对话”，英文使用 `Quick Chat`，不恢复“大厅”或 `Lobby`。
+
+“聊天 Bot”（英文 `Chat Bots`）是并列的文件夹式分组，承载聊天 Bot 已绑定线程的历史与后续记录，
+不创建磁盘文件夹或新的 Project。分类依据 Core 返回的聊天线程绑定，不受资料目录是否登记、
+移除项目或成员当前是否开启聊天 Bot 的影响；同一资料目录内的普通工作会话仍归原项目。
+该分组复用普通会话行、折叠、窗口分页与菜单，点击进入同一个会话工作区；置顶、未读、重命名、
+删除和会话内功能保持现有行为，不新增只读模式、独立详情页或新的渠道发送机制。
+聊天线程不在项目或快速对话中重复显示；明确置顶仍使用统一置顶区。
 
 Quick Chat 首页不提供 Composer。普通“新对话”先原子创建 Active Camp；一键入口先取得
 Core-owned Pending Camp 并进入同一 Composer，第一条消息成功后再原子激活。界面不得用静态

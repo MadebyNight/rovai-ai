@@ -4724,8 +4724,7 @@ pub fn resolve_frozen_runtime(
                    agent_profile.default_permission_config_json,
                    conversation.provider_override, conversation.model_override,
                    CASE WHEN conversation.native_session_id IS NOT NULL
-                        THEN conversation.native_binding_compatibility_digest END,
-                   conversation.permission_override_json
+                        THEN conversation.native_binding_compatibility_digest END
             FROM conversation
             JOIN agent_profile ON agent_profile.id = conversation.agent_id
             WHERE conversation.id = ?1 AND conversation.agent_id = ?2
@@ -4741,7 +4740,6 @@ pub fn resolve_frozen_runtime(
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
-                    row.get::<_, Option<String>>(8)?,
                 ))
             },
         )
@@ -4755,7 +4753,6 @@ pub fn resolve_frozen_runtime(
         provider_override,
         model_override,
         native_binding_compatibility_digest,
-        permission_override_json,
     )) = profile
     else {
         return Ok(Err(runtime_blocker(
@@ -4817,7 +4814,7 @@ pub fn resolve_frozen_runtime(
             permissions: serde_json::from_str(&permissions_json)?,
         })
     })();
-    let mut binding = match binding {
+    let binding = match binding {
         Ok(binding) => binding,
         Err(_) => {
             return Ok(Err(runtime_blocker(
@@ -4826,32 +4823,6 @@ pub fn resolve_frozen_runtime(
             )));
         }
     };
-    // A Conversation may pin its own permission ceiling. Chat Bot Threads use it
-    // so a member's interactive bypass profile never becomes unattended reach.
-    if let Some(override_json) = permission_override_json
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        let permissions = match serde_json::from_str::<AdapterPermissionConfig>(override_json) {
-            Ok(permissions) => permissions,
-            Err(_) => {
-                return Ok(Err(runtime_blocker(
-                    "runtime_configuration_invalid",
-                    json!({"agentId": agent_id}),
-                )));
-            }
-        };
-        if permissions.adapter_kind != binding.adapter_kind {
-            return Ok(Err(runtime_blocker(
-                "runtime_configuration_invalid",
-                json!({
-                    "agentId": agent_id,
-                    "adapterKind": selected_runtime_adapter_kind,
-                }),
-            )));
-        }
-        binding.permissions = permissions;
-    }
     if binding.permissions.adapter_kind != binding.adapter_kind {
         return Ok(Err(runtime_blocker(
             "runtime_configuration_adapter_mismatch",

@@ -1022,6 +1022,7 @@ export type ThreadChannelSource =
 
 export interface NavigationThreadItem {
   id: string
+  navigationGroupKey?: string
   title: string
   channelSource?: ThreadChannelSource | null
   activationState: ThreadActivationState
@@ -1038,7 +1039,7 @@ export interface NavigationThreadItem {
 }
 
 export type NavigationThreadTarget = Pick<NavigationThreadItem,
-  'id' | 'title' | 'channelSource' | 'activationState' | 'projectBindingKind' | 'projectPath'>
+  'id' | 'title' | 'channelSource' | 'activationState' | 'projectBindingKind' | 'projectPath' | 'navigationGroupKey'>
 
 export interface NavigationThreadGroup {
   totalCount: number
@@ -1066,6 +1067,7 @@ export interface NavigationSnapshot {
   schemaVersion: 3
   throughGlobalSequence: number
   quickChat: NavigationThreadGroup
+  chatBot?: NavigationThreadGroup
   projects: ProjectNavigationGroup[]
 }
 
@@ -2479,6 +2481,7 @@ export interface ThreadSnapshot {
   throughGlobalSequence: number
   thread: {
     id: string
+    navigationGroupKey?: string
     title: string
     missionId?: string | null
     channelSource?: ThreadChannelSource | null
@@ -3291,6 +3294,7 @@ export interface ChannelsApi {
   disconnect(kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
   publishMemberBot(agentId: string, kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
   retryMemberBot(agentId: string, kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
+  deleteMemberBot(agentId: string, expectedAppId: string, kind?: ChannelKind): Promise<ChannelSettingsSnapshot>
   selectPublicationApprover(
     agentId: string,
     userId: string,
@@ -4291,6 +4295,9 @@ export type CoreMethod =
   | 'channels.chat.snapshot'
   | 'channels.chat.submit'
   | 'channels.chat.result'
+  | 'channels.chat.pending'
+  | 'channels.chat.tools.claim'
+  | 'channels.chat.tools.settle'
   | 'channels.chat.inbound'
   | 'channels.chat.turn.append'
   | 'channels.chat.context'
@@ -4315,6 +4322,7 @@ export type CoreMethod =
   | 'channels.feishu.publicationIntent.advance'
   | 'channels.feishu.publicationIntent.storeCredential'
   | 'channels.feishu.memberBot.upsert'
+  | 'channels.feishu.memberBot.delete'
   | 'channels.feishu.owner.verify'
   | 'channels.feishu.dm.startNew'
   | 'channels.feishu.pendingBinding.resolve'

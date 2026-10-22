@@ -3,10 +3,62 @@ document_type: implementation-plan
 version: v1.72
 authority: version-implementation-and-acceptance
 status: in_progress
-last_updated: 2026-10-19
+last_updated: 2026-10-21
 ---
 
 # v1.72 实施与验收
+
+## 聊天 Bot 侧栏入口（2026-10-21）
+
+User 明确要求原样复用 worker 会话功能，只增加聊天 Bot 会话入口。实现按既有聊天线程绑定
+归入独立 `chat-bot` 分组，复用会话工作区、菜单、置顶、未读及有界窗口刷新；不新增只读页面、
+渠道发送机制、聊天记录副本或资料目录登记。关闭聊天 Bot 不因开关变化隐藏既有历史。
+
+保持 v1.72；同步 Navigation Read、聊天 Bot Contract、导航 Architecture 和侧栏 UI。
+局部导航接入不新增 Version Decision，不改变模型上下文或 Runtime 行为。原分支使用 Migration 211；与飞书工具分支合并后导航使用 Migration 212，从现存
+聊天绑定回填 `camp.navigation_is_chat_bot`，新提交同事务保存该来源并沿既有导航失效链通知；
+更换资料目录导致当前绑定替换时，旧线程仍保留分类。迁移不推断此前已经丢失绑定的历史。
+
+实现已完成。Thread snapshot/open header 同源返回 `navigationGroupKey`，冷恢复及窗口外打开不会
+将聊天资料目录误登记为普通项目。
+
+验证记录（2026-10-21）：
+
+- TypeScript 类型检查、定向导航回归 262 项通过；完整 Vitest 2784 项通过、16 项跳过，
+  12 项失败均在未修改的符号链接测试夹具创建阶段报 Windows `EPERM`，未放宽权限断言。
+- Web、执行 Web、Desktop Main/Preload/Renderer 构建通过。
+- 文档治理单测 10 项、版本检查和以 `06b86471dd31f9a755ed6c5d93f88250976262bc` 为基线的
+  diff-aware 门禁通过。
+- 生产 App 启动/历史导航隔离 Electron 验收 36 场景通过；Windows 原生缩放下严格整数像素
+  断言出现亚像素误差，使用 `--force-device-scale-factor=1` 重跑原断言通过，没有修改产品样式。
+- 新增 Bot 分组与完整导航 shell 的隔离 Electron 验收通过：折叠、分页、打开、未读清除、
+  重命名、置顶/取消、复制 ID、删除补位和原有导航行为均使用生产组件；未放宽原断言。
+  日夜截图保留在本机临时验收目录 `rovai-bot-nav-final-w2ZKGm`，
+  `chat-bot-navigation-day.png` / `chat-bot-navigation-night.png`。
+- Rust 导航与迁移定向回归 7 项通过，包含 snapshot/open 来源、分页、按 ID、已读、
+  删除分组、迁移回填/回滚/重开与范围成本。性能样本为 2040 个 Camp、50000 个 event：
+  单行 342 VM steps，普通组与 Bot 组各 1101；无历史扫描。聊天 Bot 定向回归 5 项及
+  `cargo check --workspace` 通过。PR 准备时另运行 `cargo test --workspace`，出现未修改模块的
+  Command Code 权限错误（Windows 1314）、Codex 文件证据路径断言及 Mission Workspace 测试失败；
+  后续仍有多项长时间运行，人工停止本次全量执行。该项未完成且不通过，不作为功能验收通过证据。
+  两项最先出现的失败已用生成的测试二进制独立复现，未放宽断言或修改无关功能。
+- PR 准备时仅修正基线已有三处 rustfmt 换行差异（`channel_chat.rs` 两处、
+  `collaboration.rs` 一处），无行为变化；`cargo fmt --all --check` 与 `git diff --check` 通过。
+
+所有界面验收使用新建临时 userData 与独立 Skill Library，不启动 Core/真实 Runtime，不访问日常数据
+或发送真实飞书消息。
+
+## MadebyNight 分支合并与迁移冲突验证（2026-10-21）
+
+合并 `origin/rovai/chat-bot-navigation` 的 `581c8daf4` 与修复分支 `ff9b7bfc1`。工具迁移保留211，导航使用212；按完整布局识别旧导航211，原子归正收据并保留时间，随后补工具迁移。不以收据号独自判断，也不修补部分损坏布局。保留双方导航、聊天工具及复用队员权限行为。
+
+- 正式Host隔离进程：208/209/210、工具211、导航211、双布局仅211、归正后仅212共七种来源，8项测试通过。验证原会话与聊天正文、收据时间、导航分组、重复启动及缺损拒绝。
+- Rust `slow-tests navigation_` 7项、`extended-tests channel_chat::tests` 6项通过。历史导航夹具补保留其仍存在聊天结构的收据，未放宽生产准入。
+- 完整Vitest：248个文件通过，2842项通过、16项跳过。TypeScript及Rust格式通过。
+- 隔离Electron navigation-shell验收通过，包含聊天Bot分组与原导航交互；不启动真实模型、不读取日常数据库。
+- 通用文档测试10项、docs:check与以ff9b7bfc1为基线的diff-aware门禁通过。
+
+本次只完成源码合并与验证，不表示已重新打包或安装。
 
 ## 主动停止后的会话蓝点（2026-10-19）
 

@@ -11,7 +11,7 @@ last_updated: 2026-10-18
 人类用户的主称呼、双别名、结构化搜索与冻结投影边界见 [User Naming v1](../contracts/user-naming-v1.md)。
 
 本文件说明 Rovai built-in operations 的长期组件结构。当前字段与版本以
-[Built-in Tool Transport v43](../contracts/builtin-tool-transport-v43.md)、
+[Built-in Tool Transport v44](../contracts/builtin-tool-transport-v44.md)、
 [Built-in Tool Agent Output Projection v1](../contracts/builtin-tool-agent-output-projection-v1.md)、
 [Camp History v14](../contracts/camp-history-v14.md)、
 [Durable Task v6](../contracts/durable-task-v6.md) 和

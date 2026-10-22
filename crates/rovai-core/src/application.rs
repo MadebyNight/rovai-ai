@@ -756,6 +756,7 @@ fn channel_request_host_component(method: &str) -> Result<&'static str> {
         | "channels.feishu.publicationIntent.advance"
         | "channels.feishu.publicationIntent.storeCredential"
         | "channels.feishu.memberBot.upsert"
+        | "channels.feishu.memberBot.delete"
         | "channels.feishu.owner.verify"
         | "channels.feishu.dm.startNew"
         | "channels.feishu.pendingBinding.resolve"
@@ -1683,6 +1684,7 @@ struct GetTaskParams {
 #[serde(rename_all = "camelCase")]
 struct NavigationGroupThreadsParams {
     project_path: Option<String>,
+    group_key: Option<String>,
     offset: Option<usize>,
     limit: Option<usize>,
 }
@@ -6958,6 +6960,11 @@ impl Core {
                 &database, &authenticated_run, &request.tool_name, &mut request.input,
             )?;
             let operation_result = match request.tool_name.as_str() {
+                "feishu.status" | "feishu.search" | "feishu.result" | "feishu.forward" |
+                "feishu.ask" | "feishu.items" | "feishu.report" | "feishu.close" => {
+                    rovai_core::channel_chat_tools::execute(&mut database,&authenticated_run,
+                        &request.runtime_tool_call_id,&request.tool_name,&request.input)
+                }
                 CAMP_MESSAGE_SEND_TOOL_NAME => {
                     let input = serde_json::from_value::<ThreadMessageSendInput>(request.input)
                         .context("camp.message.send input is invalid")?;
@@ -8635,6 +8642,21 @@ impl Core {
                     )?;
                 Ok(serde_json::to_value(execution.result)?)
             }
+            "channels.feishu.memberBot.delete" => {
+                let params: UserCommandParams<rovai_core::channel::DeleteFeishuMemberBotCommand> =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                let execution = ChannelService::default().delete_feishu_member_bot(
+                    &mut database,
+                    &system_command_envelope(
+                        params.command_id,
+                        channel_request_host_component(&request.method)?,
+                        None,
+                        params.command,
+                    ),
+                )?;
+                Ok(serde_json::to_value(execution.result)?)
+            }
             "channels.feishu.memberBot.upsert" => {
                 let params: UserCommandParams<UpsertFeishuMemberBotCommand> =
                     serde_json::from_value(request.params.clone())?;
@@ -8896,6 +8918,28 @@ impl Core {
                 self.notify_delivery_batch_scheduler_if_pending(&database);
                 Ok(serde_json::to_value(tick)?)
             }
+            "channels.chat.pending" => {
+                let params: rovai_core::channel_chat::ChatPendingParams =
+                    serde_json::from_value(request.params.clone())?;
+                let database = self.database.lock().await;
+                let mut statement=database.connection().prepare("SELECT b.camp_message_id,m.chat_id,m.received_at FROM channel_chat_input b JOIN channel_chat_message m ON m.id=b.inbound_id JOIN channel_chat_conversation mapping ON mapping.camp_id=b.camp_id AND mapping.provider=m.provider AND mapping.app_id=m.app_id AND mapping.chat_id=m.chat_id WHERE m.provider=?1 AND m.app_id=?2 AND b.reply_outbound_id IS NULL ORDER BY m.received_at LIMIT ?3")?;
+                let rows=statement.query_map(rusqlite::params![params.provider,params.app_id,params.limit.clamp(1,50)],|row|Ok(json!({"campMessageId":row.get::<_,String>(0)?,"chatId":row.get::<_,String>(1)?,"submittedAt":row.get::<_,i64>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(json!(rows))
+            }
+            "channels.chat.tools.claim" => {
+                let params: rovai_core::channel_chat_tools::QueryClaim =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                Ok(serde_json::to_value(
+                    rovai_core::channel_chat_tools::claim(&mut database, &params)?,
+                )?)
+            }
+            "channels.chat.tools.settle" => {
+                let params: rovai_core::channel_chat_tools::QuerySettle =
+                    serde_json::from_value(request.params.clone())?;
+                let mut database = self.database.lock().await;
+                rovai_core::channel_chat_tools::settle(&mut database, &params)
+            }
             "channels.chat.snapshot" => {
                 let params: rovai_core::channel_chat::ChatScopeParams =
                     serde_json::from_value(request.params.clone())?;
@@ -8915,6 +8959,14 @@ impl Core {
                 let submitted = rovai_core::channel_chat::ChannelChatService
                     .submit_turn(&mut database, &params)?;
                 self.notify_delivery_batch_scheduler_if_pending(&database);
+                if !submitted.duplicate {
+                    emit_navigation_group_invalidated(
+                        &self.output,
+                        "channels.chat.submit",
+                        Some(&submitted.camp_id),
+                        Some("chat-bot"),
+                    );
+                }
                 Ok(serde_json::to_value(submitted)?)
             }
             "channels.chat.result" => {
@@ -9044,9 +9096,9 @@ impl Core {
                 let params: UserCommandParams<rovai_core::channel_chat::ChatOutboundSettleCommand> =
                     serde_json::from_value(request.params.clone())?;
                 let mut database = self.database.lock().await;
-                rovai_core::channel_chat::ChannelChatService
+                let settled = rovai_core::channel_chat::ChannelChatService
                     .settle(&mut database, &params.command)?;
-                Ok(json!({ "settled": true }))
+                Ok(json!({ "settled": settled }))
             }
             "channels.chat.outbound.cancel" => {
                 let params: rovai_core::channel_chat::ChatScopeParams =
@@ -10685,6 +10737,7 @@ impl Core {
                     ReadModelService.navigation_group_camps_for_client(
                         &mut database,
                         params.project_path.as_deref(),
+                        params.group_key.as_deref(),
                         params.offset.unwrap_or(0),
                         params.limit.unwrap_or(100),
                         &request.client,
@@ -26871,7 +26924,7 @@ fn emit_missions_invalidated(
 
 fn navigation_group_key(database: &Database, camp_id: &str) -> Result<Option<String>> {
     Ok(database.connection().query_row(
-        "SELECT CASE WHEN project_binding_kind='directory' THEN 'directory:' || project_path ELSE 'quick-chat' END FROM camp WHERE id=?1",
+        "SELECT CASE WHEN navigation_is_chat_bot=1 THEN 'chat-bot' WHEN project_binding_kind='directory' THEN 'directory:' || project_path ELSE 'quick-chat' END FROM camp WHERE id=?1",
         [camp_id], |row| row.get(0)).optional()?)
 }
 
@@ -27549,6 +27602,7 @@ mod tests {
     #[test]
     fn lark_actor_routes_are_closed_and_payload_cannot_supply_authority() {
         for (method, host_component) in [
+            ("channels.feishu.memberBot.delete", "feishu-channel-host"),
             (
                 "channels.inbound.attachments.complete",
                 "feishu-channel-host",
@@ -27597,6 +27651,8 @@ mod tests {
         ] {
             assert!(validate_lark_request_actor(disconnect, &payload).is_err());
         }
+        assert!(channel_request_host_component("channels.lark.memberBot.delete").is_err());
+        assert!(channel_request_host_component("channels.dingtalk.memberBot.delete").is_err());
         assert!(channel_request_host_component("channels.lark.futureMutation").is_err());
         assert!(channel_request_host_component("channels.lark.inbound.observe.extra").is_err());
     }
@@ -33156,15 +33212,28 @@ done
         assert_eq!(invalidation["params"]["reason"], "agent_run.terminal");
         assert_eq!(invalidation["params"]["threadId"], "rvcamp_test");
         assert_eq!(invalidation["params"]["scope"], "camp");
-        emit_navigation_group_invalidated(
-            &output,
-            "camp.deleted",
-            Some("rvcamp_test"),
-            Some("directory:/repo"),
-        );
-        let deleted: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
-        assert_eq!(deleted["params"]["scope"], "group");
-        assert_eq!(deleted["params"]["groupKeys"], json!(["directory:/repo"]));
+        for (reason, key) in [
+            ("camp.deleted", "directory:/repo"),
+            ("camp.deleted", "chat-bot"),
+            ("channels.chat.submit", "chat-bot"),
+        ] {
+            emit_navigation_group_invalidated(&output, reason, Some("rvcamp_test"), Some(key));
+            let invalidated: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+            assert_eq!(invalidated["params"]["scope"], "group");
+            assert_eq!(invalidated["params"]["groupKeys"], json!([key]));
+        }
+        let bot_page: NavigationGroupThreadsParams = serde_json::from_value(json!({
+            "groupKey": "chat-bot", "offset": 5, "limit": 10,
+        }))
+        .unwrap();
+        assert_eq!(bot_page.group_key.as_deref(), Some("chat-bot"));
+        assert!(bot_page.project_path.is_none());
+        let legacy_page: NavigationGroupThreadsParams = serde_json::from_value(json!({
+            "projectPath": "/repo",
+        }))
+        .unwrap();
+        assert!(legacy_page.group_key.is_none());
+        assert_eq!(legacy_page.project_path.as_deref(), Some("/repo"));
         emit_missions_invalidated(&output, "missions.update", Some("mission-camp"));
         let mission: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
         assert_eq!(mission["method"], "missions.invalidated");

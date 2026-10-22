@@ -1,4 +1,6 @@
 {
+  "删除发布记录？": "Delete publication record?",
+  "仅清除本地发布记录和凭据，不删除飞书 Bot、队员或聊天记录。": "Only local publication records and credentials will be cleared. The Feishu Bot, teammate, and chat history will not be deleted.",
   "服务连接已断开": "Connection lost",
   "正在恢复连接…": "Restoring connection…",
   "仍无法连接服务": "Still unable to connect",
@@ -1988,6 +1990,7 @@
   "置顶": "Pinned",
   "项目": "Projects",
   "快速对话": "Quick chat",
+  "聊天 Bot": "Chat Bots",
   "选择工作目录": "Choose a workspace",
   "搜索对话": "Search chats",
   "展开导航侧栏": "Expand navigation",
@@ -3993,5 +3996,6 @@
   "开启后，这位队员的飞书 Bot 用该队员的智能体、模型与权限回复消息，并可在资料文件夹内读写文件。": "When enabled, this teammate's Feishu Bot answers with the teammate's own agent, model, and permissions, and can read and write inside the materials folder.",
   "资料文件夹": "Materials folder",
   "尚未选择文件夹": "No folder selected yet",
+  "请先选择资料文件夹，再开启聊天 Bot。": "Select a materials folder before enabling the chat Bot.",
   "聊天 Bot 只能在这个文件夹内读写文件。": "The chat Bot can only read and write inside this folder."
 }
