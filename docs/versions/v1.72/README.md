@@ -6,10 +6,18 @@ authority: version-scope-and-status
 design_status: confirmed
 implementation_status: in_progress
 model_context_change: true
-last_updated: 2026-10-21
+last_updated: 2026-10-27
 ---
 
 # Rovai-ai v1.72：Lark 独立渠道
+
+## Windows 专用账户实验接线（2026-10-27）
+
+Issue #3 新增显式 `windows_account` 启动接线，默认 shared/git_worktree 不变；普通 WithLogonW bootstrap
+与 Runtime 原子 Job 的边界见[受管进程合同](../../contracts/managed-runtime-process-v2.md#显式-windows-account-bootstrap)。
+配置、原生无模型验收与用户可见限制见[开发指南](../../development/windows-account-runtime.md)。
+这是进程身份与 Home/Temp 路径接线，不是 provider 账户隔离、全生命周期零落盘或完整聊天业务资格。
+现有 Built-in Windows IPC 不接受跨账户身份，未扩大权限；完整 Claude/Codex 聊天、续聊和停止验收仍待后续完成。
 
 ## 聊天 Bot 侧栏入口（2026-10-21）
 

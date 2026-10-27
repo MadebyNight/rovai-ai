@@ -62,6 +62,9 @@ use crate::windows_runtime_entrypoint::{
     serialize_command_shim_command_line,
 };
 
+#[path = "windows_account.rs"]
+pub(crate) mod account;
+
 const WINDOWS_COMMAND_LINE_LIMIT: usize = 32_767;
 const WINDOWS_ENVIRONMENT_BLOCK_LIMIT: usize = 32_767;
 const MANAGED_PROCESS_TERMINATION_CODE: u32 = 1;
@@ -69,7 +72,7 @@ const MANAGED_PROCESS_TERMINATION_CODE: u32 = 1;
 // is diagnostic ownership metadata, never an exit receipt.
 const RUNTIME_JOB_NAME_PREFIX: &str = "Global\\Rovai.Runtime.";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct WindowsApplicationIdentity {
     volume_serial_number: u64,
     file_id: [u8; 16],
@@ -92,6 +95,9 @@ pub(super) struct WindowsManagedProcess {
 
 impl WindowsManagedProcess {
     pub(super) fn spawn(spec: &ManagedProcessLaunchSpec) -> Result<Self> {
+        if spec.windows_account.is_some() {
+            return account::spawn(spec);
+        }
         // Keep the canonical path for identity checks, but avoid exposing a verbatim
         // module path to native tools (Git uses it to locate its installation config).
         let application = wide_nul(

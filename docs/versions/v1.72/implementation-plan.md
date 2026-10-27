@@ -3,10 +3,27 @@ document_type: implementation-plan
 version: v1.72
 authority: version-implementation-and-acceptance
 status: in_progress
-last_updated: 2026-10-21
+last_updated: 2026-10-27
 ---
 
 # v1.72 实施与验收
+
+## Windows 专用账户实验接线（2026-10-27）
+
+新增 `windows_account`，仅 Claude/Codex 原生 EXE 的实际 Adapter 启动调用点选择；
+默认 `shared`、`git_worktree` 不读取账户配置且沿用原 Windows atomic spawn。
+DPAPI 仅在宿主内存解密 Windows 登录密码；可信同 EXE helper 在收到启动帧前等待，父级归 Job 后才发送帧，
+目标 Runtime 继续使用原 `JOB_LIST + HANDLE_LIST`。启动输入以 base64 内存帧传递，正常 Job 归零后删除账户侧临时副本，
+异常强杀残留不作零落盘承诺。Codex Fleet 兼容与 same-Run 快速复用均包含账户配置身份。
+
+测试准入、最小命令、配置及限制由[Windows 账户启动](../../development/windows-account-runtime.md)拥有。
+实施验证使用确定性自有 helper、Windows whoami 和既有 Adapter owner，不运行真实 AI CLI。
+独立复核发现并修正 OsString JSON map 键、64 KiB 输入膨胀超限、stdin relay 吞错导致上游半挂；
+原 helper owner分别覆盖这些分支，无新增重型 DB 或网络 fixture。
+完整聊天业务 E2E、跨账户 Built-in IPC 和真实目录不可见性未验收，不以原生 whoami 成功代替。
+
+跨版本影响：更新当前 Managed Runtime Process 合同、开发指南与当前版本实施记录；无 UI、Migration、
+Runtime capability admission、模型上下文或 Native Session 格式改动。历史隔离研究报告保持原样，不把它们视作产品上线证据。
 
 ## 聊天 Bot 侧栏入口（2026-10-21）
 

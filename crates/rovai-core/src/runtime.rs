@@ -141,8 +141,13 @@ impl AgentRunWorkspace {
         if !matches!(self.access.as_str(), "read_only" | "write") {
             anyhow::bail!("AgentRun workspace access must be read_only or write");
         }
-        if !matches!(self.isolation.as_str(), "shared" | "git_worktree") {
-            anyhow::bail!("AgentRun workspace isolation must be shared or git_worktree");
+        if !matches!(
+            self.isolation.as_str(),
+            "shared" | "git_worktree" | "windows_account"
+        ) {
+            anyhow::bail!(
+                "AgentRun workspace isolation must be shared, git_worktree or windows_account"
+            );
         }
         Ok(())
     }
@@ -546,7 +551,18 @@ impl QueuedAgentRunCandidate {
     pub fn execution_workspace(&self) -> AgentRunWorkspace {
         self.workspace.clone().unwrap_or_else(|| {
             if self.permission_semantics == PermissionSemantics::RuntimeManagedV2 {
-                return AgentRunWorkspace::runtime_managed_path(self.project_path.clone());
+                let mut workspace =
+                    AgentRunWorkspace::runtime_managed_path(self.project_path.clone());
+                // Explicit deployment opt-in; freeze it with the Run. Other
+                // adapters retain their existing workspace/launch policy.
+                if matches!(
+                    self.effective_config["runtime"]["adapterKind"].as_str(),
+                    Some("claude-code-cli" | "codex-cli")
+                ) && let Ok(isolation) = std::env::var("ROVAI_CHAT_ISOLATION")
+                {
+                    workspace.isolation = isolation;
+                }
+                return workspace;
             }
             let can_write = self.effective_config["capabilities"]
                 .as_array()
@@ -1886,6 +1902,10 @@ impl ExecutionRuntimeService {
             let budget_now_text = budget_now.to_rfc3339();
             let audit_now_text = chrono::Utc::now().to_rfc3339();
 
+            if envelope.payload.workspace.as_ref().is_some_and(|workspace| workspace.isolation == "windows_account")
+                && (!cfg!(windows) || !matches!(run.effective_config["runtime"]["adapterKind"].as_str(), Some("claude-code-cli" | "codex-cli"))) {
+                return Ok(rejected("agent_run.isolation_unsupported", "windows_account requires a Windows Claude or Codex Runtime"));
+            }
             let frozen_workspace = match (&run.workspace, &envelope.payload.workspace) {
                 (Some(existing), Some(requested)) => {
                     let existing: AgentRunWorkspace = serde_json::from_value(existing.clone())

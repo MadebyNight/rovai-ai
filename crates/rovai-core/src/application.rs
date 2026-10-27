@@ -16342,6 +16342,7 @@ impl Core {
         let runtime = self
             .codex_cli
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: &execution.workspace.isolation,
                 agent_run_id: &execution.agent_run_id,
                 execution_epoch: execution.execution_epoch,
                 camp_id: &execution.camp_id,
@@ -34037,6 +34038,7 @@ for line in sys.stdin:
             let runtime = core
                 .codex_cli
                 .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                    workspace_isolation: "shared",
                     agent_run_id: &run_id,
                     execution_epoch: epoch,
                     camp_id: &camp_id,
@@ -34148,6 +34150,7 @@ for line in sys.stdin:
             let next = core
                 .codex_cli
                 .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                    workspace_isolation: "shared",
                     agent_run_id: "successor",
                     execution_epoch: 1,
                     camp_id: &camp_id,
@@ -34581,6 +34584,7 @@ for line in sys.stdin:
             let runtime = core
                 .codex_cli
                 .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                    workspace_isolation: "shared",
                     agent_run_id: "late-host",
                     execution_epoch: 1,
                     camp_id: "cleanup-camp",

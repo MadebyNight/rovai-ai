@@ -146,6 +146,7 @@ pub(crate) struct CodexHost {
     incoming: mpsc::UnboundedSender<CodexIncoming>,
     alive: AtomicBool,
     executable_path: PathBuf,
+    account_compatibility: Option<String>,
     #[cfg(windows)]
     windows_job_name: String,
     builtin_tools: Option<BuiltinToolProcessConfig>,
@@ -374,6 +375,7 @@ impl CodexHost {
         builtin_tools: Option<BuiltinToolProcessConfig>,
         custom_api: Option<rovai_core::runtime_custom_api::CustomApiSnapshot>,
         environment: Option<rovai_core::member_environment::LaunchEnvironment>,
+        account: Option<rovai_core::managed_process::WindowsAccountLaunch>,
     ) -> Result<Arc<Self>> {
         rovai_core::runtime_discovery::with_launch_environment(
             environment.clone(),
@@ -384,6 +386,7 @@ impl CodexHost {
                 builtin_tools,
                 custom_api,
                 environment,
+                account,
             ),
         )
         .await
@@ -396,6 +399,7 @@ impl CodexHost {
         builtin_tools: Option<BuiltinToolProcessConfig>,
         custom_api: Option<rovai_core::runtime_custom_api::CustomApiSnapshot>,
         environment: Option<rovai_core::member_environment::LaunchEnvironment>,
+        account: Option<rovai_core::managed_process::WindowsAccountLaunch>,
     ) -> Result<Arc<Self>> {
         let mut command = Command::new(codex_path);
         rovai_core::runtime_discovery::configure_runtime_command(
@@ -434,7 +438,11 @@ impl CodexHost {
             ManagedWindowsArgvDialect::MicrosoftCrt,
             "runtime-host:codex-cli",
         )?;
-        let mut child = ManagedProcess::spawn(spec)
+        let account_compatibility = account
+            .as_ref()
+            .map(|account| account.compatibility_digest())
+            .transpose()?;
+        let mut child = ManagedProcess::spawn(spec.with_windows_account(account)?)
             .with_context(|| format!("failed to start {} app-server", codex_path.display()))?;
         let stdin = child
             .take_stdin()
@@ -477,6 +485,7 @@ impl CodexHost {
             incoming,
             alive: AtomicBool::new(true),
             executable_path: codex_path.to_path_buf(),
+            account_compatibility,
             builtin_tools,
         });
         Self::spawn_stdout_reader(host.clone(), stdout);
@@ -1555,6 +1564,7 @@ pub struct CodexAgentRunRuntimeRequest<'a> {
     pub agent_id: &'a str,
     pub native_binding_id: &'a str,
     pub cwd: &'a Path,
+    pub workspace_isolation: &'a str,
     pub frozen_runtime: &'a FrozenAgentRuntimeConfig,
     pub runtime_compatibility_digest: &'a str,
     pub builtin_tool_factory: &'a BuiltinToolProcessConfigFactory,
@@ -1605,6 +1615,7 @@ impl CodexCliRuntimeAdapter {
             agent_id,
             native_binding_id,
             cwd,
+            workspace_isolation,
             frozen_runtime,
             runtime_compatibility_digest,
             builtin_tool_factory,
@@ -1612,6 +1623,18 @@ impl CodexCliRuntimeAdapter {
         if frozen_runtime.adapter_kind != AdapterKind::CodexCli {
             bail!("Codex Runtime received a non-Codex AgentRun");
         }
+        let account =
+            rovai_core::managed_process::WindowsAccountLaunch::for_isolation(workspace_isolation)?;
+        let account_digest = account
+            .as_ref()
+            .map(|account| account.compatibility_digest())
+            .transpose()?;
+        let runtime_compatibility_digest = account_digest
+            .as_ref()
+            .map(|digest| format!("{runtime_compatibility_digest}:windows_account:{digest}"));
+        let runtime_compatibility_digest = runtime_compatibility_digest
+            .as_deref()
+            .unwrap_or(request.runtime_compatibility_digest);
         let _creation = self.runtime_creation.lock().await;
         let existing = self
             .agent_run_runtimes
@@ -1620,7 +1643,10 @@ impl CodexCliRuntimeAdapter {
             .get(agent_run_id)
             .cloned();
         if let Some(runtime) = existing {
-            if runtime.agent_run_epoch() == Some(execution_epoch) && runtime.host.is_alive() {
+            if runtime.agent_run_epoch() == Some(execution_epoch)
+                && runtime.host.is_alive()
+                && runtime.host.account_compatibility == account_digest
+            {
                 return Ok(runtime);
             }
             let old_epoch = runtime.agent_run_epoch().unwrap_or(execution_epoch);
@@ -1676,6 +1702,7 @@ impl CodexCliRuntimeAdapter {
                         Some(spawn_builtin_tool_factory.create()?),
                         spawn_custom_api,
                         spawn_environment,
+                        account,
                     )
                     .await?;
                     Ok(RuntimeProcessHost::Codex(host))
@@ -2586,6 +2613,7 @@ mod tests {
         assert!(!root.join("builtin-tools").exists());
         let legacy = adapter
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_run_id: "legacy-run",
                 execution_epoch: 1,
                 camp_id: "camp-process-compatibility",
@@ -2603,6 +2631,7 @@ mod tests {
             .await;
         let first = adapter
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_run_id: "run-1",
                 execution_epoch: 1,
                 camp_id: "camp-process-compatibility",
@@ -2638,6 +2667,7 @@ mod tests {
             BuiltinToolProcessConfigFactory::new(&executable, &endpoint, &blocked_root);
         let second = adapter
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_run_id: "run-2",
                 execution_epoch: 1,
                 camp_id: "camp-process-compatibility",
@@ -2666,6 +2696,7 @@ mod tests {
         assert_ne!(replacement_digest, first_digest);
         let replacement = adapter
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_run_id: "run-3",
                 execution_epoch: 1,
                 camp_id: "camp-process-compatibility",
@@ -2761,6 +2792,7 @@ for line in sys.stdin:
                 let run = format!("run-{round}");
                 let runtime = adapter
                     .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                        workspace_isolation: "shared",
                         agent_run_id: &run,
                         execution_epoch: 1,
                         camp_id: "camp-fixture",
@@ -2868,6 +2900,7 @@ for line in sys.stdin:
             std::fs::write(root.join("wrong-thread"), "fixture").unwrap();
             let runtime = adapter
                 .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                    workspace_isolation: "shared",
                     agent_run_id: "run-4",
                     execution_epoch: 1,
                     camp_id: "camp-fixture",
@@ -2955,6 +2988,7 @@ for line in sys.stdin:
         };
         let builtin_tools = BuiltinToolProcessConfigFactory::new(&executable, &endpoint, &root);
         let request = |run, camp| CodexAgentRunRuntimeRequest {
+            workspace_isolation: "shared",
             agent_run_id: run,
             execution_epoch: 1,
             camp_id: camp,
@@ -3010,6 +3044,7 @@ for line in sys.stdin:
         let healthy = with_launch_source(
             other,
             adapter.ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_id: "agent_2",
                 ..request("run-other", "camp-other")
             }),
@@ -3344,6 +3379,7 @@ for line in sys.stdin:
                 let tools = BuiltinToolProcessConfigFactory::new(&executable, &endpoint, &root);
                 let result = adapter
                     .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                        workspace_isolation: "shared",
                         agent_run_id: "launch-fixture",
                         execution_epoch: 1,
                         camp_id: "camp-fixture",
@@ -3608,6 +3644,7 @@ for line in sys.stdin:
             BuiltinToolProcessConfigFactory::new(&executable, &endpoint, &directory);
         let first = adapter
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_run_id: "run-1",
                 execution_epoch: 1,
                 camp_id: "camp-1",
@@ -3624,6 +3661,7 @@ for line in sys.stdin:
             BuiltinToolProcessConfigFactory::new(&executable, &endpoint, &directory);
         let second = adapter
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_run_id: "run-2",
                 execution_epoch: 1,
                 camp_id: "camp-1",
@@ -3720,6 +3758,7 @@ for line in sys.stdin:
             BuiltinToolProcessConfigFactory::new(&executable, &endpoint, &directory);
         let successor = adapter
             .ensure_agent_run_runtime(CodexAgentRunRuntimeRequest {
+                workspace_isolation: "shared",
                 agent_run_id: "run-3",
                 execution_epoch: 1,
                 camp_id: "camp-1",

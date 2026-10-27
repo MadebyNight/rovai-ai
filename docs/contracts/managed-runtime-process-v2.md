@@ -3,7 +3,7 @@ document_type: contract
 contract: managed-runtime-process-v2
 status: accepted
 source_version: v1.58
-last_updated: 2026-10-10
+last_updated: 2026-10-27
 ---
 
 # Managed Runtime Process v2
@@ -33,8 +33,8 @@ runtime compatibility / execution ownership identity
 接口返回 `ManagedProcess`，其可观察能力限于 stdio、PID/OS identity、wait、graceful request、bounded tree
 termination 与 reap result。调用方不接触 Job/process-group handle，也不自行 attach、break away 或枚举后代。
 
-Managed Process 直接启动捕获的 application 与结构化 argv，不配置 User Automation protected tree，
-不增加 Rovai 自有文件访问沙箱。Runtime 原生权限与沙箱由对应 Runtime 控制。
+默认 `shared` / `git_worktree` 的 Managed Process 直接启动捕获的 application 与结构化 argv，不配置 User Automation protected tree。
+显式 `windows_account` 使用下述账户 bootstrap；它是 Windows 账户身份边界，不是文件白名单或零落盘承诺。Runtime 原生权限与沙箱仍由对应 Runtime 控制。
 
 capture 先验证 application 是已存在的绝对文件，再冻结工作目录与显式环境。普通 capture 不按 PATH 或 cwd 解析 bare/
 relative application；调用方必须先完成自身已有的 Runtime discovery 与 entrypoint qualification。argv 始终保持结构化
@@ -91,7 +91,7 @@ Windows 原生 EXE 的文件身份仍按 canonical 路径冻结并在启动前�
 
 ## 2. Windows atomic launch
 
-顺序固定：
+默认 `shared` / `git_worktree` 顺序固定：
 
 ```text
 Create Job Object
@@ -108,6 +108,30 @@ Create Job Object
 Handle list 只包含本次显式创建为 inheritable 的 stdin/stdout/stderr handles。Job、token、Context、journal、
 SQLite、日志和 Core 内部 handles 必须不可继承且不在列表中。不得设置任一 breakaway flag。创建失败、Job
 attribute 不可用、嵌套 Job 不兼容或 handle policy 不能证明时，输入投递前 fail closed。
+
+### 显式 Windows account bootstrap
+
+`AgentRunWorkspace.isolation = windows_account` 仅为 Windows Claude/Codex 原生 EXE 提供显式、实验性账户启动接线。
+未选择该值时不读取账户配置、不解密凭据、不改变环境，也不经过 helper。部署配置与当前验收限制见
+[Windows 账户启动](../development/windows-account-runtime.md)。不支持的平台、缺失配置、登录或归属失败不能回退到宿主账户。
+
+该档由宿主 `rovai-core` / `rovai-host` 的同一 EXE 作为可信 bootstrap：普通 `CreateProcessWithLogonW` 启动后，
+helper 在 stdin 等待请求，尚不创建 Runtime 或输入文件。宿主确认 token 非提升且不属于 Administrators，
+将 helper 加入本代 kill-on-close Job，成功后才向私有 pipe 发送结构化启动帧。未收到完整帧或 EOF 的 helper 退出；
+赋 Job、写入或 READY 失败由原始进程句柄终止并等待回收，关闭 Job 收口已创建后代。此 bootstrap **不声称原子入 Job**，
+等待帧的窗口没有 Runtime 执行；目标 Runtime 仍由 helper 内既有 `STARTUPINFOEX + JOB_LIST + HANDLE_LIST` 路径创建。
+
+账号密码仅在宿主从 owner-bound DPAPI 文件解密，不进入命令行、环境、启动帧或日志。目标 Runtime 的完整 argv、
+显式环境及输入文件内容经内存 pipe 交付，避免 WithLogonW 的 1024 字符命令行限制；文件以 base64 传输，总帧上限 16 MiB，超限拒绝而非截断。捕获的目标 EXE identity 在两端核对。
+宿主可观察 PID 是目标 Runtime PID，根退出等待的是转发相同退出码的 helper；资源回收仍以宿主持有的外层 Job 归零为准。
+派生 one-shot 保留账户配置，Codex Fleet 的兼容键包含账户配置摘要，不把账户 Host 当作 shared Host 复用。
+
+HOME、USERPROFILE、APPDATA、LOCALAPPDATA、TEMP/TMP、Claude/Codex 与 XDG 目录定向到显式 profileRoot。
+原冻结 Runtime/provider 环境继续保留（可能含宿主认证变量），只去除部署控制键；这不是 provider 账号隔离，
+也不赋予账户对 cwd、CLI、附件或 Built-in IPC 的访问权。
+Claude 原有私有 bootstrap/settings/MCP 文件仍由宿主原 Builder 创建并持有，内容随后经 pipe 在目标账户临时目录重建；
+helper 在 Runtime Job 归零后删除目标副本，宿主副本仍按原 Adapter 生命周期删除。强制终止 helper 时目标临时副本可能保留。
+因此本档不声明“全生命周期从未落盘”，也不靠改 HOME 推断宿主读权限。
 
 ## 3. Application and argv
 
