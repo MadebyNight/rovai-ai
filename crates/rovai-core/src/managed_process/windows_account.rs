@@ -2,13 +2,16 @@
 //! Parent assigns its kill-on-close Job BEFORE sending it; bootstrap then uses
 //! the unchanged atomic native spawn. No runtime executes in the attach gap.
 use super::*;
+use crate::managed_process::WindowsAccountLaunch;
 use anyhow::Context;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     io::{BufRead, Read, Write},
-    path::PathBuf,
+    os::windows::process::CommandExt,
+    path::{Path, PathBuf},
+    process::Command,
     time::Instant,
 };
 use windows_sys::Win32::{
@@ -22,7 +25,10 @@ use windows_sys::Win32::{
     System::{
         JobObjects::AssignProcessToJobObject,
         Pipes::PeekNamedPipe,
-        Threading::{CreateProcessWithLogonW, OpenProcessToken, STARTUPINFOW, TerminateProcess},
+        Threading::{
+            CREATE_NO_WINDOW, CreateProcessWithLogonW, OpenProcessToken, STARTUPINFOW,
+            TerminateProcess,
+        },
     },
 };
 
@@ -177,6 +183,7 @@ pub(super) fn spawn(spec: &ManagedProcessLaunchSpec) -> Result<WindowsManagedPro
         ),
         "managed_process.account_native_executable_required"
     );
+    prepare_workspace_access(spec.working_directory(), Some(account))?;
     let target_path = wide_nul(spec.application().as_os_str(), "application")?;
     let _target_lock = open_application_for_launch(&target_path)?;
     anyhow::ensure!(
@@ -301,6 +308,44 @@ pub(super) fn spawn(spec: &ManagedProcessLaunchSpec) -> Result<WindowsManagedPro
         stderr: Some(tokio_file(parent_err)),
         exit_code: None,
     })
+}
+
+fn prepare_workspace_access(cwd: &Path, account: Option<&WindowsAccountLaunch>) -> Result<()> {
+    let Some(account) = account else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        cwd.is_dir(),
+        "managed_process.account_workspace_missing: {}",
+        cwd.display()
+    );
+    let system_root =
+        std::env::var_os("SystemRoot").context("managed_process.account_acl_tool_unavailable")?;
+    let icacls = PathBuf::from(system_root)
+        .join("System32")
+        .join("icacls.exe");
+    let cwd = dunce::simplified(cwd);
+    let domain = if account.domain == "." {
+        std::env::var("COMPUTERNAME")
+            .context("managed_process.account_computer_name_unavailable")?
+    } else {
+        account.domain.clone()
+    };
+    let principal = format!("{}\\{}:(GR,GW)", domain, account.username);
+    let output = Command::new(icacls)
+        .arg(cwd.as_os_str())
+        .arg("/grant:r")
+        .arg(principal)
+        .arg("/Q")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .context("managed_process.account_workspace_acl_failed")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "managed_process.account_workspace_acl_failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
 }
 
 fn reject_elevated_account(process: HANDLE) -> Result<()> {
@@ -613,8 +658,117 @@ fn run_helper() -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
-    // One owner for the bootstrap protocol and pre-GO failure boundary. No
-    // account, password, provider login, Core DB or real Runtime is used.
+    use super::*;
+    use crate::managed_process::WindowsAccountLaunch;
+    use std::{
+        os::windows::process::CommandExt,
+        path::{Path, PathBuf},
+        process::Command,
+    };
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+
+    // These tests use a temporary ACL fixture only: no password, provider,
+    // Core DB, user-data root or real Runtime is involved.
+    #[test]
+    fn account_workspace_acl_is_exact_idempotent_and_shared_is_unchanged() {
+        let root = std::env::temp_dir().join(format!(
+            "rovai-account-workspace-acl-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("run-cwd");
+        let sibling = root.join("other");
+        let child = cwd.join("existing-child.txt");
+        std::fs::create_dir_all(&cwd).unwrap();
+        std::fs::create_dir(&sibling).unwrap();
+        std::fs::write(&child, "leave this ACL unchanged").unwrap();
+
+        let account = if std::env::var_os("ROVAI_WINDOWS_ACCOUNT_CONFIG").is_some() {
+            WindowsAccountLaunch::for_isolation("windows_account")
+                .unwrap()
+                .unwrap()
+        } else {
+            WindowsAccountLaunch {
+                username: std::env::var("USERNAME").expect("Windows test user name"),
+                domain: std::env::var("USERDOMAIN")
+                    .or_else(|_| std::env::var("COMPUTERNAME"))
+                    .unwrap_or_else(|_| ".".to_string()),
+                dpapi_path: root.join("unused-dpapi.bin"),
+                profile_root: root.clone(),
+            }
+        };
+        let root_before = icacls_text(&root);
+        let cwd_before = icacls_text(&cwd);
+        let sibling_before = icacls_text(&sibling);
+        let child_before = icacls_text(&child);
+
+        prepare_workspace_access(&cwd, None).unwrap();
+        assert_eq!(
+            icacls_text(&cwd),
+            cwd_before,
+            "shared mode must not add an ACE"
+        );
+        assert_eq!(icacls_text(&root), root_before);
+        assert_eq!(icacls_text(&sibling), sibling_before);
+        assert_eq!(icacls_text(&child), child_before);
+
+        prepare_workspace_access(&cwd, Some(&account)).unwrap();
+        let granted = icacls_text(&cwd);
+        let principal_ace = format!(
+            "{}\\{}:(r,w)",
+            account.domain.to_lowercase(),
+            account.username.to_lowercase()
+        );
+        let account_line = granted
+            .lines()
+            .find(|line| line.to_lowercase().contains(&principal_ace))
+            .expect("explicit read/write ACE for the sandbox account");
+        let account_line = account_line.to_lowercase();
+        assert!(
+            !account_line.contains("(oi)"),
+            "ACE must not inherit to files"
+        );
+        assert!(
+            !account_line.contains("(ci)"),
+            "ACE must not inherit to directories"
+        );
+        assert_eq!(
+            icacls_text(&root),
+            root_before,
+            "data-root ACL must stay unchanged"
+        );
+        assert_eq!(icacls_text(&sibling), sibling_before);
+        assert_eq!(
+            icacls_text(&child),
+            child_before,
+            "existing descendants must stay unchanged"
+        );
+
+        prepare_workspace_access(&cwd, Some(&account)).unwrap();
+        assert_eq!(
+            icacls_text(&cwd),
+            granted,
+            "repeated turns must keep one stable ACE"
+        );
+        assert_eq!(icacls_text(&root), root_before);
+        assert_eq!(icacls_text(&sibling), sibling_before);
+        assert_eq!(icacls_text(&child), child_before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn icacls_text(path: &Path) -> String {
+        let system_root = std::env::var_os("SystemRoot").unwrap();
+        let icacls = PathBuf::from(system_root)
+            .join("System32")
+            .join("icacls.exe");
+        let output = Command::new(icacls)
+            .arg(path)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "icacls read failed: {output:?}");
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n")
+    }
+
     #[tokio::test]
     async fn account_bootstrap_requires_request_and_relays_native_exit() {
         use super::*;
@@ -754,15 +908,21 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "manual existing non-admin account + owner-bound DPAPI; runs only Windows whoami, never an AI provider"]
-    async fn existing_account_launch_uses_product_spawn() {
+    async fn existing_account_launch_starts_repeated_workspace_turns() {
         use super::*;
         let account = super::super::super::WindowsAccountLaunch::for_isolation("windows_account")
             .unwrap()
             .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "rovai-account-repeated-turns-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cwd = root.join("run-cwd");
+        std::fs::create_dir_all(&cwd).unwrap();
         let executable =
             PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32/whoami.exe");
         let mut command = tokio::process::Command::new(executable);
-        command.current_dir(&account.profile_root);
+        command.current_dir(&cwd);
         let mut spec = ManagedProcessLaunchSpec::capture(
             &command,
             super::super::super::ManagedProcessPurpose::RuntimeProbe,
@@ -779,33 +939,41 @@ mod tests {
                 .any(|allowed| environment_keys_equal(key, OsStr::new(allowed)))
         });
         let spec = spec.with_windows_account(Some(account.clone())).unwrap();
-        let mut process = WindowsManagedProcess::spawn(&spec).unwrap();
-        let mut output = process.take_stdout().unwrap();
-        let mut bytes = Vec::new();
-        tokio::time::timeout(
-            Duration::from_secs(15),
-            tokio::io::AsyncReadExt::read_to_end(&mut output, &mut bytes),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert!(process.wait().await.unwrap().success());
-        let identity = String::from_utf8(bytes).unwrap();
-        assert!(
-            identity
-                .trim()
-                .to_lowercase()
-                .ends_with(&format!("\\{}", account.username.to_lowercase()))
-        );
-        wait_for_empty(&process).await;
-        let (total, active) = process.job_process_counts_for_test().unwrap();
-        println!(
-            "product_account_spawn identity={} exit=0 job_total={} job_active={} profile_root={}",
-            identity.trim(),
-            total,
-            active,
-            account.profile_root.display()
-        );
+
+        for round in 1..=3 {
+            let mut process = WindowsManagedProcess::spawn(&spec).unwrap();
+            let mut output = process.take_stdout().unwrap();
+            let mut bytes = Vec::new();
+            tokio::time::timeout(
+                Duration::from_secs(15),
+                tokio::io::AsyncReadExt::read_to_end(&mut output, &mut bytes),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert!(
+                process.wait().await.unwrap().success(),
+                "round {round} failed"
+            );
+            let identity = String::from_utf8(bytes).unwrap();
+            assert!(
+                identity
+                    .trim()
+                    .to_lowercase()
+                    .ends_with(&format!("\\{}", account.username.to_lowercase()))
+            );
+            wait_for_empty(&process).await;
+            let (total, active) = process.job_process_counts_for_test().unwrap();
+            assert_eq!(active, 0, "round {round} left processes in its Job");
+            println!(
+                "product_account_spawn round={} identity={} job_total={} job_active={}",
+                round,
+                identity.trim(),
+                total,
+                active
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

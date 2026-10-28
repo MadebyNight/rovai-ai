@@ -357,7 +357,8 @@ pub(crate) fn publish_private_new_temporary_file(source: &Path, destination: &Pa
 
 #[cfg(windows)]
 fn prepare_windows_data_root_platform(layout: &WindowsDataRootLayout) -> Result<()> {
-    prepare_private_directory(&layout.root)?;
+    let default_root = dirs::data_local_dir().map(|root| root.join("Rovai AI"));
+    windows::prepare_configured_data_root(&layout.root, default_root.as_deref())?;
     prepare_private_directory(&layout.core)?;
     let electron = layout
         .electron_user_data
@@ -504,6 +505,8 @@ mod windows {
     const IDENTITY_UNAVAILABLE: &str = "windows_storage.identity_unavailable";
     const REPARSE_ROOT_REJECTED: &str = "windows_storage.reparse_root_rejected";
     const PRIVATE_ACL_INVALID: &str = "windows_storage.private_acl_invalid";
+    const PRIVATE_ACL_PERMISSION_DENIED: &str = "windows_storage.private_acl_permission_denied";
+    const PRIVATE_ACL_REPAIR_FAILED: &str = "windows_storage.private_acl_repair_failed";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct FileIdentity {
@@ -526,6 +529,138 @@ mod windows {
         }
 
         admit_private_directory(path)
+    }
+
+    pub(super) fn prepare_configured_data_root(
+        path: &Path,
+        default_root: Option<&Path>,
+    ) -> Result<PathBuf> {
+        if default_root.is_none_or(|default| same_windows_path(path, default)) {
+            return prepare_private_directory(path);
+        }
+
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return prepare_private_directory(path);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect configured Windows data root {}",
+                        path.display()
+                    )
+                });
+            }
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return prepare_private_directory(path);
+        }
+
+        if !private_directory_permissions_need_repair(path)? {
+            return admit_private_directory(path);
+        }
+        if !contains_only_development_instance_lock(path)? {
+            return prepare_private_directory(path);
+        }
+
+        repair_configured_data_root_acl(path)?;
+        admit_private_directory(path)
+    }
+
+    fn same_windows_path(left: &Path, right: &Path) -> bool {
+        let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
+        let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
+        left.to_string_lossy()
+            .replace('/', "\\")
+            .eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
+    }
+
+    fn contains_only_development_instance_lock(path: &Path) -> Result<bool> {
+        let mut entries = std::fs::read_dir(path)?;
+        let Some(entry) = entries.next() else {
+            return Ok(true);
+        };
+        let entry = entry?;
+        if entry.file_name() != ".development-instance.lock" {
+            return Ok(false);
+        }
+        let metadata = std::fs::symlink_metadata(entry.path())?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Ok(false);
+        }
+        Ok(entries.next().is_none())
+    }
+
+    fn repair_configured_data_root_acl(path: &Path) -> Result<()> {
+        validate_native_absolute_path(path)?;
+        admit_volume(path)?;
+        let handle = open_path_for_acl_repair(path, ExpectedObjectKind::Directory)
+            .map_err(|error| configured_root_acl_repair_error(path, error))?;
+        let identity = file_identity(&handle)?;
+        let policy = PrivateSecurityDescriptor::new(PrivateObjectKind::Directory)
+            .map_err(|error| configured_root_acl_repair_error(path, error))?;
+        if !policy
+            .file_permissions_need_repair(handle.as_raw_handle() as HANDLE)
+            .map_err(|error| configured_root_acl_repair_error(path, error))?
+        {
+            return verify_private_acl(
+                &handle,
+                PrivateObjectKind::Directory,
+                "configured data root",
+            )
+            .map_err(|error| configured_root_acl_repair_error(path, error));
+        }
+        if !contains_only_development_instance_lock(path)? {
+            bail!(
+                "{PRIVATE_ACL_INVALID}: configured data root became nonempty; refusing to change its DACL: {}",
+                path.display()
+            );
+        }
+        policy
+            .apply_file_dacl(handle.as_raw_handle() as HANDLE)
+            .map_err(|error| configured_root_acl_repair_error(path, error))?;
+        verify_private_acl(
+            &handle,
+            PrivateObjectKind::Directory,
+            "repaired configured data root",
+        )
+        .map_err(|error| configured_root_acl_repair_error(path, error))?;
+        let reopened = open_path(path, ExpectedObjectKind::Directory)
+            .map_err(|error| configured_root_acl_repair_error(path, error))?;
+        if file_identity(&reopened)? != identity {
+            bail!(
+                "{IDENTITY_UNAVAILABLE}: configured data root identity changed during DACL repair: {}",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    pub(super) fn configured_root_acl_repair_error(
+        path: &Path,
+        error: anyhow::Error,
+    ) -> anyhow::Error {
+        let permission_denied = error.chain().any(|cause| {
+            cause
+                .downcast_ref::<io::Error>()
+                .and_then(io::Error::raw_os_error)
+                .is_some_and(|code| {
+                    code == windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32
+                        || code == windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32
+                })
+        });
+        blocker(
+            if permission_denied {
+                PRIVATE_ACL_PERMISSION_DENIED
+            } else {
+                PRIVATE_ACL_REPAIR_FAILED
+            },
+            format!(
+                "failed to tighten inherited DACL for configured data root {}: {error:#}",
+                path.display()
+            ),
+        )
     }
 
     pub(super) fn admit_private_directory(path: &Path) -> Result<PathBuf> {
@@ -1375,6 +1510,84 @@ mod tests {
         assert!(WindowsDataRootLayout::from_root(Path::new("relative-root")).is_err());
         let parent_path = std::env::temp_dir().join("child").join("..").join("root");
         assert!(WindowsDataRootLayout::from_root(&parent_path).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_custom_root_repairs_only_empty_or_development_lock_roots() {
+        for with_lock in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "rovai-configured-empty-root-{}-{}",
+                Uuid::new_v4(),
+                with_lock
+            ));
+            std::fs::create_dir(&root).unwrap();
+            if with_lock {
+                std::fs::write(root.join(".development-instance.lock"), b"123\n").unwrap();
+            }
+            assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
+
+            let admitted =
+                windows::prepare_configured_data_root(&root, Some(Path::new("C:\\Rovai AI")))
+                    .unwrap();
+            assert_eq!(admitted, std::fs::canonicalize(&root).unwrap());
+            assert!(!windows::private_directory_permissions_need_repair(&root).unwrap());
+            windows::admit_private_directory(&root).unwrap();
+            if with_lock {
+                assert!(root.join(".development-instance.lock").is_file());
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_custom_root_with_data_is_not_repaired() {
+        let root =
+            std::env::temp_dir().join(format!("rovai-configured-nonempty-root-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join(".development-instance.lock"), b"123\n").unwrap();
+        std::fs::write(root.join("existing-data"), b"keep").unwrap();
+
+        let error = windows::prepare_configured_data_root(&root, Some(Path::new("C:\\Rovai AI")))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("windows_storage.private_acl_invalid"));
+        assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
+        assert_eq!(std::fs::read(root.join("existing-data")).unwrap(), b"keep");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn system_default_root_does_not_use_custom_root_acl_repair() {
+        let root = std::env::temp_dir().join(format!("rovai-default-data-root-{}", Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join(".development-instance.lock"), b"123\n").unwrap();
+        assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
+
+        assert!(windows::prepare_configured_data_root(&root, Some(&root)).is_err());
+        assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn custom_root_acl_repair_reports_permission_denial_separately() {
+        let root = Path::new(r"C:\custom-root");
+        let denied = windows::configured_root_acl_repair_error(
+            root,
+            std::io::Error::from_raw_os_error(
+                windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32,
+            )
+            .into(),
+        );
+        assert!(format!("{denied:#}").contains("windows_storage.private_acl_permission_denied"));
+
+        let failed = windows::configured_root_acl_repair_error(
+            root,
+            anyhow::anyhow!("synthetic repair failure"),
+        );
+        assert!(format!("{failed:#}").contains("windows_storage.private_acl_repair_failed"));
     }
 
     #[test]

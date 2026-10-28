@@ -130,6 +130,14 @@ impl AgentRunWorkspace {
         }
     }
 
+    pub fn apply_chat_isolation(&mut self, adapter_kind: &str, isolation: Option<&str>) {
+        if matches!(adapter_kind, "claude-code-cli" | "codex-cli")
+            && let Some(isolation) = isolation
+        {
+            self.isolation = isolation.to_string();
+        }
+    }
+
     pub fn path(&self) -> &Path {
         Path::new(&self.execution_root)
     }
@@ -553,15 +561,13 @@ impl QueuedAgentRunCandidate {
             if self.permission_semantics == PermissionSemantics::RuntimeManagedV2 {
                 let mut workspace =
                     AgentRunWorkspace::runtime_managed_path(self.project_path.clone());
-                // Explicit deployment opt-in; freeze it with the Run. Other
-                // adapters retain their existing workspace/launch policy.
-                if matches!(
-                    self.effective_config["runtime"]["adapterKind"].as_str(),
-                    Some("claude-code-cli" | "codex-cli")
-                ) && let Ok(isolation) = std::env::var("ROVAI_CHAT_ISOLATION")
-                {
-                    workspace.isolation = isolation;
-                }
+                let isolation = std::env::var("ROVAI_CHAT_ISOLATION").ok();
+                workspace.apply_chat_isolation(
+                    self.effective_config["runtime"]["adapterKind"]
+                        .as_str()
+                        .unwrap_or_default(),
+                    isolation.as_deref(),
+                );
                 return workspace;
             }
             let can_write = self.effective_config["capabilities"]
