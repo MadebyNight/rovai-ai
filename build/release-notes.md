@@ -9,7 +9,7 @@
 - 保留同轮本地补充的来源与原聊天受众，避免把本地消息误当作先前来访者的新委托；不扩大工具或 Runtime 权限。
 - 冻结本轮回复上下文，并兼容旧上下文与数据库升级恢复，保留历史记录及出站状态。
 
-已有定向产品测试覆盖来源、受托发送、批次预算和旧库恢复。原始误拒答未在对照场景复现，通用评测未完成，不据此宣称全部问题已解决或所有 Runtime 已通过。此安装器未签名，SmartScreen 可能提示未知发布者；本次仅交付本机，不发布 GitHub Release。
+已有定向产品测试覆盖来源、受托发送、批次预算和旧库恢复。原始误拒答未在对照场景复现，不据此宣称全部问题已解决或所有 Runtime 已通过。此安装器未签名，SmartScreen 可能提示未知发布者；本次仅交付本机，不发布 GitHub Release。
 
 ---
 
@@ -22,4 +22,4 @@
 - Preserve the origin of local additions and the original channel audience within a Run, without treating local input as a new delegation from an earlier sender or expanding tool or Runtime permissions.
 - Freeze reply context for each Run and retain historical records and outbound state through legacy-context and database upgrade recovery.
 
-Existing focused product tests cover provenance, delegated sending, batch budgets and legacy recovery. The original refusal was not reproduced in comparison scenarios, and generic evaluation remains incomplete; this does not establish that every issue is resolved or every Runtime is qualified. This installer is unsigned and SmartScreen may report an unknown publisher. This delivery is local only, with no GitHub Release.
+Existing focused product tests cover provenance, delegated sending, batch budgets and legacy recovery. The original refusal was not reproduced in comparison scenarios; this does not establish that every issue is resolved or every Runtime is qualified. This installer is unsigned and SmartScreen may report an unknown publisher. This delivery is local only, with no GitHub Release.
