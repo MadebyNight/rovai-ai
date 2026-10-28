@@ -103,6 +103,7 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
 // Only synthetic migration fixtures downgrade; product input always stays frozen.
 #[cfg(test)]
 pub(super) fn downgrade_for_test(c: &Connection) {
+    super::chat_reply::downgrade_for_test(c);
     let applied: bool = c
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=208)",

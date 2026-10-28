@@ -1112,3 +1112,16 @@ Task 与消息协作重复，直接删除会破坏存量责任和恢复。因此
 数字键位按真实入口顺序一次迁移，其他冲突键清空、非冲突偏好保留；迁移失败以内存新映射维持可用，再显式重试落盘。代价是四个旧自定义键位会被覆盖，这是 User 明确选择的升级行为。
 
 当前规范：[Task v6](../../contracts/durable-task-v6.md)、[Transport v42](../../contracts/builtin-tool-transport-v42.md)、[Manifest v40/v41](../../contracts/context-manifest-evidence-v40.md)、[Shortcuts v2](../../contracts/desktop-shortcuts-v2.md)。逐项输入对照与实施状态见 [R4](model-context-change-task-capability.md)。
+
+
+<a id="v1-72-d53"></a>
+## V1.72-D53：聊天来源说明与现有工具授权分开
+
+- 状态：accepted
+- 日期：2026-10-28
+- 确认：开发者经父级msg_bfe84aabceb6明确选择revision3；未声称逐字阅读技术全文
+- 当前权威：[Manifest43](../../contracts/context-manifest-evidence-v43.md)、[聊天Bot v3](../../contracts/feishu-chat-bot-v3.md)、[聊天架构](../../architecture/feishu-channel.md#聊天-bot-普通回复与逐输入来源)
+
+普通回复由Host自动回原聊天，却缺少模型可见的逐输入来源说明。选择在动态输入中完整说明身份、内容保护、自动回复和受托工具区别，并保留claim冻结与历史恢复，不修改Bootstrap或制造新授权。
+
+FRR-10证明旧grant仍绑定初始来信，不证明合法目标上的合成调用已扩大权限。拒绝全工具冻结、窄写冻结及本轮逐调用授权重构，保留正常受托发送和result；代价是服务器仍无逐调用新委托来源硬保证。该限制明确公开，提示词不冒充安全凭据；真实模型错误归属、泄露、无委托外发及缺证据仍阻断交付。

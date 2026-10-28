@@ -5777,6 +5777,21 @@ mod tests {
             .unwrap();
         assert_eq!(claimed_inputs, 2);
         assert_eq!(defaulted.frozen_history_result(&run_id), (0, false));
+
+        let mut chat = Fixture::new();
+        chat.database.connection().execute("UPDATE camp SET navigation_is_chat_bot=1 WHERE id=?1",[&chat.camp_id]).unwrap();
+        chat.enqueue("chat-capacity-1", &"界".repeat(44_000));
+        chat.enqueue("chat-capacity-2", &"界".repeat(44_000));
+        let run = claim_waiting_delivery_batches(&mut chat.database,100).unwrap().pop().unwrap();
+        let count: i64 = chat.database.connection().query_row("SELECT count(*) FROM agent_run_input WHERE agent_run_id=?1",[&run],|r|r.get(0)).unwrap();
+        assert_eq!(count,1);
+        let claim: String = chat.database.connection().query_row("SELECT context_json FROM agent_run_claim_context WHERE agent_run_id=?1",[&run],|r|r.get(0)).unwrap();
+        let frozen: crate::context::ClaimedBatchContext = serde_json::from_str(&claim).unwrap();
+        assert!(frozen.payload_len().unwrap() <= 256*1024);
+        let value: serde_json::Value = serde_json::from_str(&claim).unwrap();
+        assert_eq!(value["chatReplyContext"]["inputs"].as_array().unwrap().len(),1);
+        assert_eq!(value["runInput"]["messages"][0]["body"].as_str().unwrap().len(),132_000);
+        assert_eq!(chat.database.connection().query_row("SELECT count(*) FROM camp_message_delivery WHERE status='waiting'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
     // Owns the claim -> materialize boundary: an accepted native Session is not
@@ -6013,6 +6028,7 @@ mod tests {
     #[test]
     fn oversized_first_input_keeps_context_payload_too_large_failure() {
         let mut fixture = Fixture::new();
+        fixture.database.connection().execute("UPDATE camp SET navigation_is_chat_bot=1 WHERE id=?1",[&fixture.camp_id]).unwrap();
         let body = "large input 中文😀 ".repeat(30_000);
         fixture.enqueue("oversized-first", &body);
         let run_id = claim_waiting_delivery_batches(&mut fixture.database, 1)

@@ -1,4 +1,5 @@
 mod claim;
+mod chat_reply;
 mod input;
 pub(crate) use claim::ClaimedBatchContext;
 
@@ -73,7 +74,7 @@ pub const MAX_SESSION_BOOTSTRAP_BYTES: usize = 128 * 1024;
 fn run_facts_schema_version(manifest_version: i64, invocation_kind: &str) -> i64 {
     if invocation_kind == "batch" {
         match manifest_version {
-            40 => 11,
+            40 | 43 => 11,
             37 | 39 => 10,
             32 | 33 | 34 | 36 | 38 => 9,
             31 => 8,
@@ -910,6 +911,22 @@ impl ContextService {
                 }
             }
         }
+        let chat_reply_context = if batch_context_manifest_version == Some(43) {
+            if let Some(claimed) = &claimed_context {
+                anyhow::ensure!(
+                    claimed.chat_reply_context.is_some()
+                        || !chat_reply::is_chat_thread(database.connection(), &snapshot.camp_id)?,
+                    "Chat Run is missing its frozen reply context"
+                );
+                claimed.chat_reply_context.clone()
+            } else {
+                chat_reply::project(
+                    database.connection(), &snapshot.camp_id,
+                    batch_run_input_value.as_ref().context("Chat reply context requires batch input")?,
+                    source_delivery_id.map(|_| snapshot.agent_run_id.as_str()),
+                )?
+            }
+        } else { None };
         let a2a_guidance = prepare_a2a_guidance(database, &snapshot)?;
         let bootstrap_payload = if bootstrap_in_runtime_payload {
             let bootstrap = format_session_bootstrap_for_snapshot(
@@ -1020,6 +1037,7 @@ impl ContextService {
                 current_input: (snapshot.invocation_kind != "batch")
                     .then_some(&current_input_value),
                 run_input: batch_run_input_value.as_ref(),
+                chat_reply_context: chat_reply_context.as_ref(),
             })?;
             let runtime_payload = bootstrap_payload.as_deref().map_or_else(
                 || payload.clone(),
@@ -1141,7 +1159,7 @@ impl ContextService {
         } else {
             shared_conversation.projection_evidence()
         };
-        let current_input_source = if let Some(batch) = batch_model_context.as_ref() {
+        let mut current_input_source = if let Some(batch) = batch_model_context.as_ref() {
             let mut evidence = batch.run_input_evidence();
             evidence["invocationKind"] = json!(snapshot.invocation_kind);
             evidence
@@ -1158,6 +1176,9 @@ impl ContextService {
                 "gatherCompletion": gather_completion_manifest_evidence(&snapshot, &current_input)?,
             })
         };
+        if let Some(context) = &chat_reply_context {
+            current_input_source["chatReplyContext"] = chat_reply::evidence(context)?;
+        }
         let originating_public_user_message_ref = (snapshot.invocation_kind != "batch")
             .then(|| {
                 shared_conversation
@@ -1252,6 +1273,7 @@ impl ContextService {
                         | 37
                         | 38
                         | 39
+                        | 40
                         | PUBLIC_CAMP_BATCH_CONTEXT_FORMATTER_VERSION
                 ));
             })
@@ -1624,6 +1646,7 @@ impl ContextService {
                 additional_skills: Some(&additional_skills.section),
                 a2a_guidance: a2a_guidance.payload_json.as_deref(),
                 single_chat_guidance: None,
+                chat_reply_context: None,
                 current_input: Some(&current_input_value),
                 run_input: None,
             })?;
@@ -4599,6 +4622,7 @@ fn frozen_batch_context_manifest_version(
                 | 37
                 | 38
                 | 39
+                | 40
                 | PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
         ),
         "Batch AgentRun uses an unsupported context version"
@@ -7079,6 +7103,7 @@ struct RenderPayloadInput<'a> {
     additional_skills: Option<&'a str>,
     a2a_guidance: Option<&'a str>,
     single_chat_guidance: Option<&'a str>,
+    chat_reply_context: Option<&'a Value>,
     current_input: Option<&'a Value>,
     run_input: Option<&'a Value>,
 }
@@ -7124,6 +7149,9 @@ fn render_payload(input: RenderPayloadInput<'_>) -> Result<String> {
     }
     if let Some(single_chat_guidance) = input.single_chat_guidance {
         append_json_text_section(&mut output, "SINGLE_CHAT_GUIDANCE", single_chat_guidance);
+    }
+    if let Some(context) = input.chat_reply_context {
+        append_json_section(&mut output, "CHAT_REPLY_CONTEXT", context)?;
     }
     match (input.current_input, input.run_input) {
         (Some(current_input), None) => {
@@ -8443,8 +8471,9 @@ mod tests {
                     context_manifest_version INTEGER
                 );
                 INSERT INTO agent_run_input VALUES ('historical', 26);
-                INSERT INTO agent_run_input VALUES ('current', 40);
-                INSERT INTO agent_run_input VALUES ('current', 40);
+                INSERT INTO agent_run_input VALUES ('current', 43);
+                INSERT INTO agent_run_input VALUES ('current', 43);
+                INSERT INTO agent_run_input VALUES ('retained', 40);
                 INSERT INTO agent_run_input VALUES ('previous', 36);
                 INSERT INTO agent_run_input VALUES ('previous', 36);
                 INSERT INTO agent_run_input VALUES ('legacy', 29);
@@ -8459,6 +8488,10 @@ mod tests {
         assert_eq!(
             frozen_batch_context_manifest_version(&connection, "current").unwrap(),
             PUBLIC_CAMP_BATCH_CONTEXT_MANIFEST_VERSION
+        );
+        assert_eq!(
+            frozen_batch_context_manifest_version(&connection, "retained").unwrap(),
+            40
         );
         assert_eq!(
             frozen_batch_context_manifest_version(&connection, "legacy").unwrap(),
@@ -9147,6 +9180,7 @@ mod slow_tests {
             additional_skills: None,
             a2a_guidance: None,
             single_chat_guidance: Some(SINGLE_CHAT_GUIDANCE.trim()),
+            chat_reply_context: None,
             current_input: Some(&json!({
                 "source": { "type": "user" },
                 "message": "请看一下",
@@ -11187,7 +11221,7 @@ mod slow_tests {
     // A claimed input without a Manifest must survive an upgrade using its frozen formatter.
     #[test]
     fn claimed_legacy_batch_keeps_its_format_after_context_upgrades() {
-        for expected_version in [32, 33, 36, 38] {
+        for expected_version in [32, 33, 36, 38, 40] {
             let mut fixture = fixture();
             fixture.database.connection().execute(
                 "INSERT INTO camp_member(camp_id,agent_id,status,capability_overrides_json,version,joined_at) VALUES(?1,'agent_2','active','{}',1,datetime('now'))",
@@ -11221,6 +11255,11 @@ mod slow_tests {
                     claimed.persist(&tx, &fixture.run_id).unwrap();
                     tx.commit().unwrap();
                     crate::db::upgrade_message_senders_fixture(&mut fixture.database);
+                } else {
+                    let immutable: String = fixture.database.connection().query_row("SELECT sql FROM sqlite_master WHERE name='agent_run_input_context_projection_immutable'", [], |r| r.get(0)).unwrap();
+                    fixture.database.connection().execute_batch("DROP TRIGGER agent_run_input_context_projection_immutable;").unwrap();
+                    fixture.database.connection().execute("UPDATE agent_run_input SET context_manifest_version=?1 WHERE agent_run_id=?2", params![expected_version, fixture.run_id]).unwrap();
+                    fixture.database.connection().execute_batch(&immutable).unwrap();
                 }
                 // A later profile change and departure cannot change already claimed names.
                 fixture
@@ -11267,7 +11306,7 @@ mod slow_tests {
             );
             if expected_version >= 36 {
                 assert_eq!(input["messages"][0]["senderId"], "agent_2");
-                if expected_version == 38 {
+                if expected_version >= 38 {
                     assert_eq!(input["messages"][0]["senderName"], author_name);
                 } else {
                     assert!(input["messages"][0].get("senderName").is_none());
@@ -15394,6 +15433,7 @@ mod slow_tests {
             additional_skills: None,
             a2a_guidance: None,
             single_chat_guidance: None,
+                chat_reply_context: None,
             current_input: Some(&json!({"source":{"type":"user"},"body":"work"})),
             run_input: None,
         })

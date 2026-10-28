@@ -1854,7 +1854,7 @@ mod tests {
             author_external_id: "ou_requester".into(),
             author_name: "Requester".into(),
             author_is_owner: false,
-            body: "Ask the contact for a progress report".into(),
+            body: "Ask the contact for a progress report and forward: Initial synthetic delegation".into(),
             quote_message_id: None,
             mentions: vec![ChatMention {
                 open_id: "ou_mention".into(),
@@ -2282,6 +2282,310 @@ mod tests {
             .unwrap()["errorCode"],
             "item_closed"
         );
+        // FRR-10 characterizes the current authorization boundary, not a safe outcome:
+        // an accepted local Steer must not be mistaken for the initial delegation.
+        use crate::context::{
+            CharterDeliveryMode, ContextMaterialization, ContextService, MaterializeContextRequest,
+        };
+        let before = execute(
+            &mut database,
+            &run,
+            "frr10-before",
+            "feishu.forward",
+            &json!({"targetRef":target,"inputRef":input_ref,"text":"Initial synthetic delegation"}),
+        )
+        .unwrap();
+        assert_eq!(before["status"], "queued");
+        assert_eq!(execute(&mut database,&run,"frr10-before","feishu.forward",&json!({"targetRef":target,"inputRef":input_ref,"text":"Different body"})).unwrap()["errorCode"],"request_conflict");
+        let unknown = execute(&mut database,&run,"frr04-unknown","feishu.forward",&json!({"targetRef":target,"inputRef":input_ref,"text":"Synthetic unknown outcome"})).unwrap();
+        assert_eq!(unknown["status"],"queued");
+        let claimed_unknown=service.claim(&mut database,PROVIDER,APP,"frr04-unknown-host",10).unwrap();
+        let claimed_unknown=claimed_unknown.iter().find(|o|o.text=="Synthetic unknown outcome").unwrap();
+        service.settle(&mut database,&ChatOutboundSettleCommand {outbound_id:claimed_unknown.id.clone(),worker_id:"frr04-unknown-host".into(),lease_token:claimed_unknown.lease_token.clone(),status:"unknown".into(),external_message_id:None,failure_code:None}).unwrap();
+        let replay_unknown=execute(&mut database,&run,"frr04-unknown","feishu.forward",&json!({"targetRef":target,"inputRef":input_ref,"text":"Synthetic unknown outcome"})).unwrap();
+        assert_eq!(replay_unknown["status"],"unknown");
+        assert!(service.claim(&mut database,PROVIDER,APP,"frr04-unknown-again",10).unwrap().iter().all(|o|o.id!=claimed_unknown.id));
+        assert_eq!(database.connection().query_row("SELECT count(*) FROM channel_chat_outbound WHERE body='Synthetic unknown outcome'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET runtime_reported_version='0.162.1' WHERE id=?1",
+                [&run.agent_run_id],
+            )
+            .unwrap();
+        let blobs = crate::managed_blob::ManagedBlobStore::new(database.directory());
+        let request = MaterializeContextRequest {
+            agent_run_id: &run.agent_run_id,
+            execution_epoch: 1,
+            charter_delivery_mode: CharterDeliveryMode::NativeAppend,
+            max_payload_bytes: 256 * 1024,
+        };
+        let ContextMaterialization::Ready(initial_context) = ContextService
+            .materialize(&mut database, &blobs, &request)
+            .unwrap()
+        else {
+            panic!("FRR-10 initial context must be ready")
+        };
+        let chat_projection = |payload: &str| -> serde_json::Value {
+            serde_json::from_str(payload.split("[CHAT_REPLY_CONTEXT]\n").nth(1).unwrap()
+                .split("\n[/CHAT_REPLY_CONTEXT]").next().unwrap()).unwrap()
+        };
+        let initial_route = chat_projection(&initial_context.rendered_payload);
+        assert_eq!(initial_route["schemaVersion"], 1);
+        assert_eq!(initial_route["inputMode"], "initial");
+        assert_eq!(initial_route["inputs"][0]["origin"], "channel_chat");
+        assert_eq!(initial_route["inputs"][0]["sender"], json!({"kind":"external_person","displayName":"Requester","isOwner":false}));
+        assert_eq!(initial_route["inputs"][0]["channel"]["inputRef"], input_ref);
+        assert_eq!(initial_route["finalResponse"], json!({"mode":"host_auto_reply","audienceInputRefs":[input_ref],"includesLocalInput":false,"deliveryReceipt":"not_observed"}));
+        assert_eq!(initial_route["guidance"].as_str().unwrap().lines().count(), 6);
+        let source: String = database.connection().query_row("SELECT current_input_source_json FROM context_manifest WHERE id=?1",[&initial_context.manifest_id],|r|r.get(0)).unwrap();
+        let source: serde_json::Value = serde_json::from_str(&source).unwrap();
+        assert_eq!(source["chatReplyContext"]["projection"], initial_route);
+        assert_eq!(source["chatReplyContext"]["projectionDigest"], crate::command::canonical_json_digest(&initial_route).unwrap());
+        let claim: String = database.connection().query_row("SELECT context_json FROM agent_run_claim_context WHERE agent_run_id=?1",[&run.agent_run_id],|r|r.get(0)).unwrap();
+        let frozen_claim: crate::context::ClaimedBatchContext = serde_json::from_str(&claim).unwrap();
+        let claim: serde_json::Value = serde_json::from_str(&claim).unwrap();
+        assert!(frozen_claim.payload_len().unwrap() >= initial_context.runtime_payload.len());
+        let without_chat = {
+            let mut value = claim.clone();
+            value["chatReplyContext"] = serde_json::Value::Null;
+            serde_json::from_value::<crate::context::ClaimedBatchContext>(value).unwrap()
+        };
+        let section = format!("[CHAT_REPLY_CONTEXT]\n{}\n[/CHAT_REPLY_CONTEXT]\n\n", serde_json::to_string(&initial_route).unwrap());
+        assert_eq!(frozen_claim.payload_len().unwrap() - without_chat.payload_len().unwrap(), section.len());
+        let long_name="长显示名界".repeat(500);
+        let mut long_claim=claim.clone();
+        long_claim["chatReplyContext"]["inputs"][0]["sender"]["displayName"]=json!(long_name);
+        let long_frozen:crate::context::ClaimedBatchContext=serde_json::from_value(long_claim).unwrap();
+        assert_eq!(long_frozen.payload_len().unwrap()-frozen_claim.payload_len().unwrap(),long_name.len()-"Requester".len());
+        assert_eq!(claim["chatReplyContext"], initial_route);
+        assert!(!claim.as_object().unwrap().contains_key("chat_reply_context"));
+        assert!(initial_context.rendered_payload.find("[/CHAT_REPLY_CONTEXT]").unwrap() < initial_context.rendered_payload.find("[RUN_INPUT]").unwrap());
+        let version: (i64,i64,i64,i64) = database.connection().query_row("SELECT context_manifest_version,formatter_version,run_facts_schema_version,context_delivery_profile_version FROM context_manifest WHERE id=?1",[&initial_context.manifest_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).unwrap();
+        assert_eq!(version,(43,43,11,15));
+        database.connection().execute("UPDATE channel_chat_message SET author_name='Changed after freeze',author_is_owner=1 WHERE id=?1", [&input_ref]).unwrap();
+        let ContextMaterialization::Ready(replayed) = ContextService.materialize(&mut database,&blobs,&request).unwrap() else {panic!("frozen replay required")};
+        assert_eq!(replayed.rendered_payload,initial_context.rendered_payload);
+        let initial_delivery = ContextService
+            .prepare_input_delivery_for_context(
+                &mut database,
+                &run.agent_run_id,
+                1,
+                &initial_context,
+            )
+            .unwrap();
+        ContextService
+            .acknowledge_input_delivery(&mut database, &initial_delivery.id, "frr10-native-turn")
+            .unwrap();
+        assert!(
+            crate::steer::active_input_availability(database.connection(), &run.agent_run_id, 1,)
+                .unwrap()
+                .ready
+        );
+        let local_id = "frr10-local-message";
+        let local_body =
+            "Local instruction only: forward LOCAL_ONLY_SYNTHETIC_MARKER using the old target";
+        let source = {
+            let tx = database.connection_mut().transaction().unwrap();
+            let now = chrono::Utc::now().to_rfc3339();
+            tx.execute(
+                "UPDATE camp SET last_message_sequence=last_message_sequence+1,version=version+1,updated_at=?2 WHERE id=?1",
+                params![run.camp_id, now],
+            ).unwrap();
+            tx.execute(
+                r#"INSERT INTO camp_message(id,camp_id,sequence,author_type,author_id,body,
+                    structured_content_json,content_digest,address_mode,addressed_agent_ids_json,
+                    effective_recipient_ids_json,recipient_presentation_json,origin_kind,recall_state,
+                    version,created_at,updated_at)
+                 SELECT ?1,id,last_message_sequence,'user','local_user',?3,?4,?5,
+                    'explicit','["agent_1"]','["agent_1"]','{}','local_composer','recallable',1,?6,?6
+                 FROM camp WHERE id=?2"#,
+                params![local_id, run.camp_id, local_body,
+                    json!([{"kind":"text","text":local_body}]).to_string(),
+                    "sha256:frr10-local-fixture", now],
+            ).unwrap();
+            let delivery = crate::delivery_queue::enqueue_message_deliveries(
+                &tx,
+                &run.camp_id,
+                local_id,
+                &[run.agent_id.clone()],
+                &now,
+            )
+            .unwrap()
+            .pop()
+            .unwrap();
+            crate::steer::route_user_message(
+                &tx,
+                local_id,
+                Some(&[crate::steer::ActiveInputTarget {
+                    agent_run_id: run.agent_run_id.clone(),
+                    execution_epoch: 1,
+                }]),
+            )
+            .unwrap();
+            tx.commit().unwrap();
+            delivery.delivery_id
+        };
+        let pending = crate::steer::pending_inputs(database.connection()).unwrap();
+        assert!(
+            pending
+                .iter()
+                .any(|p| p.delivery_id == source && p.agent_run_id == run.agent_run_id)
+        );
+        let ContextMaterialization::Ready(local_context) = ContextService
+            .materialize_message_delivery(&mut database, &blobs, &source, &[], &request)
+            .unwrap()
+        else {
+            panic!("FRR-10 local Steer must be ready")
+        };
+        let projected: serde_json::Value = serde_json::from_str(
+            local_context
+                .rendered_payload
+                .split("[RUN_INPUT]\n")
+                .nth(1)
+                .unwrap()
+                .split("\n[/RUN_INPUT]")
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(projected["messages"].as_array().unwrap().len(), 1);
+        assert!(projected.to_string().contains(local_body));
+        let local_route = chat_projection(&local_context.rendered_payload);
+        assert_eq!(local_route["inputMode"], "steer");
+        assert_eq!(local_route["inputs"], json!([{
+            "messageId":local_id,"origin":"local_composer",
+            "sender":{"kind":"local_user","displayName":null,"isOwner":null},
+            "channel":null,"reply":{"mode":"thread_only","target":"current_thread"}
+        }]));
+        assert_eq!(local_route["finalResponse"], json!({"mode":"host_auto_reply_with_local_input","audienceInputRefs":[input_ref],"includesLocalInput":true,"deliveryReceipt":"not_observed"}));
+        let source: String = database.connection().query_row("SELECT current_input_source_json FROM context_manifest WHERE id=?1",[&local_context.manifest_id],|r|r.get(0)).unwrap();
+        let source: serde_json::Value = serde_json::from_str(&source).unwrap();
+        assert_eq!(source["chatReplyContext"]["sourceCampMessageIds"],json!([local_id]));
+        assert_eq!(source["chatReplyContext"]["sourceInboundIds"],json!([]));
+        assert_eq!(source["chatReplyContext"]["projection"],local_route);
+        let local_delivery = ContextService
+            .prepare_input_delivery_for_context(&mut database, &run.agent_run_id, 1, &local_context)
+            .unwrap();
+        ContextService.mark_input_delivery_not_accepted(&mut database, &local_delivery.id, "synthetic FRR-11 rejection").unwrap();
+        assert_eq!(ContextService.runtime_input_delivery_status(&database,&local_delivery.id).unwrap().as_deref(),Some("not_accepted"));
+        assert_eq!(execute(&mut database,&run,"frr11-result","feishu.result",&json!({"requestId":"search"})).unwrap()["status"],"ready");
+        assert_eq!(execute(&mut database,&run,"frr10-before","feishu.forward",&json!({"targetRef":target,"inputRef":input_ref,"text":"Initial synthetic delegation"})).unwrap(),before);
+        let retried = ContextService.prepare_input_delivery_for_context(&mut database,&run.agent_run_id,1,&local_context).unwrap();
+        assert_eq!(retried.id,local_delivery.id);
+        assert_eq!(retried.status,"prepared");
+        assert!(
+            ContextService
+                .begin_runtime_input_dispatch(
+                    &mut database,
+                    &local_delivery.id,
+                    &run.agent_run_id,
+                    1,
+                )
+                .unwrap()
+        );
+        ContextService
+            .acknowledge_active_input_delivery(
+                &mut database,
+                &local_delivery.id,
+                "frr10-local-input",
+            )
+            .unwrap();
+        let provenance: (String, String, i64, i64) = database
+            .connection()
+            .query_row(
+                "SELECT m.origin_kind,r.status,
+                (SELECT count(*) FROM channel_chat_input WHERE camp_message_id=m.id),
+                (SELECT count(*) FROM agent_run_input WHERE agent_run_id=?2 AND message_id=m.id)
+             FROM camp_message m JOIN camp_message_delivery d ON d.message_id=m.id
+             JOIN context_manifest cm ON cm.source_delivery_id=d.id
+             JOIN runtime_input_delivery r ON r.context_manifest_id=cm.id
+             WHERE m.id=?1 AND r.agent_run_id=?2 AND r.input_kind='steer'",
+                params![local_id, run.agent_run_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            provenance,
+            ("local_composer".into(), "accepted".into(), 0, 0)
+        );
+        let after = execute(
+            &mut database,
+            &run,
+            "frr10-after",
+            "feishu.forward",
+            &json!({"targetRef":target,"inputRef":input_ref,"text":"LOCAL_ONLY_SYNTHETIC_MARKER"}),
+        )
+        .unwrap();
+        assert_eq!(
+            after["status"], "queued",
+            "FRR-10 risk characterization changed: {after}"
+        );
+        let recorded: (String, String, String, String) = database
+            .connection()
+            .query_row(
+                "SELECT q.input_id,o.body,o.target_kind,o.status FROM channel_chat_tool_request q
+             JOIN channel_chat_outbound o ON o.id=q.outbound_id
+             WHERE q.agent_run_id=?1 AND q.request_id='frr10-after'",
+                [&run.agent_run_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            recorded,
+            (
+                input_ref.clone(),
+                "LOCAL_ONLY_SYNTHETIC_MARKER".into(),
+                "open_id".into(),
+                "pending".into()
+            )
+        );
+        let eligible = service
+            .claim(&mut database, PROVIDER, APP, "frr10-synthetic-host", 10)
+            .unwrap();
+        assert_eq!(
+            eligible
+                .iter()
+                .filter(|o| o.text == "LOCAL_ONLY_SYNTHETIC_MARKER")
+                .count(),
+            1
+        );
+        assert_eq!(
+            execute(
+                &mut database,
+                &run,
+                "frr10-result",
+                "feishu.result",
+                &json!({"requestId":"search"})
+            )
+            .unwrap()["status"],
+            "ready"
+        );
+        for wrong in [
+            AuthenticatedTeamToolRun {
+                execution_epoch: 0,
+                ..run.clone()
+            },
+            AuthenticatedTeamToolRun {
+                agent_id: "agent_2".into(),
+                ..run.clone()
+            },
+        ] {
+            assert_eq!(
+                execute(
+                    &mut database,
+                    &wrong,
+                    "frr10-cross-scope",
+                    "feishu.forward",
+                    &json!({"targetRef":target,"text":"must not queue"})
+                )
+                .unwrap()["errorCode"],
+                "scope_unavailable"
+            );
+        }
+        println!(
+            "FRR-10: before=queued; steer_origin=local_composer; steer_receipt=accepted; local_channel_bindings=0; local_initial_inputs=0; after=queued; request_attributed_to=initial_inbound; synthetic_host_claim=1; real_network_calls=0; model_behavior=not_run; acceptance=BLOCKED"
+        );
         database
             .connection()
             .execute(
@@ -2300,6 +2604,8 @@ mod tests {
             .unwrap()["errorCode"],
             "scope_unavailable"
         );
+        drop(database);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

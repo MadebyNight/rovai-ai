@@ -2006,3 +2006,8 @@ _Avoid_: stable process credential, Native Session identity, model-supplied Agen
 **Built-in Tool Execution Authority Boundary**:
 The accepted Shell-transport boundary in which a valid invocation from the current Runtime process or any subprocess it launches is attributed to the same AgentRun and Member. Core can prove the active lease and enforce domain rules but cannot reliably prove whether the model typed the invocation directly or project code triggered it indirectly; every accepted invocation remains independently audited and the authority ends when the lease is fenced.
 _Avoid_: model-intent attestation, separately trusted project subprocess, parent-process heuristic, post-Run authority
+
+
+**Chat Reply Context**:
+The per-input Host projection immediately preceding RUN_INPUT in a chat-Bot public Thread. It separates immutable channel senders from local Composer additions and explains the final Run's channel audience without granting delegated-tool authority or claiming delivery. Its exact frozen projection and digest belong to [ContextManifest43](docs/contracts/context-manifest-evidence-v43.md); an initial channel-bound Run can still return its final answer externally after a local Steer.
+_Avoid_: authorization token, per-call delegation guarantee, sent receipt, local-private reply channel

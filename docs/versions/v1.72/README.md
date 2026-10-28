@@ -990,3 +990,10 @@ Preview 的平台、CLI 子集、Skills/MCP 和并发资格边界不变。
 模型上下文变更。当前规范为 [Transport v43](../../contracts/builtin-tool-transport-v43.md)与
 [File Change v9](../../contracts/runtime-file-change-observation-v9.md)，验证见[实施计划](implementation-plan.md#send-输入文件退出文件变化卡片2026-10-19)。
 本项为可逆的局部投影规则，不新增 Version Decision；同步当前合同、架构、UI 与导航，Runtime 原生映射和根 README 无需变化。
+
+
+## 飞书回复来源与普通自动回复（2026-10-28）
+
+按已确认 [revision3](model-context-change-feishu-reply-routing.md) 实施逐输入CHAT_REPLY_CONTEXT、六段guidance及Manifest冻结。public43/Facts11/Profile15、迁移213/schema159保留旧40输入与Blob；non-batch42/13/16、Bootstrap、Transport44、Host出站及Runtime权限不变。实现与确定性证据已推进，真实模型专项及固定Judge通用Gate尚未完整通过，不宣称误拒答已修复。
+
+本项九范围复核：Version lifecycle保持v1.72；Decisions新增 [D53](decisions.md#v1-72-d53) 记录不冻结工具及已知来源限制；Contracts新增 [Manifest43](../../contracts/context-manifest-evidence-v43.md) 与 [聊天Bot v3](../../contracts/feishu-chat-bot-v3.md) 并同步Profile15；Architecture与CONTEXT说明逐输入来源/整轮受众；Documentation routing更新当前入口。UI、Runtime Activity、Runtime compatibility及Root README均无需变更：不增加界面、事件、平台资格或未经验证的支持声明。

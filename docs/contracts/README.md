@@ -17,7 +17,7 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 - [Durable Task v6](durable-task-v6.md)
 - [Built-in Tool Transport v44](builtin-tool-transport-v44.md)：当前聊天 Run 范围的飞书查询与沟通工具；继承 [v43](builtin-tool-transport-v43.md) 的 Send 输入来源及 [v42](builtin-tool-transport-v42.md) 的 Task 发现边界。
-- [ContextManifest Evidence v40 / v42](context-manifest-evidence-v42.md)
+- [ContextManifest Evidence v43 / v42](context-manifest-evidence-v43.md)
 - [Context Delivery Profile v15 / v16](context-delivery-profile-v15.md)
 - [Run Facts v10](run-facts-v10.md)
 - [Camp Message Send v28](camp-message-send-v28.md)
@@ -31,7 +31,7 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 
 ## 飞书聊天 Bot
 
-- [Feishu Chat Bot v2（当前）](feishu-chat-bot-v2.md)：成员级开关决定聊天 Bot；回复由该队员自己的 ACP Runtime 在其资料文件夹内执行，出站只发纯文本；[v1（历史）](feishu-chat-bot-v1.md) 保留模式说明与出站语义。
+- [Feishu Chat Bot v3（当前）](feishu-chat-bot-v3.md)：成员级开关决定聊天 Bot；回复由该队员自己的 ACP Runtime 在其资料文件夹内执行，出站只发纯文本；[v1（历史）](feishu-chat-bot-v1.md) 保留模式说明与出站语义。
 
 ## 用户主动继续
 
@@ -597,7 +597,7 @@ Architecture 解释组件如何组成，Version 概览记录交付范围；它�
 | [Skills Rebuild v1（历史）](skills-rebuild-v1.md) | 受管平台/工具箱、队员配置、原生发现、Selection/Resolution v2、动态索引与旧来源恢复 |
 | [Run Input Skill Links v2（历史）](current-input-skill-links-v2.md) | 旧 Library/Exposure 的 Structured Skill Mention 与 per-message `RUN_INPUT.messages[].skills` |
 | [Current Input Skill Links v1（历史）](current-input-skill-links-v1.md) | Direct Run send-time snapshot 与 optional sibling `CURRENT_INPUT.skills[{name,path}]` |
-| [ContextManifest Evidence v42（当前）](context-manifest-evidence-v42.md) | non-batch 42 / Facts 13 / Profile 16；public 40 / Facts 11 / Profile 15；旧冻结输入原字节恢复 |
+| [ContextManifest Evidence v43（当前）](context-manifest-evidence-v43.md) | non-batch 42 / Facts 13 / Profile 16；public 43 / Facts 11 / Profile 15；旧冻结输入原字节恢复 |
 | [Run Facts v10（当前）](run-facts-v10.md) | 新单聊仅保留附件输出根与按条件出现的 external effect；不投递固定 singleChat 对象 |
 | [ContextManifest Evidence v31（历史 public Camp）](context-manifest-evidence-v31.md) | 公开 31/10/8、Charter revision 14；claim 冻结额外可见消息判断，保留 Skills 与旧 30/29 有界恢复 |
 | [ContextManifest Evidence v30（历史 public Camp）](context-manifest-evidence-v30.md) | 主线公开 30/10/7 与非 batch 27/7/5，冻结完整工具箱 section；旧 v29/v26 有界恢复 |

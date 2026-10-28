@@ -3676,3 +3676,10 @@ User 在本轮确认按实际 Send 输入路径过滤，并授权独立 worktree
 `pnpm test`（Vitest 2,798 passed；组合脚本 357 passed、2 项平台相关 skip）及文档治理门禁。
 新增断言在首次验证时修正了 snapshot／operation 输出顺序假设及 macOS 临时目录 cwd 别名，未改变生产
 路径身份规则。未启动真实 Runtime、模型或 Renderer；本项不宣称真实 Session 或 UI 点击验收。
+
+
+## 飞书回复revision3实施与未完成验收（2026-10-28）
+
+已实现 [确认稿revision3](model-context-change-feishu-reply-routing.md) 的逐输入来源、完整guidance、预算/Manifest冻结与public43/迁移213/schema159；Transport44、Profile15、Bootstrap、Runtime权限和Host发送保持。完整实际命令、摘要、模型证据及FRR-01..14覆盖见 [验证报告](feishu-reply-routing-validation.md)。
+
+最终定向准入、历史保留、拒收、预算与聊天owner已验证；真实模型普通交流/内部保护/桌面补充/受托转发及多输入等路径有两侧证据，旧40真实输入升级/重启保持12份输入摘要且0模型重跑。整体验收仍未通过：原通用Gate insufficient、24slot not_run，固定Judge缺失，FRR-11拒收由投递层验证、FRR-13近预算已实测，但通用模型执行仍未齐；不宣称原误拒答修复，不重开Gate或改写失败。
