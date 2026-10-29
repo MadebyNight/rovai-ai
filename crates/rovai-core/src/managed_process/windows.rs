@@ -91,6 +91,8 @@ pub(super) struct WindowsManagedProcess {
     stdout: Option<ManagedChildStdout>,
     stderr: Option<ManagedChildStderr>,
     exit_code: Option<u32>,
+    pub(super) account_filesystem: Option<account::AccountFilesystem>,
+    pub(super) account_authority: Option<account::AccountProcessAuthority>,
 }
 
 impl WindowsManagedProcess {
@@ -247,6 +249,8 @@ impl WindowsManagedProcess {
             stdout: Some(tokio_file(parent_stdout)),
             stderr: Some(tokio_file(parent_stderr)),
             exit_code: None,
+            account_filesystem: None,
+            account_authority: None,
         })
     }
 

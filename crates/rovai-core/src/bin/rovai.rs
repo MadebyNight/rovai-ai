@@ -35,7 +35,7 @@ use rovai_core::member_avatar::{
 use rovai_core::platform::local_ipc::LocalIpcClientStream;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 
 #[path = "rovai/app_cli.rs"]
@@ -115,13 +115,13 @@ async fn run() -> Result<u8> {
         );
         return Ok(0);
     }
-    let tasks_enabled = discover_tasks_enabled();
+    let tasks_enabled = discover_tasks_enabled().await;
     if args.first().is_some_and(|value| value == "task") && !tasks_enabled {
         println!("{}", rovai_core::task_capability::unavailable_result());
         return Ok(2);
     }
     if args.as_slice() == ["--help"] || args.is_empty() {
-        print_root_help();
+        print_root_help(tasks_enabled);
         return Ok(0);
     }
     if args.as_slice() == ["task", "--help"] {
@@ -174,7 +174,7 @@ async fn run() -> Result<u8> {
         }
         _ => bail!("invalid Rovai command; run `rovai --help`"),
     };
-    let context = load_context()?;
+    let context = load_context().await?;
     let auth = context.auth()?;
     let request_id = if operation == "member.update" {
         input["requestId"]
@@ -259,9 +259,11 @@ async fn run_compaction_hook(args: &[String]) -> Result<()> {
     let context_path = env::var_os(ROVAI_CLI_CONTEXT_ENV)
         .map(PathBuf::from)
         .context("ROVAI_CLI_CONTEXT is not set")?;
-    let context = load_context()?;
-    let (process_id, process_token) = context.process_auth()?;
-    let display_auth = context.auth().ok();
+    let early_context=if env::var_os("ROVAI_ACCOUNT_BUILTIN").is_some(){None}else{Some(load_context().await?)};
+    let relay_process_id=if let Some(locator)=env::var_os("ROVAI_ACCOUNT_BUILTIN") {
+        let locator:Value=serde_json::from_str(&locator.to_string_lossy())?;
+        locator["processId"].as_str().context("account Hook process locator unavailable")?.to_string()
+    }else{early_context.as_ref().unwrap().process_auth()?.0};
     let mut hook_input = String::new();
     std::io::stdin()
         .read_to_string(&mut hook_input)
@@ -326,41 +328,24 @@ async fn run_compaction_hook(args: &[String]) -> Result<()> {
     }))?;
     let request_id = Uuid::new_v4().to_string();
     let observed_at = chrono::Utc::now().to_rfc3339();
-    let request = CompactionHookIpcRequest {
-        kind: COMPACTION_OBSERVATION_IPC_KIND.to_string(),
-        ipc_protocol_version: COMPACTION_HOOK_IPC_PROTOCOL_VERSION,
-        process_id,
-        process_token,
-        request_id: request_id.clone(),
-        adapter_kind: adapter_kind.clone(),
-        host_instance_id: host_instance_id.clone(),
-        native_session_id,
-        hook_event_name,
-        trigger,
-        source_event_digest,
-        display_auth,
-        summary_text,
+    let outbox_record=CompactionObservationOutboxRecord {
+        schema_version:COMPACTION_OBSERVATION_OUTBOX_SCHEMA_VERSION,request_id:request_id.clone(),adapter_kind:adapter_kind.clone(),host_instance_id:host_instance_id.clone(),relay_process_id,native_session_id:native_session_id.clone(),hook_event_name:hook_event_name.clone(),trigger:trigger.clone(),source_event_digest:source_event_digest.clone(),observed_at,
     };
-    let outbox_record = CompactionObservationOutboxRecord {
-        schema_version: COMPACTION_OBSERVATION_OUTBOX_SCHEMA_VERSION,
-        request_id,
-        adapter_kind: request.adapter_kind.clone(),
-        host_instance_id: request.host_instance_id.clone(),
-        relay_process_id: request.process_id.clone(),
-        native_session_id: request.native_session_id.clone(),
-        hook_event_name: request.hook_event_name.clone(),
-        trigger: request.trigger.clone(),
-        source_event_digest: request.source_event_digest.clone(),
-        observed_at,
+    let staged_observation=stage_compaction_observation(&context_path,&outbox_record)?;
+    let context=match early_context {Some(context)=>context,None=>load_context().await?};
+    let (process_id,process_token)=context.process_auth()?;
+    let display_auth=context.auth().ok();
+    let request=CompactionHookIpcRequest {
+        kind:COMPACTION_OBSERVATION_IPC_KIND.into(),ipc_protocol_version:COMPACTION_HOOK_IPC_PROTOCOL_VERSION,process_id,process_token,request_id,adapter_kind:adapter_kind.clone(),host_instance_id:host_instance_id.clone(),native_session_id,hook_event_name,trigger,source_event_digest,display_auth,summary_text,
     };
-    let staged_observation = stage_compaction_observation(&context_path, &outbox_record)?;
     let mut last_error = None;
     for attempt in 0..COMPACTION_HOOK_ATTEMPTS {
         match send_compaction_hook(&context.core_endpoint, &request).await {
-            Ok(_response) => {
+            Ok(response) if response.accepted => {
                 let _ = fs::remove_file(&staged_observation);
                 return Ok(());
             }
+            Ok(_) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
         if attempt + 1 < COMPACTION_HOOK_ATTEMPTS {
@@ -378,7 +363,11 @@ fn stage_compaction_observation(
     let process_root = context_path
         .parent()
         .context("Built-in Tool context has no process root")?;
-    let outbox = process_root.join("compaction-observation-outbox");
+    let outbox = if env::var_os("ROVAI_ACCOUNT_BUILTIN").is_some() {
+        let path=env::var_os("ROVAI_ACCOUNT_COMPACTION_OUTBOX").map(PathBuf::from).context("account compaction outbox is not configured")?;
+        anyhow::ensure!(path.is_absolute(),"account compaction outbox must be absolute");
+        path
+    } else {process_root.join("compaction-observation-outbox")};
     fs::create_dir_all(&outbox).with_context(|| {
         format!(
             "failed to create compaction observation outbox {}",
@@ -494,8 +483,8 @@ fn is_family_help(args: &[String]) -> bool {
     matches!(args, [family, help] if help == "--help" && matches!(family.as_str(), "member" | "thread" | "camp" | "history" | "memory" | "single-chat" | "automation" | "mission" | "feishu"))
 }
 
-fn discover_tasks_enabled() -> bool {
-    load_context().is_ok_and(|context| {
+async fn discover_tasks_enabled() -> bool {
+    load_context().await.is_ok_and(|context| {
         context.contract_version == BUILTIN_TOOL_CONTRACT_VERSION
             && context.ipc_protocol_version == BUILTIN_TOOL_IPC_PROTOCOL_VERSION
             && context.lease.is_some()
@@ -503,7 +492,36 @@ fn discover_tasks_enabled() -> bool {
     })
 }
 
-fn load_context() -> Result<BuiltinToolCliContext> {
+async fn load_context() -> Result<BuiltinToolCliContext> {
+    #[cfg(windows)]
+    if let Some(locator) = env::var_os("ROVAI_ACCOUNT_BUILTIN") {
+        let locator: Value = serde_json::from_str(&locator.to_string_lossy())?;
+        let endpoint: LocalIpcEndpoint = serde_json::from_value(locator["endpoint"].clone())?;
+        return tokio::time::timeout(CORE_TIMEOUT, async {
+            let mut stream = LocalIpcClientStream::connect(&endpoint).await?;
+            let request = json!({"kind":"account_context", "processId":locator["processId"]});
+            stream
+                .write_all(serde_json::to_string(&request)?.as_bytes())
+                .await?;
+            stream.write_all(b"\n").await?;
+            let mut frame = Vec::new();
+            BufReader::new(stream.take(1024 * 1024 + 1))
+                .read_until(b'\n', &mut frame)
+                .await?;
+            anyhow::ensure!(
+                frame.len() <= 1024 * 1024 && frame.last() == Some(&b'\n'),
+                "account context invalid"
+            );
+            let context: BuiltinToolCliContext = serde_json::from_slice(&frame)?;
+            anyhow::ensure!(
+                context.process_id == locator["processId"].as_str().unwrap_or(""),
+                "account context identity mismatch"
+            );
+            Ok(context)
+        })
+        .await
+        .context("account context unavailable")?;
+    }
     let path = env::var_os(ROVAI_CLI_CONTEXT_ENV)
         .map(std::path::PathBuf::from)
         .context("ROVAI_CLI_CONTEXT is not set")?;
@@ -1552,12 +1570,12 @@ enum BuiltinToolIpcFailure {
     OutcomeIndeterminate,
 }
 
-fn print_root_help() {
+fn print_root_help(tasks_enabled: bool) {
     print!(
         "{}",
         root_help_text(
             !user_automation_available_in_current_process(),
-            discover_tasks_enabled()
+            tasks_enabled
         )
     );
 }

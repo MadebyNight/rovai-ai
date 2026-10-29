@@ -25,6 +25,10 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 #[path = "managed_process/account.rs"]
 mod account;
 pub use account::WindowsAccountLaunch;
+#[cfg(windows)]
+pub use windows::account::AccountFilesystem;
+#[cfg(windows)]
+pub(crate) use windows::account::AccountProcessAuthority;
 
 #[cfg(windows)]
 #[path = "managed_process/windows.rs"]
@@ -74,7 +78,7 @@ pub enum ManagedWindowsArgvDialect {
 }
 
 #[cfg(windows)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum WindowsRuntimeEntrypoint {
     NativeExecutable {
         executable: PathBuf,
@@ -293,7 +297,7 @@ impl ManagedProcessLaunchSpec {
             bail!("managed_process.account_unsupported: windows_account requires Windows");
         }
         if let Some(account) = &account {
-            self.environment = account.environment(&self);
+            self.environment = account.environment(&self)?;
         }
         self.windows_account = account;
         Ok(self)
@@ -643,6 +647,16 @@ impl ManagedProcess {
     #[cfg(windows)]
     pub(crate) fn windows_process_start_identity(pid: u32) -> Option<u64> {
         windows::process_start_identity(pid)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn account_authority(&self) -> Option<AccountProcessAuthority> {
+        self.child.account_authority.clone()
+    }
+
+    #[cfg(windows)]
+    pub fn account_filesystem(&self) -> Option<AccountFilesystem> {
+        self.child.account_filesystem.clone()
     }
 
     pub fn take_stdin(&mut self) -> Option<ManagedChildStdin> {
@@ -1000,6 +1014,23 @@ mod tests {
             }
             .validate()
             .unwrap();
+        }
+        let mut workspace = crate::runtime::AgentRunWorkspace::runtime_managed_path(
+            std::env::current_dir().unwrap().to_string_lossy().into(),
+        );
+        for adapter in [
+            "codebuddy-cli",
+            "opencode-cli",
+            "claude-code-cli",
+            "codex-cli",
+        ] {
+            workspace.apply_chat_isolation(adapter, Some("windows_account"));
+            assert_eq!(workspace.isolation, "windows_account");
+            workspace.isolation = "shared".into();
+        }
+        for adapter in ["qwen-code", "pi", "grok-build"] {
+            workspace.apply_chat_isolation(adapter, Some("windows_account"));
+            assert_eq!(workspace.isolation, "shared");
         }
         assert!(WindowsAccountLaunch::for_isolation("invalid").is_err());
         let cwd = std::env::current_dir().unwrap();

@@ -61,7 +61,7 @@ impl WindowsAccountLaunch {
     pub(super) fn environment(
         &self,
         spec: &super::ManagedProcessLaunchSpec,
-    ) -> std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString> {
+    ) -> Result<std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>> {
         // Keep the existing frozen Runtime/provider environment authoritative.
         // This mode changes process identity and filesystem homes, not provider
         // authentication; get_envs is not an origin/secret-classification API.
@@ -76,6 +76,11 @@ impl WindowsAccountLaunch {
             ("TMPDIR", "tmp"),
             ("CLAUDE_CODE_TMPDIR", "tmp"),
             ("CODEX_HOME", ".codex"),
+            ("CODEBUDDY_CONFIG_DIR", ".codebuddy"),
+            ("PI_CODING_AGENT_DIR", ".pi/agent"),
+            ("GROK_HOME", ".grok"),
+            ("QWEN_HOME", ".qwen"),
+            ("QWEN_RUNTIME_DIR", ".qwen"),
             ("CLAUDE_CONFIG_DIR", ".claude"),
             ("CLAUDE_SECURESTORAGE_CONFIG_DIR", ".claude"),
             ("XDG_CONFIG_HOME", ".config"),
@@ -89,10 +94,36 @@ impl WindowsAccountLaunch {
                 self.profile_root.join(relative).into_os_string(),
             );
         }
+        for key in [
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_DIR",
+            "OPENCODE_DB",
+            "NODE_OPTIONS",
+            "NODE_PATH",
+        ] {
+            super::remove_environment(&mut result, key.as_ref());
+        }
+        #[cfg(windows)]
+        if let Some(root) = super::environment_value(&result, "SystemRoot".as_ref()) {
+            let root = PathBuf::from(root);
+            let mut modules = vec![root.join("System32/WindowsPowerShell/v1.0/Modules")];
+            if let Some(program_files) = super::environment_value(&result, "ProgramFiles".as_ref())
+            {
+                modules.push(PathBuf::from(program_files).join("WindowsPowerShell/Modules"));
+            }
+            if let Ok(value) = std::env::join_paths(modules) {
+                super::insert_environment(&mut result, "PSModulePath".into(), value);
+            }
+        }
+        if let Some(process)=super::environment_value(&result,"ROVAI_ACCOUNT_PROCESS_ID".as_ref()).map(ToOwned::to_owned) {
+            let instance=super::environment_value(&result,"ROVAI_ACCOUNT_INSTANCE_KEY".as_ref()).context("managed_process.account_instance_required: account process requires an explicit instance key")?;
+            let outbox=self.profile_root.join("rovai-runtime-outbox").join(instance).join("builtin-tools").join(process).join("compaction-observation-outbox");
+            super::insert_environment(&mut result,"ROVAI_ACCOUNT_COMPACTION_OUTBOX".into(),outbox.into_os_string());
+        }
         // This is deployment configuration, not a child credential transport.
         super::remove_environment(&mut result, "ROVAI_WINDOWS_ACCOUNT_CONFIG".as_ref());
         super::remove_environment(&mut result, "ROVAI_CHAT_ISOLATION".as_ref());
-        result
+        Ok(result)
     }
 }
 
@@ -105,7 +136,11 @@ mod tests {
         let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
         command
             .env("ANTHROPIC_API_KEY", "test-not-a-real-key")
-            .env("HOME", "wrong-home");
+            .env("HOME", "wrong-home")
+            .env("CODEBUDDY_CONFIG_DIR", "host-private-codebuddy")
+            .env("QWEN_HOME", "host-private-qwen")
+            .env("OPENCODE_CONFIG", "host-private-opencode")
+            .env("OPENCODE_DB", "host-private-history");
         let spec = super::super::ManagedProcessLaunchSpec::capture(
             &command,
             super::super::ManagedProcessPurpose::RuntimeHost,
@@ -120,7 +155,7 @@ mod tests {
             dpapi_path: root.join("not-a-credential"),
             profile_root: root.clone(),
         };
-        let environment = account.environment(&spec);
+        let environment = account.environment(&spec).unwrap();
         assert_eq!(
             super::super::environment_value(&environment, "HOME".as_ref()),
             Some(root.as_os_str())
@@ -133,6 +168,21 @@ mod tests {
             super::super::environment_value(&environment, "ROVAI_WINDOWS_ACCOUNT_CONFIG".as_ref())
                 .is_none()
         );
+        for (key, relative) in [
+            ("CODEBUDDY_CONFIG_DIR", ".codebuddy"),
+            ("PI_CODING_AGENT_DIR", ".pi/agent"),
+            ("GROK_HOME", ".grok"),
+            ("QWEN_HOME", ".qwen"),
+            ("QWEN_RUNTIME_DIR", ".qwen"),
+        ] {
+            assert_eq!(
+                super::super::environment_value(&environment, key.as_ref()),
+                Some(root.join(relative).as_os_str())
+            );
+        }
+        for key in ["OPENCODE_CONFIG", "OPENCODE_DB"] {
+            assert!(super::super::environment_value(&environment, key.as_ref()).is_none());
+        }
         assert_ne!(
             account.compatibility_digest().unwrap(),
             WindowsAccountLaunch {

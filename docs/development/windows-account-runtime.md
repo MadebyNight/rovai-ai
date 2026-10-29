@@ -1,7 +1,7 @@
 ---
 document_type: development-guide
 authority: windows-account-runtime-setup-and-validation
-last_updated: 2026-10-27
+last_updated: 2026-10-29
 ---
 
 # Windows 账户启动（实验接线）
@@ -26,9 +26,9 @@ Rovai 不自动创建账户、不重置密码、不修改文件 ACL、不提权�
 ```
 
 启动隔离开发实例前设置 `ROVAI_WINDOWS_ACCOUNT_CONFIG` 为上述 JSON 的绝对路径。
-显式设置 `ROVAI_CHAT_ISOLATION=windows_account` 使后续尚未冻结工作区的 Runtime-managed Claude/Codex Run 选择该档。
-它是进程部署级开关，不是新增 UI，也不只针对某个侧栏分组；其他 Adapter 不采用此开关。
-已冻结的 Run 继续使用原隔离档。调度命令也可显式指定 `workspace.isolation`；只有 Claude/Codex 原生 EXE 接入该档。
+显式设置 `ROVAI_CHAT_ISOLATION=windows_account` 使后续尚未冻结工作区的 Runtime-managed Claude/Codex/CodeBuddy/OpenCode Run 选择该档。
+它是进程部署级开关，不是新增 UI，也不只针对某个侧栏分组；其他 Adapter 不采用此开关，Qwen 本轮仅未找到安装、不是平台不支持。
+已冻结的 Run 继续使用原隔离档。调度命令也可显式指定 `workspace.isolation`；Claude/Codex/CodeBuddy/OpenCode 复用已捕获 native 或受控 cmd/bat 入口接入该档。
 移除开关恢复后续 Run 的原默认路径，不迁移旧 Session 或删除任一 profile。原冻结 Runtime/provider 环境保持不变，切换 Windows 账户不代表切换 provider 账号；
 没有承诺剥离宿主认证环境。输入文件经内存 base64 帧传输，总帧上限 16 MiB，超过上限会拒绝启动，不截断输入。
 
@@ -40,8 +40,7 @@ profileRoot 是显式部署目录，不是“自动找到沙箱账户 Home”。
 
 启用隔离档后，Claude/Codex 的配置、缓存和原生会话文件会写入你指定的沙箱资料目录，并非完全不写磁盘；
 宿主是否能读取它们由实际 Windows 目录权限决定，不能只看目录名称。Claude 启动时还会短暂使用 Rovai 的私有输入文件，
-异常强杀可能在沙箱临时目录留下副本。目前 Rovai 内置协作工具的 Windows 通道只接受宿主登录身份，
-隔离账户不能使用它；附件、Skill、工作目录和原生 CLI 登录也需要分别准备，不能沿用宿主私有目录。
+异常强杀可能在沙箱临时目录留下副本。账户 ACP Host 另有精确登录 SID + Job 的私有 Built-in 通道，宿主主通道不放宽；该通道的运输验收不等于真实 Core 业务资格。附件、Skill、工作目录和原生 CLI 登录仍须分别准备，不能沿用宿主私有目录；本地文件与头像 source 现由当前账户实际打开读取，私有目录由 OS 拒绝，纯文本不因此整体禁用。
 管理员只需在部署阶段准备专用非管理员账户和必要目录/程序访问权限，日常运行不要求提权；程序不会替你放宽这些权限。
 在真实聊天、续聊和停止验收通过前，这个档位只能视为实验性启动接线，不能说完整聊天 Bot 隔离已经上线。
 
@@ -78,3 +77,16 @@ cargo test -p rovai-core --lib existing_account_launch_uses_product_spawn --offl
 其修复前可失败输入包括非空 Windows OsString 环境 JSON map、64 KiB 文本输入和目标先关 stdin 再存活的大帧发送。
 ignored `account_helper_entry` 是确定性子进程入口，不代表跳过验收；真实登录 smoke必须有人工凭据，故独立且默认忽略。
 未删除、合并或永久禁用任何原 active test。最小命令均列于上文。
+
+
+## 本轮扩展状态与验证入口
+
+2026-10-29 的逐 Runtime 矩阵、失败与未验证项见[本轮验收记录](../research/windows-account-runtime-2026-10-29.md)。仍为实验性接线，不改变 Runtime Platform Admission。用户级 npm 安装路径被账户拒绝时，只准备已授权的独立纯程序树；不对整个宿主 Home/AppData 开放权限。模型配置可使用各 CLI 官方环境引用；真实 key 只原位读取并在内存环境继承，不写新秘密文件、argv、日志或报告。CodeBuddy 与 OpenCode 的认证不能互借。
+
+需要既有非管理员部署的定点 owner（均默认 ignored，不进入普通无凭据回归）：
+
+- existing_account_filesystem_uses_verified_token：合成假标记宿主正对照、账户允许读写、OS PermissionDenied/raw5、字节/DACL不变、Run/Host关闭后拒绝。
+- existing_account_builtin_bridge_is_job_scoped：真实产品 CLI、精确 Job、非法客户无上下文、合法合成业务 Envelope；不代表模型或实际成员查询成功。
+- account_product_acp_start_and_session：真实产品入口/版本、账户身份、首次/热/冷会话及原生完成；需显式绝对验收 root、CLI、独立 Skill Library/MCP fixture；强回答模式不能接受 refusal、timeout 或空回答。
+
+这些 owner 的进程/token/IPC seam 不能由纯函数替代；配置与 capture 继续扩展既有 owner，没有删除 active test。真实 Agent/外部模型必须显式标记，与合成拒绝 fixture 分开记录。构建、日志及纯程序测试部署仅在任务 target/，不使用日常 App/Core/SQLite。

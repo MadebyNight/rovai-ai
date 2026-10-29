@@ -131,8 +131,10 @@ impl AgentRunWorkspace {
     }
 
     pub fn apply_chat_isolation(&mut self, adapter_kind: &str, isolation: Option<&str>) {
-        if matches!(adapter_kind, "claude-code-cli" | "codex-cli")
-            && let Some(isolation) = isolation
+        if matches!(
+            adapter_kind,
+            "claude-code-cli" | "codex-cli" | "codebuddy-cli" | "opencode-cli"
+        ) && let Some(isolation) = isolation
         {
             self.isolation = isolation.to_string();
         }
@@ -1909,8 +1911,8 @@ impl ExecutionRuntimeService {
             let audit_now_text = chrono::Utc::now().to_rfc3339();
 
             if envelope.payload.workspace.as_ref().is_some_and(|workspace| workspace.isolation == "windows_account")
-                && (!cfg!(windows) || !matches!(run.effective_config["runtime"]["adapterKind"].as_str(), Some("claude-code-cli" | "codex-cli"))) {
-                return Ok(rejected("agent_run.isolation_unsupported", "windows_account requires a Windows Claude or Codex Runtime"));
+                && (!cfg!(windows) || !matches!(run.effective_config["runtime"]["adapterKind"].as_str(), Some("claude-code-cli" | "codex-cli" | "codebuddy-cli" | "opencode-cli"))) {
+                return Ok(rejected("agent_run.isolation_unsupported", "windows_account requires a Windows Claude, Codex, CodeBuddy or OpenCode Runtime"));
             }
             let frozen_workspace = match (&run.workspace, &envelope.payload.workspace) {
                 (Some(existing), Some(requested)) => {

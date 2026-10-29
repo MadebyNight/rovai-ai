@@ -55,7 +55,7 @@ use core_subsystems::{
 };
 use pi::{
     PiAgentRunRuntimeRequest, PiIncoming, PiPromptImage, PiRpcRuntimeAdapter, PiRuntime,
-    PreparedPiPromptImage, prepare_prompt_images,
+    PreparedPiPromptImage,
 };
 use rovai_core::{
     action::{
@@ -201,11 +201,11 @@ use rovai_core::{
     mcp_import::McpImportScanner,
     mcp_projection::{McpProjectionRequest, McpProjectionService, PreparedMcpProjection},
     member_studio::{
-        MEMBER_CREATE_TOOL_NAME, MemberCreateInput, MemberOperationError, create_member,
+        MEMBER_CREATE_TOOL_NAME, MemberCreateInput, MemberOperationError,
     },
     member_tool::{
         MEMBER_GET_TOOL_NAME, MEMBER_LIST_TOOL_NAME, MEMBER_UPDATE_TOOL_NAME, MemberGetInput,
-        MemberUpdateInput, authorize_member_target, get_member, list_members, update_member,
+        MemberUpdateInput, authorize_member_target, get_member, list_members,
     },
     memory::{
         AcceptHearthReviewItemCommand, CreateMemoryCommand, ForgetMemoryCommand, MemoryService,
@@ -6433,6 +6433,37 @@ impl Core {
                         );
                     }
                 }
+                let mut account_avatar=None;
+                #[cfg(windows)]
+                if let Some(filesystem)=&authorized.account_filesystem {
+                    if matches!(operation.as_str(),MEMBER_CREATE_TOOL_NAME|MEMBER_UPDATE_TOOL_NAME) && let Some(path)=input["avatarFile"].as_str() {
+                        drop(invocation_guard.take());
+                        let workspace={let database=self.database.lock().await;TeamToolService::default().agent_file_ingress_scope(&database,&authorized.agent_run_id,authorized.execution_epoch)};
+                        let workspace=match workspace {Ok(Some((_,workspace)))=>workspace,_=>return BuiltinToolIpcResponse::ipc_error("builtin_tool.run_not_bound","Avatar source scope is unavailable")};
+                        let path=rovai_core::runtime::resolve_agent_local_path(Path::new(path),workspace.path());
+                        account_avatar=match filesystem.read_avatar(path).await {
+                            Ok(bytes)=>Some(bytes),
+                            Err(_)=>{
+                                if operation==MEMBER_UPDATE_TOOL_NAME {
+                                    if invocation_guard.is_none(){invocation_guard=Some(self.builtin_tool_leases.invocation_guard().await);}
+                                    let current=self.builtin_tool_leases.authenticate(&auth).await;
+                                    if !matches!(current,Ok(ref current)if current.agent_run_id==authorized.agent_run_id&&current.execution_epoch==authorized.execution_epoch){return BuiltinToolIpcResponse::ipc_error("builtin_tool.run_not_bound","Avatar replay lease was fenced");}
+                                    let replay:Result<Option<CommandExecution>>=async {
+                                        let mut database=self.database.lock().await;
+                                        let run=TeamToolService::default().authenticate_attested_binding(&database,&authorized.native_binding.native_binding_id,&authorized.native_binding.binding_credential,&format!("builtin-cli:{request_id}"),&authorized.agent_run_id,authorized.execution_epoch)?;
+                                        let mut replay_input=input.clone();
+                                        crate::member_studio::resolve_member_avatar_input(&database,&run,&operation,&mut replay_input)?;
+                                        crate::member_tool::replay_member_update(&mut database,&run,serde_json::from_value(replay_input)?)
+                                    }.await;
+                                    if let Ok(Some(execution))=replay {
+                                        if let Ok(envelope)=BuiltinToolInvocationEnvelope::success(&operation,&request_id,command_execution_payload(execution).unwrap_or(Value::Null)) {return BuiltinToolIpcResponse::Envelope{envelope};}
+                                    }
+                                }
+                                return builtin_tool_rejection(&operation,&request_id,"member.invalid_image","Avatar source is not readable by the Runtime account");
+                            }
+                        };
+                    }
+                }
                 let mut source_files = Vec::new();
                 if operation == CAMP_MESSAGE_SEND_TOOL_NAME {
                     let send_input: ThreadMessageSendInput =
@@ -6477,14 +6508,16 @@ impl Core {
                     drop(invocation_guard.take());
                     if let Some((_camp_id, workspace)) = scope {
                         let files = send_input.files;
-                        source_files = match tokio::task::spawn_blocking(move || {
-                            rovai_core::local_attachment_source::observe_agent_source_attachments(
-                                &files,
-                                workspace.path(),
-                            )
-                        })
-                        .await
-                        {
+                        #[cfg(windows)]
+                        let account_filesystem=authorized.account_filesystem.clone();
+                        let observation=async move {
+                            #[cfg(windows)]
+                            if let Some(filesystem)=account_filesystem {
+                                return Ok(filesystem.observe_sources(files,workspace.path().to_path_buf()).await);
+                            }
+                            tokio::task::spawn_blocking(move ||rovai_core::local_attachment_source::observe_agent_source_attachments(&files,workspace.path())).await
+                        }.await;
+                        source_files = match observation {
                             Ok(Ok(files)) => files,
                             Ok(Err(error)) => {
                                 return builtin_tool_rejection(
@@ -6508,7 +6541,8 @@ impl Core {
                 ) {
                     drop(invocation_guard.take());
                 }
-                if !source_files.is_empty() {
+                if !source_files.is_empty() || account_avatar.is_some() {
+                    if invocation_guard.is_none(){invocation_guard=Some(self.builtin_tool_leases.invocation_guard().await);}
                     let reauthorized = self.builtin_tool_leases.authenticate(&auth).await;
                     if !matches!(reauthorized, Ok(ref current)
                         if current.agent_run_id == authorized.agent_run_id
@@ -6537,6 +6571,7 @@ impl Core {
                         Some((authorized.agent_run_id, authorized.execution_epoch)),
                         Some(request_id.clone()),
                         source_files,
+                        account_avatar,
                         send_input_file_path,
                         &authorized.run_tmp,
                     )
@@ -6845,6 +6880,7 @@ impl Core {
         attested_run: Option<(String, i64)>,
         evidence_request_id: Option<String>,
         source_files: Vec<rovai_core::local_attachment_source::LocalAttachmentSourceRef>,
+        account_avatar:Option<Vec<u8>>,
         send_input_file_path: Option<String>,
         run_tmp: &Path,
     ) -> TeamToolIpcResponse {
@@ -7001,7 +7037,7 @@ impl Core {
                 }
                 MEMBER_UPDATE_TOOL_NAME => {
                     let input = serde_json::from_value::<MemberUpdateInput>(request.input)?;
-                    let execution = update_member(&mut database,&self.data_dir,&authenticated_run,input)?;
+                    let execution = crate::member_tool::update_member_with_avatar_bytes(&mut database,&self.data_dir,&authenticated_run,input,account_avatar.as_deref())?;
                     evidence_replayed = execution.replayed;
                     member_roster_changed = !execution.replayed && execution.result.payload["changed"] == true;
                     command_execution_payload(execution)
@@ -7010,7 +7046,7 @@ impl Core {
                     let input = serde_json::from_value::<MemberCreateInput>(request.input)
                         .context("member.create input is invalid")?;
                     let outcome =
-                        create_member(&mut database, &self.data_dir, &authenticated_run, input)?;
+                        crate::member_studio::create_member_with_avatar_bytes(&mut database, &self.data_dir, &authenticated_run, input,account_avatar.as_deref())?;
                     member_roster_changed = member_roster_change_applied(&outcome.execution);
                     evidence_replayed = outcome.execution.replayed;
                     evidence_receipt_id = outcome.execution.result.payload["agentId"]
@@ -16687,6 +16723,7 @@ impl Core {
         let runtime_compatibility_digest = pi::runtime_compatibility_digest(
             &execution.runtime,
             &execution_root,
+            &execution.workspace.isolation,
             attachment_authorization,
         )?;
         self.persist_runtime_compatibility_digest(execution, &runtime_compatibility_digest)
@@ -16701,6 +16738,7 @@ impl Core {
                 camp_id: &execution.camp_id,
                 agent_id: &execution.agent_id,
                 cwd: &execution_root,
+                workspace_isolation:&execution.workspace.isolation,
                 frozen_runtime: &execution.runtime,
                 runtime_compatibility_digest: &runtime_compatibility_digest,
                 native_session_id: binding_credential.native_session_id.as_deref(),
@@ -16771,6 +16809,7 @@ impl Core {
                         camp_id: &execution.camp_id,
                         agent_id: &execution.agent_id,
                         cwd: &execution_root,
+                        workspace_isolation:&execution.workspace.isolation,
                         frozen_runtime: &execution.runtime,
                         runtime_compatibility_digest: &runtime_compatibility_digest,
                         native_session_id: None,
@@ -16897,7 +16936,7 @@ impl Core {
                 )
             })
             .collect::<Vec<_>>();
-        let prepared_images: Vec<PreparedPiPromptImage> = prepare_prompt_images(&image_sources)?;
+        let prepared_images: Vec<PreparedPiPromptImage> = runtime.prepare_input_images(image_sources).await?;
         let image_evidence = prepared_images
             .iter()
             .enumerate()
@@ -27590,7 +27629,7 @@ mod tests {
             .expect("Git is required for Mission fixture tests")
     }
 
-    #[cfg(all(target_os = "macos", feature = "slow-tests"))]
+    #[cfg(all(any(target_os = "macos", windows), feature = "slow-tests"))]
     fn text_composer_document(text: &str) -> ComposerDocument {
         ComposerDocument {
             version: rovai_core::camp_content::COMPOSER_DOCUMENT_VERSION,
@@ -33583,7 +33622,7 @@ done
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(all(target_os = "macos", feature = "slow-tests"))]
+    #[cfg(all(any(target_os = "macos", windows), feature = "slow-tests"))]
     async fn claimed_runtime_cleanup_test_run(
         core: &Arc<Core>,
         workspace: &Path,
@@ -33700,6 +33739,313 @@ done
             )
         };
         (camp_id, agent_run_id, version, execution_epoch)
+    }
+
+    #[cfg(all(windows, feature = "slow-tests"))]
+    #[tokio::test]
+    #[ignore = "requires existing non-admin deployment and built CLI; isolated synthetic Core business only"]
+    async fn account_cli_reaches_real_core_and_fences_lease() {
+        use rovai_core::managed_process::{
+            ManagedProcess, ManagedProcessLaunchSpec, ManagedProcessPurpose, ManagedStdinPolicy,
+            ManagedWindowsArgvDialect, WindowsAccountLaunch,
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let root = PathBuf::from(std::env::var_os("ROVAI_ACCOUNT_CORE_FIXTURE_ROOT").unwrap());
+        std::fs::create_dir_all(&root).unwrap();
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let core = Arc::new(runtime_resolution_test_core(&root).unwrap());
+        let (camp_id, run_id, _, epoch) = claimed_runtime_cleanup_test_run(&core, &workspace).await;
+        let execution = {
+            let db = core.database.lock().await;
+            ExecutionRuntimeService::default()
+                .load_agent_run_execution(&db, &run_id, epoch)
+                .unwrap()
+                .unwrap()
+        };
+        let binding = core
+            .prepare_builtin_tool_binding(&execution, false)
+            .await
+            .unwrap();
+        let cli = PathBuf::from(std::env::var_os("ROVAI_ACCOUNT_ACCEPTANCE_CLI").unwrap());
+        let endpoint = rovai_core::builtin_tool_transport::LocalIpcEndpoint::WindowsNamedPipe {
+            name: format!(
+                r"\\.\pipe\rovai-ai-{}-{}",
+                std::process::id(),
+                uuid::Uuid::new_v4()
+            ),
+        };
+        let config = BuiltinToolProcessConfigFactory::new(&cli, &endpoint, &core.data_dir.join("runtime"))
+            .create()
+            .unwrap();
+        let auth = core
+            .builtin_tool_leases
+            .bind(&config, &run_id, epoch, &binding, &workspace)
+            .await
+            .unwrap();
+        let mut listener = LocalIpcListener::bind(&endpoint).unwrap();
+        let server_core = core.clone();
+        let server = tokio::spawn(async move {
+            let stream = listener.accept().await.unwrap();
+            handle_builtin_tool_connection(server_core, stream)
+                .await
+                .unwrap();
+        });
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "managed_process::windows::account::tests::account_helper_entry",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .current_dir(&workspace)
+            .env("ROVAI_ACCOUNT_TEST_BUILTIN", "1")
+            .env("ROVAI_ACCOUNT_TEST_CLI", &cli);
+        config.configure_command(&mut command).unwrap();
+        config.configure_account_command(&mut command).unwrap();
+        let spec = ManagedProcessLaunchSpec::capture(
+            &command,
+            ManagedProcessPurpose::RuntimeHost,
+            ManagedStdinPolicy::Piped,
+            ManagedWindowsArgvDialect::MicrosoftCrt,
+            "real-core-account-cli",
+        )
+        .unwrap()
+        .with_windows_account(WindowsAccountLaunch::for_isolation("windows_account").unwrap())
+        .unwrap();
+        let mut child = ManagedProcess::spawn(spec).unwrap();
+        let bridge = config
+            .start_account_bridge(child.account_authority().unwrap(),child.account_filesystem())
+            .unwrap();
+        child.take_stdin().unwrap().write_all(b"G").await.unwrap();
+        let mut bytes = Vec::new();
+        child
+            .take_stdout()
+            .unwrap()
+            .read_to_end(&mut bytes)
+            .await
+            .unwrap();
+        let status = child.wait().await.unwrap();
+        server.await.unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        println!(
+            "real_core_member_list_exit={} response_has_error={}",
+            status.code().unwrap_or(1),
+            text.contains("error")
+        );
+        assert!(
+            status.success(),
+            "real Core member.list must return successful business response"
+        );
+        let start = text
+            .find('{')
+            .expect("CLI must emit a business JSON object");
+        let response = serde_json::Deserializer::from_str(&text[start..])
+            .into_iter::<Value>()
+            .next()
+            .unwrap()
+            .expect("CLI must emit valid business JSON after harness prefix");
+        assert_eq!(response["threadId"].as_str(), Some(camp_id.as_str()));
+        let members = response["items"]
+            .as_array()
+            .expect("member.list returns members");
+        assert!(
+            members
+                .iter()
+                .any(|member| member["agentId"].as_str() == Some(execution.agent_id.as_str())),
+            "expected synthetic Thread member must be present"
+        );
+        let current = core
+            .handle_builtin_tool_ipc(rovai_core::builtin_tool_transport::BuiltinToolIpcRequest {
+                ipc_protocol_version: BUILTIN_TOOL_IPC_PROTOCOL_VERSION,
+                auth: auth.clone(),
+                body: rovai_core::builtin_tool_transport::BuiltinToolIpcRequestBody::Invoke {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    operation: "member.list".into(),
+                    input: json!({}),
+                    send_input_file_path: None,
+                },
+            })
+            .await;
+        let BuiltinToolIpcResponse::Envelope { envelope } = current else {
+            panic!("current lease must reach real business envelope");
+        };
+        assert!(envelope.ok);
+        assert_eq!(envelope.operation, "member.list");
+        assert!(
+            envelope.result.unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|member| member["agentId"].as_str() == Some(execution.agent_id.as_str()))
+        );
+        let readable=workspace.join("synthetic-account-attachment.txt");std::fs::write(&readable,"SYNTHETIC_ATTACHMENT_ALLOWED").unwrap();
+        let send=|path:&Path|rovai_core::builtin_tool_transport::BuiltinToolIpcRequest{ipc_protocol_version:BUILTIN_TOOL_IPC_PROTOCOL_VERSION,auth:auth.clone(),body:rovai_core::builtin_tool_transport::BuiltinToolIpcRequestBody::Invoke{request_id:uuid::Uuid::new_v4().to_string(),operation:rovai_core::message_delivery::CAMP_MESSAGE_SEND_TOOL_NAME.into(),input:json!({"body":"synthetic account attachment acceptance","publicOnly":true,"files":[path.to_string_lossy()]}),send_input_file_path:None}};
+        let sent=core.handle_builtin_tool_ipc(send(&readable)).await;
+        let BuiltinToolIpcResponse::Envelope{envelope}=sent else{panic!("account attachment must reach real Core envelope");};
+        assert!(envelope.ok,"readable source must publish");
+        let private=rovai_core::platform::private_storage::create_private_directory(&root.join(format!("synthetic-private-{}",uuid::Uuid::new_v4()))).unwrap();
+        let private_file=private.join("not-a-secret.txt");rovai_core::platform::private_storage::create_private_bytes(&private_file,b"SYNTHETIC_PRIVATE_SOURCE").unwrap();
+        let rejected=core.handle_builtin_tool_ipc(send(&private_file)).await;
+        assert!(matches!(rejected,BuiltinToolIpcResponse::Envelope{ref envelope}if !envelope.ok),"private source must be OS-rejected");
+        assert_eq!(std::fs::read(&private_file).unwrap(),b"SYNTHETIC_PRIVATE_SOURCE");
+        let avatar_path=workspace.join("synthetic-avatar.png");
+        image::RgbaImage::from_pixel(8,8,image::Rgba([40,100,180,255])).save(&avatar_path).unwrap();
+        let version={let db=core.database.lock().await;db.connection().query_row("SELECT version FROM agent_profile WHERE id=?1",rusqlite::params![execution.agent_id],|row|row.get::<_,i64>(0)).unwrap()};
+        let avatar=|path:&Path,expected:i64| {let request_id=uuid::Uuid::new_v4().to_string();rovai_core::builtin_tool_transport::BuiltinToolIpcRequest{ipc_protocol_version:BUILTIN_TOOL_IPC_PROTOCOL_VERSION,auth:auth.clone(),body:rovai_core::builtin_tool_transport::BuiltinToolIpcRequestBody::Invoke{request_id:request_id.clone(),operation:"member.update".into(),input:json!({"requestId":request_id,"agentId":execution.agent_id,"expectedVersion":expected,"avatarFile":path.to_string_lossy()}),send_input_file_path:None}}};
+        let avatar_request=avatar(&avatar_path,version);
+        let changed=core.handle_builtin_tool_ipc(avatar_request.clone()).await;
+        let BuiltinToolIpcResponse::Envelope{envelope}=changed else{panic!("avatar update must return business envelope");};
+        assert!(envelope.ok,"readable account avatar must be imported from memory");
+        let original_avatar=std::fs::read(&avatar_path).unwrap();std::fs::remove_file(&avatar_path).unwrap();
+        let replay=core.handle_builtin_tool_ipc(avatar_request.clone()).await;
+        assert!(matches!(replay,BuiltinToolIpcResponse::Envelope{ref envelope}if envelope.ok),"same current lease must replay persistent receipt after source removal");
+        std::fs::write(&avatar_path,&original_avatar).unwrap();
+        let private_avatar=private.join("private-avatar.png");
+        rovai_core::platform::private_storage::create_private_bytes(&private_avatar,&std::fs::read(&avatar_path).unwrap()).unwrap();
+        let rejected=core.handle_builtin_tool_ipc(avatar(&private_avatar,version+1)).await;
+        assert!(matches!(rejected,BuiltinToolIpcResponse::Envelope{ref envelope}if !envelope.ok),"private avatar source must be refused before host decode");
+        std::fs::remove_dir_all(private).unwrap();
+        println!("account_readable_attachment_published=true private_attachment_rejected=true readable_avatar_imported=true private_avatar_rejected=true");
+        core.builtin_tool_leases
+            .unbind(config.process_id(), &run_id, epoch)
+            .await;
+        let stale = core
+            .handle_builtin_tool_ipc(rovai_core::builtin_tool_transport::BuiltinToolIpcRequest {
+                ipc_protocol_version: BUILTIN_TOOL_IPC_PROTOCOL_VERSION,
+                auth,
+                body: rovai_core::builtin_tool_transport::BuiltinToolIpcRequestBody::Invoke {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    operation: "member.list".into(),
+                    input: json!({}),
+                    send_input_file_path: None,
+                },
+            })
+            .await;
+        assert!(
+            matches!(stale, BuiltinToolIpcResponse::Error { .. }),
+            "old auth must fail after unbind"
+        );
+        drop(bridge);
+        assert!(child.tree_is_empty().unwrap());
+        let mut hook_command=tokio::process::Command::new(std::env::current_exe().unwrap());
+        hook_command.args(["--exact","managed_process::windows::account::tests::account_helper_entry","--ignored","--nocapture","--test-threads=1"]).current_dir(&workspace).env("ROVAI_ACCOUNT_TEST_BUILTIN","1").env("ROVAI_ACCOUNT_TEST_HOOK","1").env("ROVAI_ACCOUNT_TEST_CLI",&cli);
+        config.configure_command(&mut hook_command).unwrap();config.configure_account_command(&mut hook_command).unwrap();
+        let account=WindowsAccountLaunch::for_isolation("windows_account").unwrap().unwrap();
+        let instance=crate::command::canonical_json_digest(&json!(core.data_dir.canonicalize().unwrap())).unwrap();
+        let account_outbox_root=account.profile_root.join("rovai-runtime-outbox").join(instance.trim_start_matches("sha256:"));
+        let outbox=account_outbox_root.join("builtin-tools").join(config.process_id()).join("compaction-observation-outbox");
+        let hook_spec=ManagedProcessLaunchSpec::capture(&hook_command,ManagedProcessPurpose::RuntimeHost,ManagedStdinPolicy::Piped,ManagedWindowsArgvDialect::MicrosoftCrt,"synthetic-account-hook-outbox").unwrap().with_windows_account(Some(account.clone())).unwrap();
+        let mut hook=ManagedProcess::spawn(hook_spec).unwrap();
+        hook.take_stdin().unwrap().write_all(b"G").await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(10),hook.wait()).await.unwrap().unwrap().success());
+        assert!(outbox.is_dir(),"account hook must stage locally even while bridge is unavailable");
+        assert!(std::fs::read_dir(&outbox).unwrap().any(|entry|entry.unwrap().path().extension().is_some_and(|extension|extension=="json")));
+        {let mut database=core.database.lock().await;let result=rovai_core::compaction::reconcile_compaction_observation_outbox(&mut database,&core.data_dir.join("runtime"),None).unwrap();assert!(result.retained>0,"unknown observation must be preserved");}
+        assert!(std::fs::read_dir(&outbox).unwrap().any(|entry|entry.unwrap().path().extension().is_some_and(|extension|extension=="json")),"unknown account outbox records must remain");
+        assert!(hook.tree_is_empty().unwrap());
+        let record_path=std::fs::read_dir(&outbox).unwrap().map(|entry|entry.unwrap().path()).find(|path|path.extension().is_some_and(|extension|extension=="json")).unwrap();
+        let record_bytes=std::fs::read(&record_path).unwrap();
+        core.bind_prepared_native_session(&execution,&binding,"synthetic-session").await.unwrap();
+        {
+            let mut database=core.database.lock().await;
+            database.connection().execute("UPDATE adapter_installation SET adapter_kind='opencode-cli' WHERE id=?1",[&execution.runtime.installation_id]).unwrap();
+            database.connection().execute("UPDATE agent_run SET runtime_adapter_kind='opencode-cli' WHERE id=?1",[&run_id]).unwrap();
+            let policies=crate::compaction::DesiredCompactionDetectorPolicies::from_process_environment();
+            crate::compaction::reconcile_detector_policies(&mut database,&policies).unwrap();
+            crate::compaction::establish_compaction_observer_lease(&mut database,&crate::compaction::EstablishCompactionObserverLease{agent_run_id:&run_id,execution_epoch:epoch,adapter_kind:AdapterKind::OpencodeCli,host_instance_id:"synthetic-account-host",relay_process_id:config.process_id(),native_session_id:"synthetic-session"}).unwrap().expect("current observer must establish");
+        }
+        // Real account CLI -> dedicated Job-scoped bridge -> production Hook
+        // handler. Exit zero alone is enhancement-only, so inspect persisted
+        // observations and staged-record cleanup as independent evidence. Each
+        // iteration owns its endpoint, process identity, lease and outbox; no
+        // pipe, observer row or staged record is shared across iterations.
+        let mut iteration_outboxes = Vec::new();
+        for (index, accepted) in [(1usize, true), (2usize, false)] {
+            let iteration_endpoint=rovai_core::builtin_tool_transport::LocalIpcEndpoint::WindowsNamedPipe{name:format!(r"\\.\pipe\rovai-ai-{}-{}",std::process::id(),uuid::Uuid::new_v4())};
+            let iteration_config=BuiltinToolProcessConfigFactory::new(&cli,&iteration_endpoint,&core.data_dir.join("runtime")).create().unwrap();
+            let _iteration_auth=core.builtin_tool_leases.bind(&iteration_config,&run_id,epoch,&binding,&workspace).await.unwrap();
+            let iteration_outbox=account_outbox_root.join("builtin-tools").join(iteration_config.process_id()).join("compaction-observation-outbox");
+            iteration_outboxes.push(iteration_outbox.clone());
+            let host_instance=format!("synthetic-online-host-{index}");
+            {
+                let mut database=core.database.lock().await;
+                crate::compaction::establish_compaction_observer_lease(&mut database,&crate::compaction::EstablishCompactionObserverLease{agent_run_id:&run_id,execution_epoch:epoch,adapter_kind:AdapterKind::OpencodeCli,host_instance_id:&host_instance,relay_process_id:iteration_config.process_id(),native_session_id:"synthetic-session"}).unwrap().expect("each iteration must establish its own observer lease");
+                if !accepted {
+                    let fenced=crate::compaction::fence_active_observers_for_host(&mut database,AdapterKind::OpencodeCli,&host_instance,"synthetic-account-online-hook-rejected").unwrap();
+                    assert_eq!(fenced,1,"rejected iteration must fence only its own observer");
+                }
+            }
+            let mut iteration_command=tokio::process::Command::new(std::env::current_exe().unwrap());
+            iteration_command.args(["--exact","managed_process::windows::account::tests::account_helper_entry","--ignored","--nocapture","--test-threads=1"]).current_dir(&workspace).env("ROVAI_ACCOUNT_TEST_BUILTIN","1").env("ROVAI_ACCOUNT_TEST_HOOK","1").env("ROVAI_ACCOUNT_TEST_HOOK_EVENT",format!("synthetic-online-{index}")).env("ROVAI_ACCOUNT_TEST_HOOK_HOST",&host_instance).env("ROVAI_ACCOUNT_TEST_CLI",&cli);
+            iteration_config.configure_command(&mut iteration_command).unwrap();iteration_config.configure_account_command(&mut iteration_command).unwrap();
+            let spec=ManagedProcessLaunchSpec::capture(&iteration_command,ManagedProcessPurpose::RuntimeHost,ManagedStdinPolicy::Piped,ManagedWindowsArgvDialect::MicrosoftCrt,"synthetic-account-online-hook").unwrap().with_windows_account(Some(account.clone())).unwrap();
+            let before: i64=core.database.lock().await.connection().query_row("SELECT COUNT(*) FROM native_session_compaction_observation",[],|row|row.get(0)).unwrap();
+            let mut online=ManagedProcess::spawn(spec).unwrap();
+            let bridge=iteration_config.start_account_bridge(online.account_authority().unwrap(),online.account_filesystem()).unwrap_or_else(|error|panic!("online hook iteration {index} could not start its account bridge: {error:#}"));
+            let mut listener=LocalIpcListener::bind(&iteration_endpoint).unwrap_or_else(|error|panic!("online hook iteration {index} could not bind its protected listener: {error:#}"));
+            let serving=core.clone();
+            let server=tokio::spawn(async move{handle_builtin_tool_connection(serving,listener.accept().await.unwrap()).await.unwrap();});
+            online.take_stdin().unwrap().write_all(b"G").await.unwrap();
+            assert!(tokio::time::timeout(Duration::from_secs(15),online.wait()).await.unwrap().unwrap().success());
+            tokio::time::timeout(Duration::from_secs(5),server).await.unwrap().unwrap();
+            assert!(online.tree_is_empty().unwrap());drop(bridge);
+            let after:i64=core.database.lock().await.connection().query_row("SELECT COUNT(*) FROM native_session_compaction_observation",[],|row|row.get(0)).unwrap();
+            assert_eq!(after-before,if accepted{1}else{0},"only an accepted online Hook may persist an observation");
+            let staged=std::fs::read_dir(&iteration_outbox).map(|entries|entries.filter(|entry|entry.as_ref().unwrap().path().extension().is_some_and(|ext|ext=="json")).count()).unwrap_or(0);
+            assert_eq!(staged,if accepted{0}else{1},"accepted Hook cleans only its own record; rejected Hook remains staged");
+            core.builtin_tool_leases.unbind(iteration_config.process_id(),&run_id,epoch).await;
+        }
+        // Restore the original observer through the product establishment path.
+        // The schema CHECK stays authoritative; no fixture writes status columns.
+        {
+            let mut database=core.database.lock().await;
+            crate::compaction::fence_active_observers_for_host(&mut database,AdapterKind::OpencodeCli,"synthetic-account-host","synthetic-account-online-hook-complete").unwrap();
+            crate::compaction::establish_compaction_observer_lease(&mut database,&crate::compaction::EstablishCompactionObserverLease{agent_run_id:&run_id,execution_epoch:epoch,adapter_kind:AdapterKind::OpencodeCli,host_instance_id:"synthetic-account-host",relay_process_id:config.process_id(),native_session_id:"synthetic-session"}).unwrap().expect("original observer must be restored through the product path");
+        }
+        for path in iteration_outboxes{let _=std::fs::remove_dir_all(path);}
+        // Retire only the rejected synthetic record; the original offline one
+        // must still be consumed by the reopened production Core below.
+        for entry in std::fs::read_dir(&outbox).unwrap(){let path=entry.unwrap().path();if path!=record_path{std::fs::remove_file(path).unwrap();}}
+        drop(core);
+        let reopened=runtime_resolution_test_core(&root).unwrap();
+        {let mut database=reopened.database.lock().await;
+            let applied=crate::compaction::reconcile_compaction_observation_outbox(&mut database,&reopened.data_dir.join("runtime"),None).unwrap();
+            assert_eq!(applied.applied,1,"reopened Core must apply valid offline event");
+            std::fs::write(&record_path,&record_bytes).unwrap();
+            let duplicate=crate::compaction::reconcile_compaction_observation_outbox(&mut database,&reopened.data_dir.join("runtime"),None).unwrap();
+            assert_eq!(duplicate.duplicates,1,"same event must deduplicate");
+        }
+        assert!(!record_path.exists());
+        let foreign_root=root.join("another-core");std::fs::create_dir_all(&foreign_root).unwrap();
+        let foreign_instance=crate::command::canonical_json_digest(&json!(foreign_root.canonicalize().unwrap())).unwrap();
+        let account=WindowsAccountLaunch::for_isolation("windows_account").unwrap().unwrap();
+        let foreign_outbox=account.profile_root.join("rovai-runtime-outbox").join(foreign_instance.trim_start_matches("sha256:")).join("builtin-tools").join(config.process_id()).join("compaction-observation-outbox");std::fs::create_dir_all(&foreign_outbox).unwrap();let foreign_record=foreign_outbox.join(record_path.file_name().unwrap());std::fs::write(&foreign_record,&record_bytes).unwrap();
+        let protected=rovai_core::platform::private_storage::create_private_directory(&root.join(format!("protected-record-{}",uuid::Uuid::new_v4()))).unwrap();
+        let target=protected.join("synthetic-protected-record.json");rovai_core::platform::private_storage::create_private_bytes(&target,&record_bytes).unwrap();
+        std::fs::hard_link(&target,&record_path).unwrap();
+        {let mut database=reopened.database.lock().await;crate::compaction::reconcile_compaction_observation_outbox(&mut database,&reopened.data_dir.join("runtime"),None).unwrap();}
+        assert!(record_path.exists()&&foreign_record.exists());assert_eq!(std::fs::read(&target).unwrap(),record_bytes);
+        std::fs::remove_file(&record_path).unwrap();std::fs::remove_file(&foreign_record).unwrap();std::fs::remove_file(&target).unwrap();
+        let protected_sentinel=protected.join("synthetic-sentinel.txt");
+        rovai_core::platform::private_storage::create_private_bytes(&protected_sentinel,b"SYNTHETIC_PROTECTED_TREE_UNCHANGED").unwrap();
+        let builtin_tree=account_outbox_root.clone();
+        let displaced=account_outbox_root.with_file_name(format!("synthetic-original-instance-{}",uuid::Uuid::new_v4()));
+        std::fs::rename(&builtin_tree,&displaced).unwrap();
+        let junction=std::process::Command::new("powershell.exe").args(["-NoProfile","-NonInteractive","-Command","$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:ROVAI_TEST_JUNCTION -Target $env:ROVAI_TEST_TARGET | Out-Null"])
+            .env("ROVAI_TEST_JUNCTION",&builtin_tree).env("ROVAI_TEST_TARGET",&protected).output().unwrap();
+        assert!(junction.status.success());
+        {let mut database=reopened.database.lock().await;assert!(crate::compaction::reconcile_compaction_observation_outbox(&mut database,&reopened.data_dir.join("runtime"),None).is_err());}
+        assert_eq!(std::fs::read(&protected_sentinel).unwrap(),b"SYNTHETIC_PROTECTED_TREE_UNCHANGED");
+        assert_eq!(std::fs::read_dir(&protected).unwrap().count(),1);
+        std::fs::remove_dir(&builtin_tree).unwrap();std::fs::rename(&displaced,&builtin_tree).unwrap();
+        let absent=account_outbox_root.with_file_name(format!("synthetic-absent-instance-{}",uuid::Uuid::new_v4()));std::fs::rename(&builtin_tree,&absent).unwrap();
+        {let mut database=reopened.database.lock().await;crate::compaction::reconcile_compaction_observation_outbox(&mut database,&reopened.data_dir.join("runtime"),None).unwrap();}
+        std::fs::rename(&absent,&builtin_tree).unwrap();
+        println!("online_account_hook_applied=true fenced_hook_rejected_and_retained=true outbox_junction_rejected=true outbox_missing_component_empty=true");
+        println!("real_core_member_list=true old_lease_rejected=true job_empty=true account_hook_outbox_staged=true unknown_retained=true reopened_core_applied=true duplicate_cleaned=true foreign_instance_preserved=true hardlink_rejected=true avatar_source_removed_replayed=true");
     }
 
     // Owns Core's initialization-to-schema seam; camp_fast's writer tests do
