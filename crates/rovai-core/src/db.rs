@@ -1,11 +1,15 @@
 #[path = "db_attachment_paths.rs"]
 mod attachment_paths;
+#[path = "db_automation_naming.rs"]
+mod automation_naming;
 #[path = "db_claim_context.rs"]
 mod claim_context;
 #[path = "db_compact_execution.rs"]
 mod compact_execution;
 #[path = "db_execution_storage.rs"]
 mod execution_storage;
+#[path = "db_hermes.rs"]
+mod hermes;
 #[path = "db_live_directory.rs"]
 mod live_directory;
 #[path = "db_member_creation.rs"]
@@ -26,12 +30,18 @@ mod mission_context;
 mod mission_description;
 #[path = "db_mission_details.rs"]
 mod mission_details;
+#[path = "db_notification_interruption.rs"]
+mod notification_interruption;
 #[path = "db_notification_model.rs"]
 pub(crate) mod notification_model;
 #[path = "db_pending_draft.rs"]
 mod pending_draft;
+#[path = "db_quote_text.rs"]
+mod quote_text;
 #[path = "db_run_continuation.rs"]
 mod run_continuation;
+#[path = "db_shared_environment.rs"]
+mod shared_environment;
 #[path = "db_simplification.rs"]
 mod simplification;
 #[path = "db_chat_reply.rs"]
@@ -42,13 +52,41 @@ mod single_chat_facts;
 mod steer;
 #[path = "db_task_capability.rs"]
 mod task_capability;
+#[path = "db_teams.rs"]
+mod teams;
+#[path = "db_web_pasted_text.rs"]
+mod web_pasted_text;
 #[cfg(test)]
 pub(crate) fn assert_task_capability_upgrade(database: &mut Database) {
     task_capability::assert_upgrade(database);
 }
 #[cfg(test)]
 pub(crate) fn assert_single_chat_facts_upgrade(database: &mut Database) {
+    quote_text::assert_upgrade(database);
     single_chat_facts::assert_upgrade(database);
+}
+
+#[cfg(all(test, feature = "slow-tests"))]
+pub(crate) fn assert_interruption_upgrade(database: &mut Database) {
+    notification_interruption::assert_upgrade(database);
+}
+
+#[cfg(all(test, feature = "slow-tests"))]
+pub(crate) fn assert_exit_attention_upgrade(database: &mut Database, run_id: &str) {
+    notification_interruption::assert_exit_upgrade(database, run_id);
+}
+
+#[cfg(all(test, feature = "slow-tests"))]
+pub(crate) fn downgrade_notification_boundary_for_test(database: &Database) {
+    single_chat_facts::downgrade_for_test(database.connection());
+    database
+        .connection()
+        .execute_batch(
+            "ALTER TABLE task_preference DROP COLUMN heads_up_after_sequence;
+        DELETE FROM schema_migration WHERE version=207;
+        UPDATE rovai_data_contract SET projection_schema_version=156 WHERE singleton=1;",
+        )
+        .unwrap();
 }
 
 #[cfg(test)]
@@ -205,8 +243,8 @@ use crate::camp_id::ThreadId;
 use crate::command::canonical_json_digest;
 use crate::context_index::{camp_message_content_digest, extract_context_references};
 use crate::database_admission::{
-    AuthorityBlock, ExistingAuthorityTicket, MigrationAuthorityOpen, NewAuthorityTicket,
-    TicketValidationError,
+    AuthorityBlock, AuthorityPathError, ExistingAuthorityOpen, MigrationAuthorityOpen,
+    MigrationOperation, NewAuthorityTarget,
 };
 use crate::execution_budget::{
     CAMP_TURN_EXECUTION_BUDGET_SCHEMA_VERSION, LEGACY_EXECUTION_ELAPSED_SECONDS,
@@ -466,7 +504,7 @@ impl MainThreadMigrationSource {
 }
 
 pub(crate) const CURRENT_DATA_CONTRACT_VERSION: &str = "v1.72";
-pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 159;
+pub(crate) const CURRENT_PROJECTION_SCHEMA_VERSION: i64 = 173;
 const V147_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.54";
 const V147_MIGRATION_SOURCE_PROJECTION_SCHEMA_VERSION: i64 = 96;
 const V145_MIGRATION_SOURCE_DATA_CONTRACT_VERSION: &str = "v1.53";
@@ -573,15 +611,15 @@ impl DatabaseOpenError {
     }
 }
 
-impl From<TicketValidationError> for DatabaseOpenError {
-    fn from(error: TicketValidationError) -> Self {
+impl From<AuthorityPathError> for DatabaseOpenError {
+    fn from(error: AuthorityPathError) -> Self {
         match error {
-            TicketValidationError::Blocked(block) => Self {
+            AuthorityPathError::Blocked(block) => Self {
                 code: "authority_ticket_blocked",
                 message: format!("authority ticket was blocked: {block:?}"),
                 authority_block: Some(block),
             },
-            TicketValidationError::Infrastructure(error) => Self {
+            AuthorityPathError::Infrastructure(error) => Self {
                 code: if error.retryable {
                     "authority_io_transient"
                 } else {
@@ -621,8 +659,8 @@ impl From<DatabaseOpenError> for DatabaseInitializeError {
     }
 }
 
-impl From<TicketValidationError> for DatabaseInitializeError {
-    fn from(error: TicketValidationError) -> Self {
+impl From<AuthorityPathError> for DatabaseInitializeError {
+    fn from(error: AuthorityPathError) -> Self {
         Self(DatabaseOpenError::from(error))
     }
 }
@@ -781,14 +819,15 @@ pub(crate) struct DatabaseContractMarker {
     pub classifier_version: String,
 }
 
-/// Small, read-only admission evidence, not a second migration ledger. Even a
-/// receipt timestamp or DDL change must invalidate an already issued ticket.
+/// Test evidence that a failed transaction preserved the migration ledger.
+#[cfg(all(test, feature = "extended-tests"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MigrationReceiptSnapshot {
     schema_cookie: i64,
     receipts: Vec<(i64, String)>,
 }
 
+#[cfg(all(test, feature = "extended-tests"))]
 impl MigrationReceiptSnapshot {
     pub(crate) fn read(connection: &Connection) -> rusqlite::Result<Self> {
         Ok(Self {
@@ -949,7 +988,21 @@ struct CurrentMigrationState {
     v206: bool,
     v207: bool,
     v208: bool,
+    v209: bool,
+    v210: bool,
+    v211: bool,
+    v212: bool,
     v213: bool,
+    v214: bool,
+    v215: bool,
+    v216: bool,
+    v217: bool,
+    v218: bool,
+    v219: bool,
+    v220: bool,
+    v221: bool,
+    v222: bool,
+    v223: bool,
 }
 
 impl CurrentMigrationState {
@@ -971,9 +1024,121 @@ impl CurrentMigrationState {
     }
 
     fn admits(&self, contract: &str, schema: i64, classifier: &str) -> bool {
+        if self.v223 {
+            let mut previous = *self;
+            previous.v223 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 173
+                && self.v222
+                && previous.admits("v1.72", 172, classifier);
+        }
+        if self.v222 {
+            let mut previous = *self;
+            previous.v222 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 172
+                && self.v221
+                && previous.admits("v1.72", 171, classifier);
+        }
+        if self.v221 {
+            let mut previous = *self;
+            previous.v221 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 171
+                && self.v220
+                && previous.admits("v1.72", 170, classifier);
+        }
+        if self.v220 {
+            let mut previous = *self;
+            previous.v220 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 170
+                && self.v219
+                && previous.admits("v1.72", 169, classifier);
+        }
+        if self.v219 {
+            let mut previous = *self;
+            previous.v219 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 169
+                && self.v218
+                && previous.admits("v1.72", 168, classifier);
+        }
+        if self.v218 {
+            let mut previous = *self;
+            previous.v218 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 168
+                && self.v217
+                && previous.admits("v1.72", 167, classifier);
+        }
+        if self.v217 {
+            let mut previous = *self;
+            previous.v217 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 167
+                && self.v216
+                && previous.admits("v1.72", 166, classifier);
+        }
+        if self.v216 {
+            let mut previous = *self;
+            previous.v216 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 166
+                && self.v215
+                && previous.admits("v1.72", 165, classifier);
+        }
+        if self.v215 {
+            let mut previous = *self;
+            previous.v215 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 165
+                && self.v214
+                && previous.admits("v1.72", 164, classifier);
+        }
+        if self.v214 {
+            let mut previous = *self;
+            previous.v214 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 164
+                && self.v213
+                && previous.admits("v1.72", 163, classifier);
+        }
         if self.v213 {
             let mut previous = *self;
             previous.v213 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 163
+                && self.v212
+                && previous.admits("v1.72", 162, classifier);
+        }
+        if self.v212 {
+            let mut previous = *self;
+            previous.v212 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 162
+                && self.v211
+                && previous.admits("v1.72", 161, classifier);
+        }
+        if self.v211 {
+            let mut previous = *self;
+            previous.v211 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 161
+                && self.v210
+                && previous.admits("v1.72", 160, classifier);
+        }
+        if self.v210 {
+            let mut previous = *self;
+            previous.v210 = false;
+            return contract == CURRENT_DATA_CONTRACT_VERSION
+                && schema == 160
+                && self.v209
+                && previous.admits("v1.72", 159, classifier);
+        }
+        if self.v209 {
+            let mut previous = *self;
+            previous.v209 = false;
             return contract == CURRENT_DATA_CONTRACT_VERSION
                 && schema == 159
                 && self.v208
@@ -3203,6 +3368,16 @@ fn connection_has_admissible_data_contract(connection: &Connection) -> rusqlite:
                         | 157
                         | 158
                         | 159
+                        | 160
+                        | 161
+                        | 162
+                        | 163
+                        | 164
+                        | 165
+                        | 166
+                        | 167
+                        | 168
+                | 173
                 )
         })
     {
@@ -3570,13 +3745,13 @@ fn connection_has_legacy_feishu_migration_collision(
 #[cfg(test)]
 pub(crate) fn assert_chat_tool_upgrade_sources(database: &mut Database) {
     chat_reply::assert_upgrade(database);
-    for source in [210, 209, 208] {
-        database.connection.execute_batch("DROP INDEX camp_navigation_window_idx; ALTER TABLE camp DROP COLUMN navigation_is_chat_bot; DELETE FROM schema_migration WHERE version=212; CREATE INDEX camp_navigation_window_idx ON camp (CASE WHEN project_binding_kind='directory' THEN 'directory:'||project_path ELSE 'quick-chat' END,COALESCE(navigation_activity_at,created_at) DESC,navigation_activity_sequence DESC,id) WHERE deletion_operation_id IS NULL;").unwrap();
-        database.connection.execute_batch("DROP TABLE channel_chat_target_grant; DROP TABLE channel_chat_tool_request; DROP TABLE channel_chat_input; ALTER TABLE channel_chat_message DROP COLUMN mentions_json; ALTER TABLE channel_chat_outbound DROP COLUMN target_kind; ALTER TABLE channel_chat_outbound DROP COLUMN lease_token; ALTER TABLE channel_chat_outbound DROP COLUMN item_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_run_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_execution_epoch; DELETE FROM schema_migration WHERE version=211;").unwrap();
-        if source < 210 {
-            database.connection.execute_batch("DROP TABLE channel_chat_conversation; ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled; ALTER TABLE agent_profile DROP COLUMN chat_materials_path; ALTER TABLE conversation DROP COLUMN permission_override_json; DELETE FROM schema_migration WHERE version=210;").unwrap();
+    for source in [220, 219, 218] {
+        database.connection.execute_batch("DROP INDEX camp_navigation_window_idx; ALTER TABLE camp DROP COLUMN navigation_is_chat_bot; DELETE FROM schema_migration WHERE version=222; CREATE INDEX camp_navigation_window_idx ON camp (CASE WHEN project_binding_kind='directory' THEN 'directory:'||project_path ELSE 'quick-chat' END,COALESCE(navigation_activity_at,created_at) DESC,navigation_activity_sequence DESC,id) WHERE deletion_operation_id IS NULL;").unwrap();
+        database.connection.execute_batch("DROP TABLE channel_chat_target_grant; DROP TABLE channel_chat_tool_request; DROP TABLE channel_chat_input; ALTER TABLE channel_chat_message DROP COLUMN mentions_json; ALTER TABLE channel_chat_outbound DROP COLUMN target_kind; ALTER TABLE channel_chat_outbound DROP COLUMN lease_token; ALTER TABLE channel_chat_outbound DROP COLUMN item_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_run_id; ALTER TABLE channel_chat_outbound DROP COLUMN source_execution_epoch; DELETE FROM schema_migration WHERE version=221;").unwrap();
+        if source < 220 {
+            database.connection.execute_batch("DROP TABLE channel_chat_conversation; ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled; ALTER TABLE agent_profile DROP COLUMN chat_materials_path; ALTER TABLE conversation DROP COLUMN permission_override_json; DELETE FROM schema_migration WHERE version=220;").unwrap();
         }
-        if source < 209 {
+        if source < 219 {
             database.connection.execute_batch("DROP TABLE channel_chat_outbound; DROP TABLE channel_chat_item; DROP TABLE channel_chat_turn; DROP TABLE channel_chat_message; DROP TABLE channel_chat_credential; DROP TABLE channel_chat_bot; DELETE FROM schema_migration WHERE version=209;").unwrap();
         }
         assert!(
@@ -3640,8 +3815,8 @@ fn classify_chat_schema(
         mapping_tables,
     ): (bool, bool, i64, i64, i64, i64) = connection.query_row(
         "SELECT
-            EXISTS(SELECT 1 FROM schema_migration WHERE version=209),
-            EXISTS(SELECT 1 FROM schema_migration WHERE version=210),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=219),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=220),
             (SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN (
                 'channel_chat_bot','channel_chat_credential','channel_chat_message',
                 'channel_chat_turn','channel_chat_item','channel_chat_outbound')),
@@ -3674,7 +3849,7 @@ fn classify_chat_schema(
         member_columns == 0 && conversation_columns == 0 && mapping_tables == 0
     };
     let (tool_receipt, navigation_receipt): (bool, bool) = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=211), EXISTS(SELECT 1 FROM schema_migration WHERE version=212)", [], |r| Ok((r.get(0)?,r.get(1)?)),
+        "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=221), EXISTS(SELECT 1 FROM schema_migration WHERE version=222)", [], |r| Ok((r.get(0)?,r.get(1)?)),
     )?;
     let tool_layout = crate::channel_chat_tools::schema_matches(connection)?;
     let tools_absent = chat_tool_schema_absent(connection)?;
@@ -3707,6 +3882,47 @@ fn classify_chat_schema(
             DatabaseContractClassification::SupportedMigrationSource(marker)
         },
     )
+}
+pub(crate) fn classify_startup_contract(
+    connection: &Connection,
+) -> rusqlite::Result<DatabaseContractClassification> {
+    let marker_table: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='rovai_data_contract')",
+        [], |row| row.get(0))?;
+    if !marker_table {
+        return Ok(DatabaseContractClassification::Unknown(None));
+    }
+    let marker = connection.query_row(
+        "SELECT contract_version, projection_schema_version, classifier_version FROM rovai_data_contract WHERE singleton=1",
+        [], |row| Ok(DatabaseContractMarker { contract_version: row.get(0)?, projection_schema_version: row.get(1)?, classifier_version: row.get(2)? })
+    ).optional()?;
+    let Some(marker) = marker else {
+        return Ok(DatabaseContractClassification::Unknown(None));
+    };
+    if marker.projection_schema_version > CURRENT_PROJECTION_SCHEMA_VERSION {
+        return Ok(DatabaseContractClassification::Unknown(Some(marker)));
+    }
+    if marker.contract_version == CURRENT_DATA_CONTRACT_VERSION
+        && marker.projection_schema_version == CURRENT_PROJECTION_SCHEMA_VERSION
+    {
+        let core_tables: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('schema_migration','agent_profile','camp','camp_message','agent_run','canonical_runtime_activity','event_log')",
+            [], |row| row.get(0))?;
+        if core_tables != 7 || marker.classifier_version != V147_CLASSIFIER_VERSION {
+            return Ok(DatabaseContractClassification::Unknown(Some(marker)));
+        }
+        let complete: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=?1) AND NOT EXISTS(SELECT 1 FROM schema_migration WHERE version>?1)",
+            [CURRENT_PROJECTION_SCHEMA_VERSION + 50], |row| row.get(0))?;
+        // The marker and final receipt commit together. Historical receipt and
+        // feature-shape validation belongs to the corresponding upgrade path.
+        return Ok(if complete {
+            DatabaseContractClassification::Current(marker)
+        } else {
+            DatabaseContractClassification::Unknown(Some(marker))
+        });
+    }
+    classify_database_contract(connection)
 }
 
 pub(crate) fn classify_database_contract(
@@ -3757,16 +3973,58 @@ pub(crate) fn classify_database_contract(
     if marker.contract_version == CURRENT_DATA_CONTRACT_VERSION
         && matches!(
             marker.projection_schema_version,
-            145 | 146 | 147 | 148 | 149 | 150 | 151 | 152 | 153 | 154 | 155 | 156 | 157 | 158 | 159
+            145 | 146
+                | 147
+                | 148
+                | 149
+                | 150
+                | 151
+                | 152
+                | 153
+                | 154
+                | 155
+                | 156
+                | 157
+                | 158
+                | 159
+                | 160
+                | 161
+                | 162
+                | 163
+                | 164
+                | 165
+                | 166
+                | 167
+                | 168
+                | 173
         )
     {
-        let expected_migration = if marker.projection_schema_version == 159 { 213 } else { marker.projection_schema_version + 50 };
+        let expected_migration = marker.projection_schema_version + 50;
         let completed: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=?1)",
             [expected_migration],
             |row| row.get(0),
         )?;
         let valid = completed
+            && (marker.projection_schema_version < 168 || quote_text::schema_matches(connection)?)
+            && (marker.projection_schema_version < 167
+                || hermes::rules_schema_matches(connection)?)
+            && (marker.projection_schema_version < 166 || hermes::schema_matches(connection)?)
+            && (marker.projection_schema_version < 165
+                || automation_naming::schema_matches(connection)?)
+            && (marker.projection_schema_version < 163
+                || teams::schema_matches(
+                    connection,
+                    if marker.projection_schema_version == 163 {
+                        1000
+                    } else {
+                        10000
+                    },
+                )?)
+            && (marker.projection_schema_version < 162
+                || web_pasted_text::schema_matches(connection)?)
+            && (marker.projection_schema_version < 161
+                || shared_environment::schema_matches(connection)?)
             && (marker.projection_schema_version < 155 || minimax::schema_matches(connection)?)
             && marker.classifier_version == V147_CLASSIFIER_VERSION
             && simplification::current_structure_matches(connection)?
@@ -3778,11 +4036,15 @@ pub(crate) fn classify_database_contract(
                 } else if marker.projection_schema_version == 148 {
                     claim_context::schema_matches(connection)
                 } else {
-                    if marker.projection_schema_version == 159 {
+                    if marker.projection_schema_version >= 173 {
                         chat_reply::schema_matches(connection)?
+                    } else if marker.projection_schema_version >= 160 {
+                        notification_interruption::exit_schema_matches(connection)?
+                    } else if marker.projection_schema_version == 159 {
+                        notification_interruption::schema_matches(connection)?
                     } else if marker.projection_schema_version == 158 {
                         single_chat_facts::schema_matches(connection)?
-                            && connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM schema_migration WHERE version=213) AND NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='agent_run_input_v43_only_insert' OR (name='context_manifest' AND sql LIKE '%context_manifest_version = 43%'))", [], |r| r.get::<_,bool>(0))?
+                            && connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM schema_migration WHERE version=219) AND NOT EXISTS(SELECT 1 FROM sqlite_master WHERE name='agent_run_input_v43_only_insert' OR (name='context_manifest' AND sql LIKE '%context_manifest_version = 43%'))", [], |r| r.get::<_,bool>(0))?
                     } else if marker.projection_schema_version == 157 {
                         task_capability::schema_matches(connection)?
                     } else if marker.projection_schema_version == 156 {
@@ -6111,7 +6373,21 @@ fn load_current_migration_state(
             EXISTS(SELECT 1 FROM schema_migration WHERE version=206),
             EXISTS(SELECT 1 FROM schema_migration WHERE version=207),
             EXISTS(SELECT 1 FROM schema_migration WHERE version=208),
-            EXISTS(SELECT 1 FROM schema_migration WHERE version=213)
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=209),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=210),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=211),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=212),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=213),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=214),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=215),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=216),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=217),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=218),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=219),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=220),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=221),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=222),
+            EXISTS(SELECT 1 FROM schema_migration WHERE version=223)
         "#,
         [],
         |row| {
@@ -6255,7 +6531,21 @@ fn load_current_migration_state(
                 v206: row.get(136)?,
                 v207: row.get(137)?,
                 v208: row.get(138)?,
-                v213: row.get(139)?,
+                v209: row.get(139)?,
+                v210: row.get(140)?,
+                v211: row.get(141)?,
+                v212: row.get(142)?,
+                v213: row.get(143)?,
+                v214: row.get(144)?,
+                v215: row.get(145)?,
+                v216: row.get(146)?,
+                v217: row.get(147)?,
+                v218: row.get(148)?,
+                v219: row.get(149)?,
+                v220: row.get(150)?,
+                v221: row.get(151)?,
+                v222: row.get(152)?,
+                v223: row.get(153)?,
             })
         },
     )
@@ -6851,7 +7141,7 @@ fn open_existing_authority_connection(
         )
     })?;
     connection
-        .busy_timeout(Duration::from_millis(250))
+        .busy_timeout(Duration::from_secs(5))
         .map_err(|error| {
             database_sqlite_open_error(
                 "authority_busy_timeout_failed",
@@ -7551,9 +7841,9 @@ impl Database {
     }
 
     pub fn open_admitted(
-        ticket: ExistingAuthorityTicket<'_>,
+        ticket: ExistingAuthorityOpen<'_>,
     ) -> std::result::Result<Self, DatabaseOpenError> {
-        let open = ticket.into_open()?;
+        let open = ticket;
         let data_dir = open.path.parent().ok_or_else(|| DatabaseOpenError {
             code: "authority_target_parent_missing",
             message: format!("authority target has no parent: {}", open.path.display()),
@@ -7575,11 +7865,11 @@ impl Database {
     }
 
     pub fn open_admitted_with_runtime_camp_files_root(
-        ticket: ExistingAuthorityTicket<'_>,
+        ticket: ExistingAuthorityOpen<'_>,
         runtime_camp_files_root: &Path,
         runtime_camp_files_root_identity_digest: &str,
     ) -> std::result::Result<Self, DatabaseOpenError> {
-        let open = ticket.into_open()?;
+        let open = ticket;
         Self::open_admitted_parts(
             open,
             runtime_camp_files_root,
@@ -7592,8 +7882,7 @@ impl Database {
         runtime_camp_files_root: &Path,
         runtime_camp_files_root_identity_digest: &str,
     ) -> std::result::Result<Self, DatabaseOpenError> {
-        let path = open.path.clone();
-        let connection = open_existing_authority_connection(&path)?;
+        let (path, connection) = open.into_parts()?;
         crate::monitoring::register_monitoring_sql_functions(&connection)
             .and_then(|()| crate::execution_evidence::register_preview_function(&connection))
             .map_err(|error| {
@@ -7617,22 +7906,6 @@ impl Database {
                 error,
             )
         })?;
-        match classify_database_contract(&connection).map_err(|error| {
-            database_sqlite_open_error(
-                "authority_contract_revalidation_failed",
-                "revalidate authority data contract for",
-                &path,
-                crate::database_admission::BusyStage::Revalidation,
-                error,
-            )
-        })? {
-            DatabaseContractClassification::Current(_) => {}
-            DatabaseContractClassification::SupportedMigrationSource(_)
-            | DatabaseContractClassification::Unknown(_) => {
-                return Err(DatabaseOpenError::contract_changed(&path));
-            }
-        }
-        open.revalidate()?;
         configure_runtime_connection(&connection, &path)?;
         let mut database = Self {
             execution_text: Default::default(),
@@ -7644,19 +7917,28 @@ impl Database {
             runtime_camp_files_root_identity_digest: runtime_camp_files_root_identity_digest
                 .to_string(),
         };
-        database.seed_agents().map_err(|error| {
-            DatabaseOpenError::operation(
-                "authority_seed_reconciliation_failed",
-                "reconcile built-in agents in",
-                &database.path,
-                error,
-            )
-        })?;
+        database
+            .seed_agents()
+            .map_err(|error| match error.downcast::<rusqlite::Error>() {
+                Ok(error) => database_sqlite_open_error(
+                    "authority_seed_reconciliation_failed",
+                    "reconcile built-in agents in",
+                    &database.path,
+                    crate::database_admission::BusyStage::Open,
+                    error,
+                ),
+                Err(error) => DatabaseOpenError::operation(
+                    "authority_seed_reconciliation_failed",
+                    "reconcile built-in agents in",
+                    &database.path,
+                    error,
+                ),
+            })?;
         Ok(database)
     }
 
     pub fn initialize_new(
-        ticket: NewAuthorityTicket<'_>,
+        ticket: NewAuthorityTarget<'_>,
     ) -> std::result::Result<Self, DatabaseInitializeError> {
         let open = ticket.into_initialization()?;
         let data_dir = open.path.parent().ok_or_else(|| {
@@ -7682,7 +7964,7 @@ impl Database {
     }
 
     pub fn initialize_new_with_runtime_camp_files_root(
-        ticket: NewAuthorityTicket<'_>,
+        ticket: NewAuthorityTarget<'_>,
         runtime_camp_files_root: &Path,
         runtime_camp_files_root_identity_digest: &str,
     ) -> std::result::Result<Self, DatabaseInitializeError> {
@@ -7713,7 +7995,7 @@ impl Database {
         ));
         let result = (|| -> std::result::Result<(), DatabaseInitializeError> {
             drop(
-                crate::platform::private_storage::create_private_new_file(&temporary).map_err(
+                crate::platform::private_storage::create_data_new_file(&temporary).map_err(
                     |error| {
                         DatabaseInitializeError(DatabaseOpenError::operation(
                             "authority_initialize_staging_create_failed",
@@ -7851,73 +8133,42 @@ impl Database {
         })
     }
 
-    /// Consumes no caller path: the only authority is the lease-bound ticket.
-    /// All validation precedes WAL configuration or application writes.
+    /// Upgrade the same connection that was opened under the directory lease.
+    /// Per-version IMMEDIATE transactions own source validation and atomicity.
     pub(crate) fn migrate_admitted_authority(
-        open: &MigrationAuthorityOpen<'_>,
+        open: MigrationAuthorityOpen<'_>,
         runtime_camp_files_root: &Path,
         runtime_camp_files_root_identity_digest: &str,
         progress: &mut dyn FnMut(&str, Duration),
-    ) -> std::result::Result<(), DatabaseMigrationError> {
-        let MigrationAuthorityOpen::Upgrade {
+    ) -> std::result::Result<Self, DatabaseMigrationError> {
+        open.revalidate()
+            .map_err(DatabaseMigrationError::from_path)?;
+        let MigrationOperation::Upgrade {
+            lease,
             path,
-            source_contract,
-            source_receipts,
+            namespace,
+            main_identity,
+            connection,
             ..
-        } = open
+        } = open.state
         else {
             unreachable!("interrupted snapshots use legacy recovery")
         };
-        let started = Instant::now();
-        let connection = (|| {
-            open.revalidate()
-                .map_err(DatabaseMigrationError::from_ticket)?;
-            let connection = open_existing_authority_connection(path)
-                .map_err(DatabaseMigrationError::from_open)?;
-            let validate = || -> rusqlite::Result<bool> {
-                let transaction = connection.unchecked_transaction()?;
-                let matches = matches!(
-                    classify_database_contract(&transaction)?,
-                    DatabaseContractClassification::SupportedMigrationSource(ref marker) if marker == source_contract
-                ) && MigrationReceiptSnapshot::read(&transaction)?
-                    == *source_receipts;
-                transaction.commit()?;
-                Ok(matches)
-            };
-            match validate() {
-                Ok(true) => {}
-                Err(error) if crate::database_admission::sqlite_error_is_transient(&error) => {
-                    return Err(DatabaseMigrationError::from_sqlite(
-                        "authority_source_probe_failed",
-                        error,
-                    ));
-                }
-                Ok(false) | Err(_) => {
-                    return Err(DatabaseMigrationError::from_open(
-                        DatabaseOpenError::contract_changed(path),
-                    ));
-                }
-            }
-            open.revalidate()
-                .map_err(DatabaseMigrationError::from_ticket)?;
-            crate::monitoring::register_monitoring_sql_functions(&connection)
-                .and_then(|()| crate::execution_evidence::register_preview_function(&connection))
-                .map_err(DatabaseMigrationError::from_migration)?;
-            register_runtime_camp_files_functions(
-                &connection,
-                runtime_camp_files_root,
-                runtime_camp_files_root_identity_digest,
-            )
+        crate::monitoring::register_monitoring_sql_functions(&connection)
+            .and_then(|()| crate::execution_evidence::register_preview_function(&connection))
             .map_err(DatabaseMigrationError::from_migration)?;
-            Ok(connection)
-        })();
-        progress("authority_open", started.elapsed());
+        register_runtime_camp_files_functions(
+            &connection,
+            runtime_camp_files_root,
+            runtime_camp_files_root_identity_digest,
+        )
+        .map_err(DatabaseMigrationError::from_migration)?;
         let mut database = Self {
             execution_text: Default::default(),
             execution_wake: Default::default(),
             message_changes: None,
-            connection: connection?,
-            path: path.clone(),
+            connection,
+            path,
             runtime_camp_files_root: runtime_camp_files_root.to_path_buf(),
             runtime_camp_files_root_identity_digest: runtime_camp_files_root_identity_digest
                 .to_string(),
@@ -7925,11 +8176,28 @@ impl Database {
         database
             .migrate_with_progress(false, progress)
             .map_err(DatabaseMigrationError::from_migration)?;
-        validate_joined_channel_schema(database.connection())
+        // Verify the completed marker/ledger in this connection; do not close,
+        // re-admit or run historical feature fingerprints again.
+        if !matches!(
+            classify_startup_contract(database.connection())
+                .map_err(|error| DatabaseMigrationError::from_migration(error.into()))?,
+            DatabaseContractClassification::Current(_)
+        ) {
+            return Err(DatabaseMigrationError::from_open(
+                DatabaseOpenError::contract_changed(&database.path),
+            ));
+        }
+        crate::database_admission::verify_selected_main(
+            lease,
+            &database.path,
+            namespace,
+            &main_identity,
+        )
+        .map_err(DatabaseMigrationError::from_path)?;
+        database
+            .seed_agents()
             .map_err(DatabaseMigrationError::from_migration)?;
-        // The connection closes normally. SQLite owns WAL/checkpoint recovery;
-        // never detach, copy, delete or replace authority files here.
-        Ok(())
+        Ok(database)
     }
 
     #[cfg(all(test, feature = "extended-tests"))]
@@ -9538,20 +9806,53 @@ impl Database {
                 migration_step!("migration_208", single_chat_facts::migrate(self));
             }
             if !self.schema_migration_applied(209)? {
-                migration_step!("migration_209", crate::channel_chat::migrate(self));
+                migration_step!("migration_209", notification_interruption::migrate(self));
             }
             if !self.schema_migration_applied(210)? {
-                migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
+                migration_step!(
+                    "migration_210",
+                    notification_interruption::migrate_exit_attention(self)
+                );
             }
-            self.reconcile_chat_navigation_receipt()?;
             if !self.schema_migration_applied(211)? {
-                migration_step!("migration_211", crate::channel_chat_tools::migrate(self));
+                migration_step!("migration_211", shared_environment::migrate(self));
             }
             if !self.schema_migration_applied(212)? {
-                migration_step!("migration_212", self.migrate_chat_bot_navigation());
+                migration_step!("migration_212", web_pasted_text::migrate(self));
             }
             if !self.schema_migration_applied(213)? {
-                migration_step!("migration_213", chat_reply::migrate(self));
+                migration_step!("migration_213", teams::migrate(self));
+            }
+            if !self.schema_migration_applied(214)? {
+                migration_step!("migration_214", teams::migrate_guidance_limit(self));
+            }
+            if !self.schema_migration_applied(215)? {
+                migration_step!("migration_215", automation_naming::migrate(self));
+            }
+            if !self.schema_migration_applied(216)? {
+                migration_step!("migration_216", hermes::migrate(self));
+            }
+            if !self.schema_migration_applied(217)? {
+                migration_step!("migration_217", hermes::migrate_rules(self));
+            }
+            if !self.schema_migration_applied(218)? {
+                migration_step!("migration_218", quote_text::migrate(self));
+            }
+            if !self.schema_migration_applied(219)? {
+                migration_step!("migration_219", crate::channel_chat::migrate(self));
+            }
+            if !self.schema_migration_applied(220)? {
+                migration_step!("migration_220", self.migrate_chat_bot_member_reuse());
+            }
+            self.reconcile_chat_navigation_receipt()?;
+            if !self.schema_migration_applied(221)? {
+                migration_step!("migration_221", crate::channel_chat_tools::migrate(self));
+            }
+            if !self.schema_migration_applied(222)? {
+                migration_step!("migration_222", self.migrate_chat_bot_navigation());
+            }
+            if !self.schema_migration_applied(223)? {
+                migration_step!("migration_223", chat_reply::migrate(self));
             }
             if let Err(error) =
                 crate::notification::maintain_notification_episode_retention(self.connection())
@@ -10400,20 +10701,53 @@ impl Database {
             migration_step!("migration_208", single_chat_facts::migrate(self));
         }
         if !self.schema_migration_applied(209)? {
-            migration_step!("migration_209", crate::channel_chat::migrate(self));
+            migration_step!("migration_209", notification_interruption::migrate(self));
         }
         if !self.schema_migration_applied(210)? {
-            migration_step!("migration_210", self.migrate_chat_bot_member_reuse());
+            migration_step!(
+                "migration_210",
+                notification_interruption::migrate_exit_attention(self)
+            );
         }
-        self.reconcile_chat_navigation_receipt()?;
         if !self.schema_migration_applied(211)? {
-            migration_step!("migration_211", crate::channel_chat_tools::migrate(self));
+            migration_step!("migration_211", shared_environment::migrate(self));
         }
         if !self.schema_migration_applied(212)? {
-            migration_step!("migration_212", self.migrate_chat_bot_navigation());
+            migration_step!("migration_212", web_pasted_text::migrate(self));
         }
         if !self.schema_migration_applied(213)? {
-            migration_step!("migration_213", chat_reply::migrate(self));
+            migration_step!("migration_213", teams::migrate(self));
+        }
+        if !self.schema_migration_applied(214)? {
+            migration_step!("migration_214", teams::migrate_guidance_limit(self));
+        }
+        if !self.schema_migration_applied(215)? {
+            migration_step!("migration_215", automation_naming::migrate(self));
+        }
+        if !self.schema_migration_applied(216)? {
+            migration_step!("migration_216", hermes::migrate(self));
+        }
+        if !self.schema_migration_applied(217)? {
+            migration_step!("migration_217", hermes::migrate_rules(self));
+        }
+        if !self.schema_migration_applied(218)? {
+            migration_step!("migration_218", quote_text::migrate(self));
+        }
+        if !self.schema_migration_applied(219)? {
+            migration_step!("migration_219", crate::channel_chat::migrate(self));
+        }
+        if !self.schema_migration_applied(220)? {
+            migration_step!("migration_220", self.migrate_chat_bot_member_reuse());
+        }
+        self.reconcile_chat_navigation_receipt()?;
+        if !self.schema_migration_applied(221)? {
+            migration_step!("migration_221", crate::channel_chat_tools::migrate(self));
+        }
+        if !self.schema_migration_applied(222)? {
+            migration_step!("migration_222", self.migrate_chat_bot_navigation());
+        }
+        if !self.schema_migration_applied(223)? {
+            migration_step!("migration_223", chat_reply::migrate(self));
         }
         if let Err(error) =
             crate::notification::maintain_notification_episode_retention(self.connection())
@@ -10631,7 +10965,7 @@ impl Database {
             "chat Bot member reuse schema did not apply"
         );
         transaction.execute(
-            "INSERT INTO schema_migration VALUES(210,datetime('now'))",
+            "INSERT INTO schema_migration VALUES(220,datetime('now'))",
             [],
         )?;
         transaction.commit()?;
@@ -10639,7 +10973,7 @@ impl Database {
     }
 
     fn reconcile_chat_navigation_receipt(&mut self) -> Result<()> {
-        if !self.schema_migration_applied(211)? || self.schema_migration_applied(212)? {
+        if !self.schema_migration_applied(221)? || self.schema_migration_applied(222)? {
             return Ok(());
         }
         if !chat_bot_navigation_schema_matches(self.connection())? {
@@ -10654,12 +10988,12 @@ impl Database {
             .connection_mut()
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if tools {
-            tx.execute("INSERT INTO schema_migration(version,applied_at) SELECT 212,applied_at FROM schema_migration WHERE version=211",[])?;
+            tx.execute("INSERT INTO schema_migration(version,applied_at) SELECT 222,applied_at FROM schema_migration WHERE version=221",[])?;
         } else {
             // Preserve the old navigation receipt and its timestamp under its
             // unambiguous number before applying the still-missing tools.
             tx.execute(
-                "UPDATE schema_migration SET version=212 WHERE version=211",
+                "UPDATE schema_migration SET version=222 WHERE version=221",
                 [],
             )?;
         }
@@ -10695,7 +11029,7 @@ impl Database {
              ) WHERE deletion_operation_id IS NULL;",
         )?;
         transaction.execute(
-            "INSERT INTO schema_migration VALUES(212,datetime('now'))",
+            "INSERT INTO schema_migration VALUES(222,datetime('now'))",
             [],
         )?;
         anyhow::ensure!(
@@ -40488,16 +40822,16 @@ mod tests {
              VALUES ('nav-worker','Worker','directory','/repo','2026-01-02','2026-01-02');
              DROP INDEX camp_navigation_window_idx;
              ALTER TABLE camp DROP COLUMN navigation_is_chat_bot;
-             DELETE FROM schema_migration WHERE version=212;
+             DELETE FROM schema_migration WHERE version=222;
              CREATE INDEX camp_navigation_window_idx ON camp (
                  CASE WHEN project_binding_kind = 'directory' THEN 'directory:' || project_path ELSE 'quick-chat' END,
                  COALESCE(navigation_activity_at, created_at) DESC, navigation_activity_sequence DESC, id
              ) WHERE deletion_operation_id IS NULL;
              CREATE TEMP TRIGGER reject_bot_navigation_receipt BEFORE INSERT ON schema_migration
-             WHEN NEW.version=212 BEGIN SELECT RAISE(ABORT,'Bot navigation receipt failure'); END;",
+             WHEN NEW.version=222 BEGIN SELECT RAISE(ABORT,'Bot navigation receipt failure'); END;",
         ).unwrap();
         assert!(reopened.migrate_chat_bot_navigation().is_err());
-        assert!(!reopened.schema_migration_applied(212).unwrap());
+        assert!(!reopened.schema_migration_applied(222).unwrap());
         assert_eq!(reopened.connection().query_row(
             "SELECT COUNT(*) FROM pragma_table_info('camp') WHERE name='navigation_is_chat_bot'",
             [], |row| row.get::<_, i64>(0),
@@ -40508,7 +40842,7 @@ mod tests {
             .unwrap();
         drop(reopened);
         let mut migrated = Database::open(&directory).unwrap();
-        assert!(migrated.schema_migration_applied(212).unwrap());
+        assert!(migrated.schema_migration_applied(222).unwrap());
         assert_eq!(tables(&migrated), before_bot_migration);
         let bots = crate::read_model::ReadModelService
             .navigation_snapshot(&mut migrated)
@@ -41942,73 +42276,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn admitted_migration_rechecks_contract_schema_and_exact_receipts_before_writing() {
-        use crate::{
-            core_data_dir_lock::CoreDataDirLease,
-            database_admission::{AdmissionAssessment, DatabaseAdmission},
-        };
-        for changed in ["contract", "projection", "classifier", "receipt", "schema"] {
-            let directory = std::env::temp_dir().join(format!(
-                "rovai-migration-source-revalidation-{}",
-                Uuid::new_v4()
-            ));
-            let database = fresh_schema_database_v170_at(&directory);
-            downgrade_current_schema_to_v128_source_for_test(database.connection());
-            let runtime_root = database.runtime_camp_files_root().to_path_buf();
-            let runtime_identity = database
-                .runtime_camp_files_root_identity_digest()
-                .to_string();
-            drop(database);
-            let lease = CoreDataDirLease::acquire(&directory).unwrap();
-            let AdmissionAssessment::RequiresMigration(ticket) =
-                DatabaseAdmission::assess(&lease).unwrap()
-            else {
-                panic!("migration ticket required")
-            };
-            let mut open = ticket.into_migration().unwrap();
-            // Vary the admission evidence, not the file: this isolates the SQL
-            // recheck from the independent filesystem identity guard.
-            let MigrationAuthorityOpen::Upgrade {
-                source_contract,
-                source_receipts,
-                path,
-                ..
-            } = &mut open
-            else {
-                unreachable!()
-            };
-            match changed {
-                "contract" => source_contract.contract_version.push_str("-changed"),
-                "projection" => source_contract.projection_schema_version += 1,
-                "classifier" => source_contract.classifier_version.push_str("-changed"),
-                "receipt" => source_receipts
-                    .receipts
-                    .last_mut()
-                    .unwrap()
-                    .1
-                    .push_str("-changed"),
-                "schema" => source_receipts.schema_cookie += 1,
-                _ => unreachable!(),
-            }
-            let source = path.clone();
-            let before = std::fs::read(&source).unwrap();
-            let error = Database::migrate_admitted_authority(
-                &open,
-                &runtime_root,
-                &runtime_identity,
-                &mut |_, _| {},
-            )
-            .unwrap_err();
-            assert_eq!(error.code(), "authority_contract_changed", "{changed}");
-            assert!(!error.retryable());
-            assert_eq!(std::fs::read(source).unwrap(), before, "{changed}");
-            drop(open);
-            drop(lease);
-            std::fs::remove_dir_all(directory).unwrap();
-        }
-    }
-
     fn assert_schema_objects(
         connection: &Connection,
         object_type: &str,
@@ -42103,6 +42370,14 @@ mod tests {
                 run_continuation::migrate as Migrate,
             ),
             (
+                216,
+                165,
+                false,
+                hermes::rewrite as Rewrite,
+                hermes::schema_matches as Matches,
+                hermes::migrate as Migrate,
+            ),
+            (
                 205,
                 154,
                 false,
@@ -42112,7 +42387,9 @@ mod tests {
             ),
         ] {
             let (mut database, directory) = crate::test_support::seeded_runtime_database();
-            if version == 205 {
+            if version == 216 {
+                hermes::downgrade_rules_for_test(database.connection());
+            } else if version == 205 {
                 task_capability::downgrade_for_test(database.connection());
             } else {
                 user_anchors::downgrade_for_test(database.connection());
@@ -42140,12 +42417,12 @@ mod tests {
                     .unwrap();
                 Some((id, content))
             } else {
-                if version != 205 {
+                if !matches!(version, 205 | 216) {
                     mission_description::downgrade_for_test(database.connection());
                 }
                 None
             };
-            if !main_continuation && version != 205 {
+            if !main_continuation && !matches!(version, 205 | 216) {
                 run_continuation::downgrade_for_test(database.connection());
             }
             if version == 184 {
@@ -42410,7 +42687,21 @@ mod tests {
             v206: version >= 206,
             v207: version >= 207,
             v208: version >= 208,
+            v209: version >= 209,
+            v210: version >= 210,
+            v211: version >= 211,
+            v212: version >= 212,
             v213: version >= 213,
+            v214: version >= 214,
+            v215: version >= 215,
+            v216: version >= 216,
+            v217: version >= 217,
+            v218: version >= 218,
+            v219: version >= 219,
+            v220: version >= 220,
+            v221: version >= 221,
+            v222: version >= 222,
+            v223: version >= 223,
         }
     }
 
@@ -42514,6 +42805,27 @@ mod tests {
         let supported = [
             ("v1.72/schema 158 before chat reply context", "v1.72", 158, 212),
             (
+                "v1.72/schema 166 before Hermes user rules",
+                "v1.72",
+                166,
+                216,
+            ),
+            ("v1.72/schema 165 before Hermes catalog", "v1.72", 165, 215),
+            (
+                "v1.72/schema 164 before Automation naming",
+                "v1.72",
+                164,
+                214,
+            ),
+            ("v1.72/schema 162 before Teams", "v1.72", 162, 212),
+            ("v1.72/schema 161 before Web pasted text", "v1.72", 161, 211),
+            (
+                "v1.72/schema 160 before shared environment",
+                "v1.72",
+                160,
+                210,
+            ),
+            (
                 "v1.72/schema 157 before compact Single Chat facts",
                 "v1.72",
                 157,
@@ -42613,12 +42925,24 @@ mod tests {
                 119,
                 169,
             ),
+            (
+                "v1.72/schema 163 before Team guidance limit",
+                "v1.72",
+                163,
+                213,
+            ),
+            (
+                "v1.72/schema 164 before Automation naming",
+                "v1.72",
+                164,
+                214,
+            ),
             ("v1.68/schema 122 before Skills rebuild", "v1.68", 122, 172),
             (
                 "current",
                 CURRENT_DATA_CONTRACT_VERSION,
                 CURRENT_PROJECTION_SCHEMA_VERSION,
-                213,
+                223,
             ),
             (
                 "v1.72/schema 152 before compact operations",
@@ -43194,7 +43518,7 @@ mod tests {
         }
 
         assert!(migration_state_through(141).admits("v1.52", 92, V142_CLASSIFIER_VERSION));
-        let current = migration_state_through(213);
+        let current = migration_state_through(223);
         assert!(current.admits(
             CURRENT_DATA_CONTRACT_VERSION,
             CURRENT_PROJECTION_SCHEMA_VERSION,
@@ -43257,12 +43581,66 @@ mod tests {
         missing_pending_draft.v183 = false;
         let mut missing_convergence = current;
         missing_convergence.v186 = false;
+        let mut missing_automation_naming = current;
+        missing_automation_naming.v215 = false;
+        let mut missing_team_guidance_limit = current;
+        missing_team_guidance_limit.v214 = false;
+        let mut missing_teams = current;
+        missing_teams.v213 = false;
+        let mut missing_hermes = current;
+        missing_hermes.v216 = false;
+        let mut missing_hermes_rules = current;
+        missing_hermes_rules.v217 = false;
+        let mut missing_interruption = current;
+        missing_interruption.v209 = false;
         let mut missing_single_chat_facts = current;
         missing_single_chat_facts.v208 = false;
         let mut missing_chat_reply = current;
         missing_chat_reply.v213 = false;
         let rejected = [
             ("current marker without chat reply context", missing_chat_reply, CURRENT_DATA_CONTRACT_VERSION, CURRENT_PROJECTION_SCHEMA_VERSION, V147_CLASSIFIER_VERSION),
+            (
+                "current marker without Automation naming",
+                missing_automation_naming,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
+            (
+                "current marker without Team guidance limit migration",
+                missing_team_guidance_limit,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
+            (
+                "current marker without Hermes rules receipt",
+                missing_hermes_rules,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
+            (
+                "current marker without Hermes catalog receipt",
+                missing_hermes,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
+            (
+                "current marker without Team schema",
+                missing_teams,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
+            (
+                "current marker without interruption facts",
+                missing_interruption,
+                CURRENT_DATA_CONTRACT_VERSION,
+                CURRENT_PROJECTION_SCHEMA_VERSION,
+                V147_CLASSIFIER_VERSION,
+            ),
             (
                 "current marker without compact Single Chat facts",
                 missing_single_chat_facts,
@@ -43777,6 +44155,32 @@ mod tests {
         claim_context::migrate(&mut database).unwrap();
         database.migrate(false).unwrap();
         assert!(connection_has_current_data_contract(database.connection()).unwrap());
+        // Team v6 widens this same Bootstrap table after the latest main schema.
+        // A receipt failure must roll back both its DDL and its contract marker.
+        teams::downgrade_for_test(database.connection());
+        let before = public_history_claim_preserved_evidence_digest(database.connection()).unwrap();
+        database.connection().execute_batch("CREATE TEMP TRIGGER reject_team_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=213 BEGIN SELECT RAISE(ABORT,'team receipt rejected'); END;").unwrap();
+        assert!(
+            teams::migrate(&mut database)
+                .unwrap_err()
+                .to_string()
+                .contains("team receipt rejected")
+        );
+        assert!(!teams::schema_matches(database.connection(), 1000).unwrap());
+        assert!(
+            matches!(classify_database_contract(database.connection()).unwrap(), DatabaseContractClassification::SupportedMigrationSource(ref m) if m.projection_schema_version == 162)
+        );
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_team_receipt")
+            .unwrap();
+        teams::migrate(&mut database).unwrap();
+        database.migrate(false).unwrap();
+        assert_eq!(
+            before,
+            public_history_claim_preserved_evidence_digest(database.connection()).unwrap()
+        );
+        assert!(connection_has_current_data_contract(database.connection()).unwrap());
         database.connection().execute_batch("DROP INDEX native_session_bootstrap_binding_idx;
             CREATE UNIQUE INDEX native_session_bootstrap_binding_idx ON native_session_bootstrap_evidence(native_binding_id,native_binding_generation)").unwrap();
         assert!(!run_bootstrap_schema_matches(database.connection()).unwrap());
@@ -43859,7 +44263,7 @@ mod tests {
             )
             .expect("current contract marker should load");
 
-        assert_eq!(state, migration_state_through(213));
+        assert_eq!(state, migration_state_through(223));
         assert!(state.admits(&contract, schema, &classifier));
         assert!(has_admissible_data_contract(
             &directory.join("rovai.sqlite")
@@ -43879,6 +44283,11 @@ mod tests {
             "task_guard",
             "task_settings",
             "task_boundary",
+            "common_environment",
+            "member_inheritance",
+            "web_pasted_text",
+            "hermes_rules",
+            "automation_naming",
         ] {
             connection
                 .execute_batch("SAVEPOINT current_admission")
@@ -43916,7 +44325,7 @@ mod tests {
                 }
                 "current_receipt" => {
                     connection
-                        .execute("DELETE FROM schema_migration WHERE version=213", [])
+                        .execute("DELETE FROM schema_migration WHERE version=223", [])
                         .unwrap();
                 }
                 "steer_identity" => {
@@ -43941,6 +44350,29 @@ mod tests {
                         )
                         .unwrap();
                 }
+                "common_environment" => {
+                    connection
+                        .execute_batch("DROP TABLE runtime_common_environment")
+                        .unwrap();
+                }
+                "member_inheritance" => {
+                    connection
+                        .execute_batch("DROP TABLE member_environment_inheritance")
+                        .unwrap();
+                }
+                "automation_naming" => {
+                    connection
+                        .execute_batch("ALTER TABLE automation DROP COLUMN thread_naming_json")
+                        .unwrap();
+                }
+                "web_pasted_text" => {
+                    connection
+                        .execute_batch("DROP TABLE web_pasted_text_attachment")
+                        .unwrap();
+                }
+                "hermes_rules" => {
+                    connection.execute_batch("ALTER TABLE runtime_input_delivery DROP COLUMN hermes_runtime_payload_blob_id").unwrap();
+                }
                 _ => unreachable!(),
             }
             assert_eq!(
@@ -43953,6 +44385,11 @@ mod tests {
                         | "task_guard"
                         | "task_settings"
                         | "task_boundary"
+                        | "common_environment"
+                        | "member_inheritance"
+                        | "web_pasted_text"
+                        | "hermes_rules"
+                        | "automation_naming"
                 ),
                 "{change}"
             );
@@ -43981,7 +44418,7 @@ mod tests {
         database
             .connection()
             .execute_batch(
-                "DELETE FROM schema_migration WHERE version<208;
+                "DELETE FROM schema_migration WHERE version<217;
              DROP TABLE runtime_usage_run_summary;",
             )
             .unwrap();
@@ -46435,6 +46872,7 @@ mod tests {
                 SkillDeliveryGroupKey::Trae
                     | SkillDeliveryGroupKey::Cursor
                     | SkillDeliveryGroupKey::Kimi
+                    | SkillDeliveryGroupKey::Minimax
                     | SkillDeliveryGroupKey::Grok
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
@@ -46653,6 +47091,7 @@ mod tests {
                 group,
                 SkillDeliveryGroupKey::Cursor
                     | SkillDeliveryGroupKey::Kimi
+                    | SkillDeliveryGroupKey::Minimax
                     | SkillDeliveryGroupKey::Grok
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
@@ -46836,6 +47275,7 @@ mod tests {
             !matches!(
                 *group,
                 SkillDeliveryGroupKey::Kimi
+                    | SkillDeliveryGroupKey::Minimax
                     | SkillDeliveryGroupKey::Grok
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
@@ -47198,6 +47638,7 @@ mod tests {
             !matches!(
                 *group,
                 SkillDeliveryGroupKey::Grok
+                    | SkillDeliveryGroupKey::Minimax
                     | SkillDeliveryGroupKey::Pi
                     | SkillDeliveryGroupKey::Zcode
                     | SkillDeliveryGroupKey::Dsh
@@ -56382,11 +56823,26 @@ mod tests {
         let database = crate::test_support::fresh_schema_database_fast_at(&directory);
         let connection = database.connection();
 
+        assert_schema_objects(
+            connection,
+            "table",
+            &[
+                "runtime_common_environment",
+                "member_environment_inheritance",
+                "web_pasted_text_attachment",
+                "team",
+                "creation_preferences",
+                "thread_team_bootstrap",
+            ],
+            true,
+        );
+
         assert_migrations_applied(
             connection,
             &[
                 58, 59, 60, 61, 62, 67, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101,
-                102, 103, 104, 105, 106, 107, 108, 145, 146, 147, 205, 206, 207, 208,
+                102, 103, 104, 105, 106, 107, 108, 145, 146, 147, 205, 206, 207, 208, 209, 210,
+                211, 212, 213, 214, 215, 216, 217,
             ],
         );
         for table in [

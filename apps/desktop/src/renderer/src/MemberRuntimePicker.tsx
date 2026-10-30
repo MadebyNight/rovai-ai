@@ -3,7 +3,7 @@ import * as Menu from '@radix-ui/react-dropdown-menu'
 import type { AdapterKind, HostPlatformKey } from '@contracts'
 import {
   PRODUCT_RUNTIME_LOGOS,
-  VISIBLE_PRODUCT_RUNTIMES,
+  visibleProductRuntimes,
   adapterLabel
 } from './runtime-products'
 import { UiText , uiAttribute } from './interface-language'
@@ -55,12 +55,14 @@ export function MemberRuntimePicker({
   value,
   disabled,
   isDisabled,
+  runtimeKinds = visibleProductRuntimes(null, []),
   onChange,
   hostPlatform
 }: {
   id: string
   value: AdapterKind | ''
   disabled: boolean
+  runtimeKinds?: readonly AdapterKind[]
   isDisabled(kind: AdapterKind): boolean
   onChange(kind: AdapterKind | ''): void
   hostPlatform?: HostPlatformKey | null
@@ -104,7 +106,7 @@ export function MemberRuntimePicker({
                 onChange(next === '__none__' ? '' : (next as AdapterKind))
               }
             >
-              <div className="runtime-picker-scroll">{(['', ...VISIBLE_PRODUCT_RUNTIMES] as const).map((kind) => (
+              <div className="runtime-picker-scroll">{(['', ...runtimeKinds] as const).map((kind) => (
                 <Menu.RadioItem
                   key={kind}
                   textValue={kind ? adapterLabel(kind) : uiAttribute("暂不配置")}

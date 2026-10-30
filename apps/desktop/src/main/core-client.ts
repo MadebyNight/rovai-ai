@@ -22,6 +22,7 @@ type CoreInternalMethod =
   | 'automations.schedulerControl'
 
 export type HostWebMethod = 'host.web.token' | 'host.web.status' | 'host.web.start' | 'host.web.stop' | 'host.web.rotate' | 'host.web.loginTicket' | 'host.channels.reply'
+type HostMethod = HostWebMethod | 'host.thread.attachmentOutputRoot'
 
 export type AutomationSchedulerControl = {
   epoch: number
@@ -38,7 +39,7 @@ type PendingRequest = {
   resolve(value: unknown): void
   reject(error: RovaiRequestError): void
   timer: NodeJS.Timeout
-  method: CoreMethod | CoreInternalMethod | HostWebMethod
+  method: CoreMethod | CoreInternalMethod | HostMethod
   startedAt: number
   traceId: string | null
 }
@@ -78,7 +79,9 @@ type ActiveChild = {
   restartForAutomationControl: boolean
 }
 
-const STARTUP_RETRY_DELAYS_MS = [250, 750, 1500] as const
+// SQLite already waits up to five seconds per lock conflict. One bounded
+// respawn covers transient process/file failures without stacking retry loops.
+const STARTUP_RETRY_DELAYS_MS = [250] as const
 
 export function coreStartupRetryDelay(
   frame: Pick<CoreStartupWireFrame, 'status' | 'authorityState' | 'error'>,
@@ -511,7 +514,7 @@ export class CoreClient {
     this.#failAllForShutdown('Rust Core stopped')
   }
 
-  async request<T>(method: CoreMethod | HostWebMethod, params: unknown = {}): Promise<T> {
+  async request<T>(method: CoreMethod | HostMethod, params: unknown = {}): Promise<T> {
     if (this.#stopping) {
       throw new RovaiRequestError(structuredFailure(
         'shutdown',
@@ -621,7 +624,7 @@ export class CoreClient {
 
   #sendRequest<T>(
     active: ActiveChild,
-    method: CoreMethod | CoreInternalMethod | HostWebMethod,
+    method: CoreMethod | CoreInternalMethod | HostMethod,
     params: unknown,
     timeoutMs: number
   ): Promise<T> {

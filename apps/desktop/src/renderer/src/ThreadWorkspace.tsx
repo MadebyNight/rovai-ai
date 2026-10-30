@@ -1,16 +1,24 @@
+import { InlineThreadReference } from './ThreadReferencePreview'
+import { isReferenceAtom, isReferenceSegment, projectReference } from './thread-reference'
+import { ReplyDetails } from './ReplyDetails'
+import { ThreadReplyReader } from './thread-reply-reader'
 import { useTaskCapability } from './TaskCapabilityProvider'
 import { RunInputRow, RunInputSourceContext } from './RunInputRow'
 import { useShortcutAction, useShortcuts } from './ShortcutProvider'
 import { splitterScale, useCollapsibleSplitter } from './useCollapsibleSplitter'
+import { SplitterFeedback } from './SplitterFeedback'
+import { MessageReeditButton } from './MessageReeditButton'
+import type { MessageReeditStore } from './message-reedit-store'
 import { groupExecutionEventsByRunId } from './execution-events'
 export { groupExecutionEventsByRunId } from './execution-events'
 import { ContinueAgentRunButton } from './ContinueAgentRunButton'
 import { ConversationRunPresence } from './ConversationRunPresence'
-import { MessageQuotePreview, ReplyMark } from './MessageQuotePreview'
+import { MessageQuotePreview } from './MessageQuotePreview'
 import { ConversationRunSource } from './ConversationRunSource'
 import { useRunSourceNavigation } from './useRunSourceNavigation'
-import { conversationRunPresenceTimeline } from './conversation-run-presence'
+import { conversationRunPresenceTimeline, isUserInterruptedRun } from './conversation-run-presence'
 import { PendingThreadDraftPersistence } from './pending-thread-draft'
+import { pastedTextFileName } from './long-text-paste'
 import { MessageModelSummary, ModelSummaryText, ProfileModelFields } from './ThreadModelInformation'
 import { MessageAuthorProfileTrigger } from './MessageAuthorProfileTrigger'
 import { memberRuntimeConfigurationPresentation, modelSummary, runtimeAdapterLabel } from './runtime-model-presentation'
@@ -46,6 +54,7 @@ import { isFileFindTarget, useOptionalFileFind } from './FilePreviewFind'
 import { readErrorMessage } from './error-message'
 import { collapsedMessageProjection } from './conversation-message-collapse'
 import { samePublicMessageSegment } from './public-message-grouping'
+import { messageTimeParts, useMessageTimeDate } from './message-time'
 import { usePublicMessageLayout } from './usePublicMessageLayout'
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
@@ -53,6 +62,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import * as Popover from '@radix-ui/react-popover'
 import { ThreadDetailPopover } from './ThreadDetailPopover'
+import { ThreadPanelCollapseButton, ThreadPanelDismissHint, useThreadPanelDismiss } from './ThreadPanelDismiss'
 import { SingleChatPanel } from './SingleChatPanel'
 import {
   CompactionEventRow, ExecutionToolGroupStateContext, FileOperationRow, ModifiedFileRow, RuntimeRetryNotice,
@@ -101,6 +111,7 @@ import {
   StructuredMentionComposer,
   type StructuredMentionComposerHandle
 } from './StructuredMentionComposer'
+import { threadInputHistory } from './input-history'
 import {
   composerDocumentsEqualDirect,
   composerDocumentFromText,
@@ -110,6 +121,7 @@ import {
 } from './composer-document'
 import { composerInvitationTargets, isThreadMemberInvitable } from './composer-invitations'
 import {
+  MAX_LOCAL_COMPOSER_ATTACHMENTS,
   composerBodyForContent,
   emptyLocalThreadComposerDraft,
   loadLocalThreadComposerDraft,
@@ -140,6 +152,8 @@ export {
 } from './attachment-drop'
 import {
   agentRunPresentation,
+  agentRunIsStarting,
+  agentRunHasCurrentActivity,
   agentRunWaitDetail,
   buildLiveExecutionProgress,
   executionEvidenceResultText,
@@ -165,6 +179,7 @@ import { runtimeReadinessLabel } from './runtime-status'
 import { runtimeEditorInstallation } from './MemberRuntimeParameters'
 import { mentionCandidateRuntime } from './mention-runtime'
 import { SafeMarkdown } from './SafeMarkdown'
+import { AgentMessageContent } from './AgentMessageContent'
 import { FilePreviewPane } from './FilePreviewPane'
 import { FilePreviewResizeHandle, FilePreviewWorkspace, useInitializeFilePreviewMinimumWidth, useOptionalFilePreviewLayout } from './FilePreviewLayout'
 import { useExecutionPreviewHost, useOptionalFilePreview } from './FilePreviewContext'
@@ -224,9 +239,10 @@ import { UiText, getInterfaceLanguage, uiAttribute, useInterfaceLanguage, useUiT
 
 function localizedAgentRunPresentation(
   run: Parameters<typeof agentRunPresentation>[0],
-  cancelling = false
+  cancelling = false,
+  hasCurrentActivity = false
 ): ReturnType<typeof agentRunPresentation> {
-  const presentation = agentRunPresentation(run, cancelling)
+  const presentation = agentRunPresentation(run, cancelling, hasCurrentActivity)
   return { ...presentation, label: uiAttribute(presentation.label) }
 }
 
@@ -545,16 +561,17 @@ async function mutateComposerDraft(
     case 'save_content':
       return update({ content: mutation.content })
     case 'add_source_attachment': {
-      const attachment = await client.composerAttachments.prepare(
-        draft.threadId,
-        draft.revision,
-        mutation.file
-      )
+      const attachment = mutation.pastedText && client.composerAttachments.preparePastedText
+        ? await client.composerAttachments.preparePastedText(draft.threadId, mutation.file)
+        : await client.composerAttachments.prepare(draft.threadId, draft.revision, mutation.file)
+      mutation.onPrepared?.(attachment)
       return update({ attachments: [...draft.attachments, attachment] })
     }
     case 'remove_source_attachment':
-      await client.composerAttachments.discard?.(draft.threadId, [mutation.attachmentId])
-        .catch(() => undefined)
+      if (!mutation.pastedText) {
+        await client.composerAttachments.discard?.(draft.threadId, [mutation.attachmentId])
+          .catch(() => undefined)
+      }
       return update({ attachments: draft.attachments.filter(({ id }) => id !== mutation.attachmentId) })
     case 'start_reply': {
       const message = mutation.message
@@ -683,7 +700,7 @@ export function runningAgentRunForWorkspaceEntry(
   runs: readonly AgentRunView[]
 ): AgentRunView | null {
   return runs
-    .filter((run) => run.status === 'running')
+    .filter((run) => run.status === 'running' || agentRunIsStarting(run))
     .sort((left, right) =>
       right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
     )[0] ?? null
@@ -1025,7 +1042,7 @@ export function runtimeRecoveryReason(blockerCode: string): string {
     case 'runtime_not_configured':
       return uiAttribute("尚未配置智能体")
     case 'runtime_authentication_required':
-      return uiAttribute("智能体需要登录")
+      return uiAttribute("智能体认证未通过")
     case 'adapter_installation_missing':
       return uiAttribute("所选智能体尚未安装")
     case 'adapter_installation_disabled':
@@ -1231,10 +1248,6 @@ function compareTimelinePresentationOrder(
   return left.createdAt.localeCompare(right.createdAt)
     || TIMELINE_KIND_RANK[left.kind] - TIMELINE_KIND_RANK[right.kind]
     || left.id.localeCompare(right.id)
-}
-
-function isUserInterruptedRun(run: AgentRunView): boolean {
-  return run.status === 'cancelled' && run.cancelReasonCode === 'user_requested_agent_run_stop'
 }
 
 export function campConversationTimeline(
@@ -1459,6 +1472,7 @@ export function structuredThreadContentPlainText(
   const names = new Map(members.map((member) => [member.agentId, member.displayName]))
   const parts = content.map((segment) => {
     if (segment.kind === 'text') return segment.text
+    if (isReferenceSegment(segment)) return projectReference(segment)
     if (segment.kind === 'all_members_mention') return '@所有队员'
     if (segment.kind === 'current_user_mention') return `@${currentUserName}`
     if (segment.kind === 'skill_mention') return `/${segment.nameAtSend}`
@@ -1500,6 +1514,7 @@ function structuredThreadContentMarkdownText(
   const names = new Map(members.map((member) => [member.agentId, member.displayName]))
   return content.map((segment) => {
     if (segment.kind === 'text') return segment.text
+    if (isReferenceSegment(segment)) return projectReference(segment)
     if (segment.kind === 'all_members_mention') return escapeMarkdownLiteral('@所有队员')
     if (segment.kind === 'member_mention') {
       return escapeMarkdownLiteral(`@${names.get(segment.agentId) ?? '不可用队员'}`)
@@ -1638,6 +1653,7 @@ export function ThreadWorkspace({
   busy,
   onSend,
   onWithdrawMessage,
+  reeditStore,
   onReconcileDelivery,
   onPendingDraftPersisted,
   onPendingThreadLeave,
@@ -1676,7 +1692,6 @@ export function ThreadWorkspace({
   firstRunThreadId = null,
   onConfigureRuntime,
   onOpenMembers,
-  onOpenMotionSettings,
   onDismissRuntimeRecovery,
   onNotify = () => undefined,
   onNotifyError
@@ -1701,6 +1716,7 @@ export function ThreadWorkspace({
   busy: boolean
   onSend(draft: ThreadComposerDraftView, deliveryMode?: 'start' | 'steer', steerTargets?: Array<{agentRunId: string; executionEpoch: number}>): Promise<ThreadMessageSendReceipt | void>
   onWithdrawMessage?(message: ThreadMessageView): Promise<void>
+  reeditStore?: MessageReeditStore
   onReconcileDelivery?(deliveryId: string): Promise<string>
   onPendingDraftPersisted?(): void
   onPendingThreadLeave?(draft: ThreadComposerDraftView): Promise<void>
@@ -1741,7 +1757,6 @@ export function ThreadWorkspace({
   firstRunThreadId?: string | null
   onConfigureRuntime?(agentId: string): void
   onOpenMembers?(): void
-  onOpenMotionSettings?(): void
   onDismissRuntimeRecovery?(): void
   onNotify?(message: string): void
   onNotifyError?(message: string): void
@@ -1751,9 +1766,61 @@ export function ThreadWorkspace({
   const taskFocusWasRemoved = !tasksEnabled && typeof document !== 'undefined' && !!document.activeElement?.closest('.task-panel-scroll, .camp-detail-entry[data-detail="tasks"], .task-editor-dialog, .task-cancel-dialog')
   const client = useThreadClient()
   const interfaceLanguage = useInterfaceLanguage()
+  const messageTimeDate = useMessageTimeDate()
   const { profile: currentUserProfile } = useCurrentUserProfile()
   const currentUserName = currentUserDisplayName(currentUserProfile)
   const filePreview = useOptionalFilePreview()
+  const rightPreviewBlocksExecutionAutoOpen = executionPlacement === 'right'
+    && Boolean(filePreview?.paneVisible && filePreview.activeTab && filePreview.activeTab.kind !== 'execution')
+  const replyReader = useMemo(() => new ThreadReplyReader(snapshot.thread.id, client), [snapshot.thread.id, client])
+  const replyDetail = useSyncExternalStore(replyReader.subscribe, replyReader.getSnapshot, replyReader.getSnapshot)
+  const [replyFull, setReplyFull] = useState(false)
+  const [replyWidth, setReplyWidth] = useState(466)
+  const [replyExecutionVisible, setReplyExecutionVisible] = useState(false)
+  const replyExecutionHost = useRef<HTMLDivElement>(null)
+  const replyExecutionPanelRef = useRef<HTMLElement>(null)
+  const closeReplyExecution = useCallback(() => setReplyExecutionVisible(false), [])
+  const dismissReplyExecution = useThreadPanelDismiss({
+    visible: !!replyDetail.messageId && replyExecutionVisible, panelRef: replyExecutionPanelRef, onClose: closeReplyExecution
+  })
+  const replyTrigger = useRef<HTMLElement | null>(null)
+  useEffect(() => replyReader.start(), [replyReader])
+  const replyRunAnchors = snapshot.agentRuns.filter(run => run.status === 'running' || run.status === 'waiting')
+    .map(run => run.anchorMessageId).filter((id): id is string => !!id).sort().join('\n')
+  useEffect(() => replyReader.setRunAnchors(replyRunAnchors.split('\n').filter(Boolean)), [replyReader, replyRunAnchors])
+  useEffect(() => { setReplyFull(false); setReplyExecutionVisible(false) }, [replyReader])
+  const closeReplyDetails = useCallback((restoreFocus = true): void => {
+    setReplyExecutionVisible(false)
+    setReplyFull(false)
+    replyReader.close()
+    if (restoreFocus) requestAnimationFrame(() => replyTrigger.current?.focus({ preventScroll: true }))
+  }, [replyReader])
+  const openReplyDetails = (messageId: string): void => {
+    cancelReplyReveal()
+    replyTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    filePreview?.hidePane()
+    onCloseInspector()
+    onCloseSingleChat()
+    setReplyExecutionVisible(false)
+    replyReader.open(messageId)
+  }
+  useEffect(() => {
+    if (filePreview?.paneVisible) closeReplyDetails()
+  }, [filePreview?.paneVisible, closeReplyDetails])
+  useEffect(() => {
+    if (!replyDetail.messageId) return
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented
+        || document.querySelector('.app-dialog, .mention-profile-popover, [role="menu"][data-state="open"], [data-radix-popper-content-wrapper]')) return
+      // Each overlaid Thread panel owns its first Escape.
+      if (replyExecutionVisible || inspectorVisible || singleChatVisible) return
+      closeReplyDetails()
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    document.addEventListener('keydown', escape)
+    return () => document.removeEventListener('keydown', escape)
+  }, [replyDetail.messageId, replyExecutionVisible, inspectorVisible, singleChatVisible, closeReplyDetails])
   const initializePreviewMinimumWidth = useInitializeFilePreviewMinimumWidth()
   useEffect(() => {
     filePreview?.syncFileChanges(snapshot.thread.id, snapshot.agentRunFileChanges)
@@ -1775,6 +1842,11 @@ export function ThreadWorkspace({
   const [, setComposerDraftProjectionVersion] = useState(0)
   const [draftLoadState, setDraftLoadState] = useState<DraftLoadState>({ state: 'loading' })
   const [composerPersistenceError, setComposerPersistenceError] = useState<Error | null>(null)
+  // Routing observes live atoms (including previews). Text stays in the editor,
+  // so ordinary typing does not rerender the entire workspace on each character.
+  const [liveComposerAtoms, setLiveComposerAtoms] = useState<{
+    threadId: string; content: ComposerDocument
+  } | null>(null)
   const [memberInvitationThreadId, setMemberInvitationThreadId] = useState<string | null>(null)
   const [composerLocalStatus, setComposerLocalStatus] = useState<ComposerLocalStatus>({
     hasContent: false,
@@ -1788,6 +1860,8 @@ export function ThreadWorkspace({
     singleChatLeaveGuardRef.current = guard
   }, [])
   const [preparingAttachments, setPreparingAttachments] = useState<Array<{ id: string; name: string; kind: AttachmentKind }>>([])
+  const preparingAttachmentNames = useRef(new Map<string, string>())
+  const [pasteMessage, setPasteMessage] = useState<string | null>(null)
   const [failedAttachments, setFailedAttachments] = useState<Array<{ id: string; name: string; kind: AttachmentKind; error: string }>>([])
   const [attachmentDragState, setAttachmentDragState] = useState<AttachmentDragKind | null>(null)
   const [composerSubmitting, setComposerSubmitting] = useState(false)
@@ -1804,9 +1878,13 @@ export function ThreadWorkspace({
   useEffect(() => setDeliveryMode('steer'), [snapshot.thread.id])
   const [withdrawingMessageId, setWithdrawingMessageId] = useState<string | null>(null)
   const [withdrawalError, setWithdrawalError] = useState<string | null>(null)
+  const [reeditMessageId, setReeditMessageId] = useState<string | null>(null)
+  const [reeditError, setReeditError] = useState<string | null>(null)
   useEffect(() => {
     setWithdrawalMessage(null)
     setWithdrawalError(null)
+    setReeditMessageId(null)
+    setReeditError(null)
   }, [snapshot.thread.id])
   const [starterNotice, setStarterNotice] = useState<string | null>(null)
   const [mentionPopover, setMentionPopover] = useState<MentionPopoverRequest | null>(null)
@@ -1846,6 +1924,9 @@ export function ThreadWorkspace({
   pendingThreadLeaveRef.current = onPendingThreadLeave
   const draftCoordinatorRef = useRef<DraftMutationCoordinator | null>(null)
   if (!draftCoordinatorRef.current) {
+    // Only this exact already-written snapshot can skip the onChange write.
+    // Record it after success so a failed save never suppresses a later retry.
+    let locallySavedDraft: ThreadComposerDraftView | null = null
     draftCoordinatorRef.current = new DraftMutationCoordinator({
       load: async (threadId) => {
         const initial = initialComposerDraftRef.current?.threadId === threadId
@@ -1910,8 +1991,21 @@ export function ThreadWorkspace({
       },
       mutate: async (draft, mutation) => {
         const next = await mutateComposerDraft(client, draft, mutation, activeSnapshotRef.current)
+        const pastedTextMutation = (mutation.kind === 'add_source_attachment'
+          || mutation.kind === 'remove_source_attachment') && mutation.pastedText
+        const onSaved = (): void => {
+          locallySavedDraft = next
+          if (pastedTextMutation) mutation.onAccepted?.(next)
+        }
         if (activationStateRef.current === 'pending' && !memberCreationRef.current) {
-          await pendingDraftPersistence.current!.persist(next)
+          await pendingDraftPersistence.current!.persist(next, onSaved)
+        } else if (pastedTextMutation || (mutation.kind === 'save_content' && mutation.requireLocalSave)) {
+          // This operation needs a definite local acceptance point. Ordinary
+          // autosave and other attachment entry points keep their existing path.
+          const storage = window.localStorage
+          if (!storage) throw new Error('Local draft storage is unavailable')
+          saveLocalThreadComposerDraft(next, storage)
+          onSaved()
         }
         return next
       },
@@ -1919,7 +2013,10 @@ export function ThreadWorkspace({
         if (draft && activationStateRef.current === 'pending') pendingDraftChangeRef.current?.(draft)
         if (draft && activationStateRef.current === 'active') {
           try {
-            saveLocalThreadComposerDraft(draft)
+            if (draft !== locallySavedDraft) {
+              saveLocalThreadComposerDraft(draft)
+              locallySavedDraft = draft
+            }
             setComposerPersistenceError(null)
           } catch (error) {
             setComposerPersistenceError(
@@ -1942,6 +2039,14 @@ export function ThreadWorkspace({
   const dragLeaveTimer = useRef<number | null>(null)
   const dragActivityTimer = useRef<number | null>(null)
   const attachmentPreparationQueue = useRef<Promise<void>>(Promise.resolve())
+  // The original editor owns fallback until the existing save/leave path
+  // confirms a local write. No new persisted recovery state is needed.
+  const pastedTextRecoveryThread = useRef<string | null>(null)
+  useEffect(() => {
+    if (!pasteMessage) return
+    const timer = window.setTimeout(() => setPasteMessage(null), 5_000)
+    return () => window.clearTimeout(timer)
+  }, [pasteMessage])
   const workspaceShellRef = useRef<HTMLElement>(null)
   const timelineScrollRef = useRef<HTMLDivElement>(null)
   const runSourceNavigation = useRunSourceNavigation(snapshot.thread.id, snapshot.messages, timelineScrollRef)
@@ -1977,6 +2082,17 @@ export function ThreadWorkspace({
     () => new Map<string, ThreadMessageView[] | null>()
   )
   const replyAnchorLoads = useRef(new Map<string, Promise<ThreadMessageView[] | null>>())
+  const replyRevealGeneration = useRef(0)
+  const replyRevealActive = useRef(false)
+  const replyRevealCleanup = useRef<(() => void) | null>(null)
+  const cancelReplyReveal = useCallback((): void => {
+    replyRevealGeneration.current++
+    replyRevealActive.current = false
+    replyRevealCleanup.current?.()
+    replyRevealCleanup.current = null
+  }, [])
+  const preserveTimelineReadingPosition = useCallback(() => !replyRevealActive.current, [])
+  useEffect(() => cancelReplyReveal, [snapshot.thread.id, cancelReplyReveal])
   const approvalDockRef = useRef<HTMLElement>(null)
   const lastTimelineItem = useRef<{
     threadId: string
@@ -2017,7 +2133,7 @@ export function ThreadWorkspace({
   const [worldMapRoutesVisible, setWorldMapRoutesVisible] = useState(false)
   const [localInspectorTab, setLocalInspectorTab] = useState<ThreadInspectorTab>('tasks')
   const [workspaceEntrySelection] = useState(() =>
-    workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
+    workspaceEntrySnapshotReady && !suppressExecutionAutoOpen && !rightPreviewBlocksExecutionAutoOpen
       ? executionWorkspaceEntrySelection(snapshot.agentRuns)
       : null
   )
@@ -2111,7 +2227,7 @@ export function ThreadWorkspace({
   }, [conversationView, worldMapEnabled])
   useLayoutEffect(() => {
     if (!executionDrawerPortal) return
-    const host = executionPlacement === 'right'
+    const host = replyExecutionVisible ? replyExecutionHost.current : executionPlacement === 'right'
       ? executionPreviewHost
       : executionPlacement === 'inspector'
         ? inspectorExecutionDrawerHostRef.current
@@ -2126,7 +2242,7 @@ export function ThreadWorkspace({
     cancelExecutionReadingRestore.current = scheduleExecutionConsoleReadingRestore(
       executionDrawerPortal, readingPosition
     )
-  }, [executionDrawerPortal, executionPlacement, executionPreviewHost, inspectorVisible])
+  }, [executionDrawerPortal, executionPlacement, executionPreviewHost, inspectorVisible, replyExecutionVisible])
   useEffect(() => {
     executionPlacementMounted.current = true
     return () => {
@@ -2336,10 +2452,11 @@ export function ThreadWorkspace({
 
   useEffect(() => setMentionPopover(null), [snapshot.thread.id])
   useLayoutEffect(() => {
-    if (workspaceEntrySnapshotHandled.current || !workspaceEntrySnapshotReady) return
+    if (workspaceEntrySnapshotHandled.current) return
+    if (!workspaceEntrySnapshotReady && !rightPreviewBlocksExecutionAutoOpen) return
     workspaceEntrySnapshotHandled.current = true
     if (executionEntryInteractionThreadId.current === snapshot.thread.id) return
-    if (suppressExecutionAutoOpen) return
+    if (suppressExecutionAutoOpen || rightPreviewBlocksExecutionAutoOpen) return
     const entrySelection = executionWorkspaceEntrySelection(snapshot.agentRuns)
     const runningRun = entrySelection?.focusedRun ?? null
     setExecutionDrawerAgentId(entrySelection?.selectedAgentId ?? null)
@@ -2368,13 +2485,14 @@ export function ThreadWorkspace({
     filePreview,
     snapshot.agentRuns,
     workspaceEntrySnapshotReady,
-    suppressExecutionAutoOpen
+    suppressExecutionAutoOpen,
+    rightPreviewBlocksExecutionAutoOpen
   ])
   useLayoutEffect(() => {
     if (workspaceEntryInspectorHandled.current) return
-    if (!workspaceEntrySnapshotReady) return
+    if (!workspaceEntrySnapshotReady && !rightPreviewBlocksExecutionAutoOpen) return
     workspaceEntryInspectorHandled.current = true
-    if (suppressExecutionAutoOpen) return
+    if (suppressExecutionAutoOpen || rightPreviewBlocksExecutionAutoOpen) return
     if (!mobile && workspaceEntryRunningRun && executionPlacement === 'inspector') {
       onOpenInspector?.(inspectorTab)
     } else if (workspaceEntryRunningRun && executionPlacement === 'right') {
@@ -2388,14 +2506,15 @@ export function ThreadWorkspace({
     filePreview,
     workspaceEntryRunningRun,
     workspaceEntrySnapshotReady,
-    suppressExecutionAutoOpen
+    suppressExecutionAutoOpen,
+    rightPreviewBlocksExecutionAutoOpen
   ])
   useLayoutEffect(() => {
     if (mountedThreadId.current === snapshot.thread.id) return
     mountedThreadId.current = snapshot.thread.id
     executionEntryInteractionThreadId.current = null
-    workspaceEntrySnapshotHandled.current = workspaceEntrySnapshotReady
-    const entrySelection = workspaceEntrySnapshotReady && !suppressExecutionAutoOpen
+    workspaceEntrySnapshotHandled.current = workspaceEntrySnapshotReady || rightPreviewBlocksExecutionAutoOpen
+    const entrySelection = workspaceEntrySnapshotReady && !suppressExecutionAutoOpen && !rightPreviewBlocksExecutionAutoOpen
       ? executionWorkspaceEntrySelection(snapshot.agentRuns)
       : null
     const runningRun = entrySelection?.focusedRun ?? null
@@ -2414,7 +2533,7 @@ export function ThreadWorkspace({
     } else if (runningRun && executionPlacement === 'right') {
       filePreview?.openExecution()
     }
-  }, [executionPlacement, filePreview, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.thread.id, suppressExecutionAutoOpen, workspaceEntrySnapshotReady])
+  }, [executionPlacement, filePreview, inspectorTab, mobile, onOpenInspector, snapshot.agentRuns, snapshot.thread.id, suppressExecutionAutoOpen, rightPreviewBlocksExecutionAutoOpen, workspaceEntrySnapshotReady])
   useLayoutEffect(() => {
     if (executionDrawerAgentId !== null) return
     const trigger = executionDrawerTriggerRef.current
@@ -2522,9 +2641,16 @@ export function ThreadWorkspace({
       visibleThreadMessages
     ]
   )
+  // Applied receipts update both presence and historical markers together while
+  // Core's refreshed projection is in flight; re-entry still uses the Core fact.
+  const [continuedRunIds, setContinuedRunIds] = useState<ReadonlySet<string>>(() => new Set())
+  useEffect(() => setContinuedRunIds(new Set()), [snapshot.thread.id])
   const presenceTimeline = useMemo(() => conversationRunPresenceTimeline(
-    conversationTimeline, snapshot.agentRuns, workspaceEntrySnapshotReady
-  ), [conversationTimeline, snapshot.agentRuns, workspaceEntrySnapshotReady])
+    conversationTimeline, snapshot.agentRuns, workspaceEntrySnapshotReady, continuedRunIds
+  ), [conversationTimeline, snapshot.agentRuns, workspaceEntrySnapshotReady, continuedRunIds])
+  const retainedStopIds = useMemo(() => new Set(presenceTimeline.flatMap(item =>
+    item.kind === 'run_presence' && isUserInterruptedRun(item.slot.run) ? [item.slot.run.id] : []
+  )), [presenceTimeline])
   const historyBoundaryId = anchorWindowBeforeNormal
     ? conversationTimeline.find(item => item.kind === 'camp_message' && item.message.sequence >= normalStart!)?.id : null
   const latestAgentMessageId = useMemo(() => {
@@ -2543,19 +2669,23 @@ export function ThreadWorkspace({
   [conversationFind.open, snapshot.thread.id])
   useEffect(() => {
     if (conversationView !== 'conversation' || notificationFocus?.active) {
+      cancelReplyReveal()
       anchorNavigation.navigation.cancelNavigation()
       runSourceNavigation.cancel()
     }
-  }, [conversationView, notificationFocus?.requestId, notificationFocus?.active, anchorNavigation.navigation, runSourceNavigation.cancel])
+  }, [conversationView, notificationFocus?.requestId, notificationFocus?.active, anchorNavigation.navigation, runSourceNavigation.cancel, cancelReplyReveal])
   const shortPublicMessages = usePublicMessageLayout(
     timelineScrollRef, conversationTimeline, snapshot.thread.id,
-    conversationView === 'conversation', groupingFollowsLatest
+    conversationView === 'conversation', groupingFollowsLatest, preserveTimelineReadingPosition
   )
   const isThreadEmpty = !campConversationHasVisibleHistory(conversationTimeline)
   const defaultLead = snapshot.members.find((member) => member.isDefaultLead && campMemberIsLeadEligible(member)) ?? null
   const hasCurrentMembers = campInspectorMembers(snapshot.members).length > 0
+  const effectiveComposerDraft = composerDraft && liveComposerAtoms?.threadId === snapshot.thread.id
+    ? { ...composerDraft, content: liveComposerAtoms.content }
+    : composerDraft
   const hasAvailableRecipient = pendingInviteIds.length > 0 || snapshot.members.some(campMemberIsLeadEligible)
-  const replyRepairRequired = composerDraftNeedsReplyRepair(composerDraft)
+  const replyRepairRequired = composerDraftNeedsReplyRepair(effectiveComposerDraft)
   const hasExplicitRecipient = composerLocalStatus.hasExplicitRecipient
   const continuationIntent = composerDraft?.continuationIntent ?? null
   const continuationReplacementMembers = composerRosterMembers.filter((member) =>
@@ -2569,14 +2699,14 @@ export function ThreadWorkspace({
     && continuationRecipient.profilePresence === 'present'
   const hasReadyAttachment = (composerDraft?.attachments.length ?? 0) > 0
   const hasSendablePayload = composerLocalStatus.hasContent || hasReadyAttachment
-  const composerDeliveryPlans = hasSendablePayload ? deliveryPlans(snapshot, composerDraft, deliveryMode, composerLocalStatus) : []
+  const composerDeliveryPlans = hasSendablePayload ? deliveryPlans(snapshot, effectiveComposerDraft, deliveryMode, composerLocalStatus) : []
   const composerDeliveryLabel = deliveryActionLabel(composerDeliveryPlans)
   const hasLocalDraftPayload = Boolean(
     hasSendablePayload
       || preparingAttachments.length > 0
   )
-  const continuationRepairRequired = composerDraftNeedsContinuationRepair(
-    composerDraft,
+  const continuationRepairRequired = !hasExplicitRecipient && composerDraftNeedsContinuationRepair(
+    effectiveComposerDraft,
     snapshot.members,
     hasLocalDraftPayload
   )
@@ -2598,12 +2728,12 @@ export function ThreadWorkspace({
     [composerSkillCatalog.candidates]
   )
   const unlistedSkillName = useMemo(() => {
-    if (composerSkillCatalog.status !== 'ready' || composerDraft?.threadId !== snapshot.thread.id) return null
+    if (composerSkillCatalog.status !== 'ready' || effectiveComposerDraft?.threadId !== snapshot.thread.id) return null
     const candidateIds = new Set(composerSkills.map((skill) => skill.id))
-    const missing = composerDraft.content.segments.find((segment) => segment.kind === 'atom'
+    const missing = effectiveComposerDraft.content.segments.find((segment) => segment.kind === 'atom'
       && segment.atom.type === 'skill' && !candidateIds.has(segment.atom.skillId))
     return missing?.kind === 'atom' && missing.atom.type === 'skill' ? missing.atom.nameAtSend : null
-  }, [composerDraft, composerSkillCatalog.status, composerSkills, snapshot.thread.id])
+  }, [effectiveComposerDraft, composerSkillCatalog.status, composerSkills, snapshot.thread.id])
   const activeRuns = snapshot.agentRuns.filter((run) => NON_TERMINAL_RUNS.has(run.status))
   const executionBlocked = activeRuns.length > 0 || stopping
   const composerInteractionDisabled = draftLoadState.state !== 'ready'
@@ -2690,7 +2820,9 @@ export function ThreadWorkspace({
     if (draftCoordinator.getCurrentDraft()?.threadId !== threadId) {
       throw new Error('Composer Draft context changed before content persistence.')
     }
-    await draftCoordinator.saveContent(content)
+    const requireLocalSave = pastedTextRecoveryThread.current === threadId
+    await draftCoordinator.saveContent(content, requireLocalSave)
+    if (requireLocalSave) pastedTextRecoveryThread.current = null
   }
 
   const retryComposerDraftLoad = async (): Promise<void> => {
@@ -2720,6 +2852,7 @@ export function ThreadWorkspace({
       throw new Error(uiAttribute('Composer 正在提交变更，请稍后再离开当前会话。'))
     }
     const composerHandle = composerHandleRef.current
+    composerHandle?.cancelHistoryPreview()
     composerHandle?.setInteractionLocked(true)
     const pendingLeavePreparations: ThreadLeavePreparation[] = []
     try {
@@ -2734,6 +2867,11 @@ export function ThreadWorkspace({
       await attachmentPreparationQueue.current
       const flushed = await composerHandle?.flush()
       const draft = flushed?.draft ?? await draftCoordinator.waitForIdle()
+      if (activationStateRef.current === 'pending' && !memberCreationRef.current) {
+        // Attachment-only changes do not dirty Lexical. Retry the existing
+        // presence/save acknowledgement before allowing this editor to leave.
+        await pendingDraftPersistence.current!.persist(draft)
+      }
       const settlePending = activationStateRef.current === 'pending'
         && !pendingDraftPersistence.current!.isActivated(snapshot.thread.id)
         ? pendingThreadLeaveRef.current
@@ -2975,6 +3113,7 @@ export function ThreadWorkspace({
   }, [client, focusConversationFindInput, snapshot.thread.id])
 
   const openConversationFind = useCallback((): void => {
+    cancelReplyReveal()
     runSourceNavigation.cancel()
     anchorNavigation.navigation.cancelNavigation()
     if (!conversationFind.open) {
@@ -3013,7 +3152,7 @@ export function ThreadWorkspace({
       setConversationView('conversation')
     }
     focusConversationFindInput(true)
-  }, [conversationFind.open, focusConversationFindInput, snapshot.thread.id, anchorNavigation.navigation, runSourceNavigation.cancel])
+  }, [conversationFind.open, focusConversationFindInput, snapshot.thread.id, anchorNavigation.navigation, runSourceNavigation.cancel, cancelReplyReveal])
 
   const closeConversationFind = useCallback((restore = true): void => {
     conversationFindRequestGeneration.current += 1
@@ -3064,6 +3203,7 @@ export function ThreadWorkspace({
   }, [snapshot.thread.id])
 
   const navigateUserAnchor = useCallback((messageId: string): void => {
+    cancelReplyReveal()
     runSourceNavigation.cancel()
     const threadId = snapshot.thread.id
     if (conversationFind.open) closeConversationFind(false)
@@ -3084,7 +3224,7 @@ export function ThreadWorkspace({
           - viewport.getBoundingClientRect().top - 18), behavior: prefersReducedMotion() ? 'instant' : 'smooth' })
       }))
     }).catch(error => (onNotifyError ?? onNotify)(readErrorMessage(error)))
-  }, [snapshot.thread.id, conversationFind.open, closeConversationFind, anchorNavigation.navigation,
+  }, [snapshot.thread.id, conversationFind.open, closeConversationFind, anchorNavigation.navigation, cancelReplyReveal,
     visibleMessageById, onNotifyError, onNotify, runSourceNavigation.cancel])
 
   const navigateConversationFind = (direction: 1 | -1): void => {
@@ -3218,6 +3358,7 @@ export function ThreadWorkspace({
     composerHandle.setInteractionLocked(true)
     let before: Awaited<ReturnType<StructuredMentionComposerHandle['flush']>> | null = null
     try {
+      composerHandle.adoptHistoryPreview()
       before = await composerHandle.flush()
       const nextDraft = await mutation()
       if (!composerDocumentsEqualDirect(before.document, nextDraft.content)) {
@@ -3368,10 +3509,11 @@ export function ThreadWorkspace({
   ])
 
   const revealQuote = async (quote: MessageQuoteSnapshot): Promise<void> => {
+    cancelReplyReveal()
     runSourceNavigation.cancel()
     anchorNavigation.navigation.cancelNavigation()
     const threadId = snapshot.thread.id
-    if (quote.source.scope !== 'camp' || quote.source.campId !== threadId) throw new Error('quote.owner_mismatch')
+    if (quote.source?.scope !== 'camp' || quote.source.campId !== threadId) throw new Error('quote.owner_mismatch')
     const messageId = quote.source.messageId
     setConversationView('conversation')
     setQuoteSourceId(messageId)
@@ -3387,40 +3529,77 @@ export function ThreadWorkspace({
     if (activeThreadIdRef.current !== threadId) return
     const target = timelineScrollRef.current?.querySelector<HTMLElement>(`[data-message-quote-body="${CSS.escape(messageId)}"][data-quote-owner="thread:${CSS.escape(threadId)}"]`)
     if (!target) throw new Error('quote.source_unavailable')
-    await revealMessageQuote(quote, target, source.authorType === 'user' ? source.body.replace(/\r\n/gu, '\n') : undefined)
+    revealMessageQuote(target)
   }
 
-  const revealReplyParent = async (messageId: string): Promise<void> => {
+  const revealReplyParent = async (messageId: string, fromDetails = false): Promise<void> => {
+    const threadId = snapshot.thread.id
+    cancelReplyReveal()
+    const generation = replyRevealGeneration.current
+    replyRevealActive.current = true
+    const isCurrent = (): boolean => activeThreadIdRef.current === threadId
+      && replyRevealGeneration.current === generation
     runSourceNavigation.cancel()
     anchorNavigation.navigation.cancelNavigation()
+    // Explicit navigation owns the reading position before closing/resizing the pane
+    // or mounting history. Otherwise ResizeObserver can restore the latest message.
+    const viewport = timelineScrollRef.current
+    timelineReadingPosition.current = { threadId,
+      position: { scrollTop: viewport?.scrollTop ?? 0, followingLatest: false } }
+    if (fromDetails) closeReplyDetails(false)
     setConversationView('conversation')
-    const existing = timelineScrollRef.current?.querySelector<HTMLElement>(
-      `[data-message-id="${CSS.escape(messageId)}"]`
-    )
-    if (existing) {
-      existing.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
-      existing.focus({ preventScroll: true })
-      return
+    setReplyInteractionError(null)
+    if (!visibleMessageById.has(messageId)) {
+      const messages = replyAnchorWindows.get(messageId) ?? await loadReplyAnchorWindow(messageId)
+      if (!isCurrent()) return
+      if (!messages) {
+        cancelReplyReveal()
+        setReplyInteractionError(uiAttribute('引用的消息当前不可用。'))
+        return
+      }
+      setAnchoredMessages((current) => {
+        const merged = new Map(current.map((message) => [message.id, message]))
+        for (const message of messages) merged.set(message.id, message)
+        return [...merged.values()]
+      })
     }
-    const messages = replyAnchorWindows.get(messageId) ?? await loadReplyAnchorWindow(messageId)
-    if (!messages) {
+    // Even an already mounted row has new geometry when the detail pane closes.
+    await new Promise<void>(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    })
+    if (!isCurrent()) return
+    const scroll = timelineScrollRef.current
+    const target = scroll?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`)
+    if (!scroll?.clientHeight || !target) {
+      cancelReplyReveal()
       setReplyInteractionError(uiAttribute('引用的消息当前不可用。'))
       return
     }
-    setAnchoredMessages((current) => {
-      const merged = new Map(current.map((message) => [message.id, message]))
-      for (const message of messages) merged.set(message.id, message)
-      return [...merged.values()]
-    })
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        const target = timelineScrollRef.current?.querySelector<HTMLElement>(
-          `[data-message-id="${CSS.escape(messageId)}"]`
-        )
-        target?.scrollIntoView({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' })
-        target?.focus({ preventScroll: true })
-      })
-    })
+    target.focus({ preventScroll: true })
+    const destination = (): number => Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight,
+      scroll.scrollTop + target.getBoundingClientRect().top - scroll.getBoundingClientRect().top
+      - Math.max(18, (scroll.clientHeight - target.clientHeight) / 2)))
+    const finish = (): void => {
+      if (!isCurrent()) return
+      // Grouping can change row heights during the animation. Finish against the
+      // destination's current geometry, then hand reading ownership back to layout.
+      const top = destination()
+      cancelReplyReveal()
+      scroll.scrollTo({ top, behavior: 'instant' })
+      timelineLayoutAnchorRef.current = { threadId, width: timelineViewportWidth(scroll), hidden: false,
+        scrollTop: scroll.scrollTop, anchor: captureTimelineReadingAnchor(scroll) }
+      timelineReadingPosition.current = { threadId, position: { scrollTop: scroll.scrollTop, followingLatest: false } }
+      timelineViewportGeometry.current = { threadId,
+        geometry: { scrollTop: scroll.scrollTop, scrollHeight: scroll.scrollHeight, clientHeight: scroll.clientHeight } }
+    }
+    scroll.addEventListener('scrollend', finish)
+    replyRevealCleanup.current = () => {
+      scroll.removeEventListener('scrollend', finish)
+      scroll.scrollTo({ top: scroll.scrollTop, behavior: 'instant' })
+    }
+    const top = destination()
+    if (Math.abs(top - scroll.scrollTop) <= 1 || prefersReducedMotion()) finish()
+    else scroll.scrollTo({ top, behavior: 'smooth' })
   }
 
   useLayoutEffect(() => {
@@ -3456,6 +3635,8 @@ export function ThreadWorkspace({
     })
     initializedComposerRoute.current = null
     setPreparingAttachments([])
+    preparingAttachmentNames.current.clear()
+    setPasteMessage(null)
     setFailedAttachments([])
     setAttachmentDragState(null)
     setAnchoredMessages([])
@@ -3696,7 +3877,7 @@ export function ThreadWorkspace({
       threadId,
       position: {
         scrollTop: geometry.scrollTop,
-        followingLatest: !conversationFind.open && campTimelineFollowingLatestAfterScroll(
+        followingLatest: !replyRevealActive.current && !conversationFind.open && campTimelineFollowingLatestAfterScroll(
           previousPosition,
           previousGeometry,
           geometry
@@ -3739,6 +3920,7 @@ export function ThreadWorkspace({
   const restoreTimelineLayout = useCallback((): void => {
     const scroll = timelineScrollRef.current
     if (!scroll) return
+    if (replyRevealActive.current) return
     const threadId = snapshot.thread.id
     const saved = timelineLayoutAnchorRef.current
     const width = timelineViewportWidth(scroll)
@@ -3765,6 +3947,7 @@ export function ThreadWorkspace({
   }, [snapshot.thread.id])
 
   const followTimelineAfterUserSend = useCallback((threadId: string): void => {
+    cancelReplyReveal()
     runSourceNavigation.cancel()
     const scroll = timelineScrollRef.current
     const position = scroll
@@ -3786,7 +3969,7 @@ export function ThreadWorkspace({
       timelinePositionSaveTimer.current = null
     }
     rememberThreadTimelineReadingPosition(threadId, position)
-  }, [runSourceNavigation.cancel])
+  }, [runSourceNavigation.cancel, cancelReplyReveal])
 
   useLayoutEffect(() => {
     const threadId = snapshot.thread.id
@@ -3946,6 +4129,8 @@ export function ThreadWorkspace({
       const messageIds = new Set<string>()
       const campTurnIds = new Set<string>()
       const agentRunIds = new Set<string>()
+      const terminalRunIds = new Set(snapshot.agentRuns
+        .filter(run => ['succeeded', 'failed', 'cancelled'].includes(run.status)).map(run => run.id))
       const approvalIds = new Set<string>()
       if (canObserveConversation && timeline) {
         const viewport = timeline.getBoundingClientRect()
@@ -3955,6 +4140,11 @@ export function ThreadWorkspace({
           const threadTurnId = node.dataset.threadTurnId
           if (messageId) messageIds.add(messageId)
           if (threadTurnId && !node.classList.contains('user')) campTurnIds.add(threadTurnId)
+        }
+        for (const node of timeline.querySelectorAll<HTMLElement>('[data-presence-run][data-presence-state="failed"]')) {
+          const runId = node.dataset.presenceRun
+          if (runId && terminalRunIds.has(runId) && node.getClientRects().length
+            && rectanglesOverlap(node.getBoundingClientRect(), viewport)) agentRunIds.add(runId)
         }
         const approvalNode = approvalDockRef.current?.querySelector<HTMLElement>(
           '[data-approval-id]'
@@ -3977,7 +4167,7 @@ export function ThreadWorkspace({
           if (!viewport || !node.getClientRects().length || viewport.hidden) continue
           if (!rectanglesOverlap(node.getBoundingClientRect(), viewport.getBoundingClientRect())) continue
           const agentRunId = node.dataset.agentRunId
-          if (agentRunId) agentRunIds.add(agentRunId)
+          if (agentRunId && terminalRunIds.has(agentRunId)) agentRunIds.add(agentRunId)
         }
       }
       const sources: VisibleNotificationSources = {
@@ -4054,6 +4244,7 @@ export function ThreadWorkspace({
     singleChatVisible,
     onVisibleNotificationSources,
     snapshot.approvals,
+    snapshot.agentRuns,
     snapshot.thread.id,
     snapshot.messages,
     snapshot.throughGlobalSequence
@@ -4078,12 +4269,16 @@ export function ThreadWorkspace({
     composerHandle.setInteractionLocked(true)
     setComposerInviteMessage(null)
     try {
+      composerHandle.adoptHistoryPreview()
       await attachmentPreparationQueue.current
       const flushed = await composerHandle.flush()
       const frozenDraft = flushed.draft ?? draftCoordinator.getCurrentDraft()
       if (!frozenDraft) throw new Error(uiAttribute('Composer Draft 尚未就绪。'))
       const currentSnapshot = activeSnapshotRef.current
       const routedDraft = materializeLocalContinuation(frozenDraft, currentSnapshot.members)
+      if (routedDraft.content.segments.some(segment => segment.kind === 'atom' && isReferenceAtom(segment.atom))
+        && !routedDraft.content.segments.some(segment => segment.kind === 'text' && segment.text.trim())
+        && !routedDraft.attachments.length) throw new Error(uiAttribute('请补充本轮内容'))
       // Flush can change recipients; keep the execution snapshot from this
       // submission so an ended target cannot turn into a successor's Steer.
       const submittedDeliveryPlans = deliveryPlans(snapshot, routedDraft, deliveryMode)
@@ -4127,11 +4322,6 @@ export function ThreadWorkspace({
         }])
       }
       try {
-        const discardAttachments = client.composerAttachments.discard?.(
-          threadId,
-          frozenDraft.attachments.map(({ id }) => id)
-        )
-        if (discardAttachments) await discardAttachments.catch(() => undefined)
         const nextDraft = nextLocalThreadComposerDraftAfterSend({
           sent: routedDraft,
           threadMessageId: sendReceipt.threadMessageId,
@@ -4140,7 +4330,18 @@ export function ThreadWorkspace({
         })
         // The accepted response can arrive before the Active projection. Clear the
         // persisted first input immediately so reopening cannot resurrect a sent draft.
-        saveLocalThreadComposerDraft(nextDraft)
+        if (frozenDraft.attachments.some(attachment => attachment.generatedBy === 'long_text_paste')) {
+          const storage = window.localStorage
+          if (!storage) throw new Error('Local draft storage is unavailable')
+          saveLocalThreadComposerDraft(nextDraft, storage)
+        } else {
+          saveLocalThreadComposerDraft(nextDraft)
+        }
+        const discardAttachments = client.composerAttachments.discard?.(
+          threadId,
+          frozenDraft.attachments.map(({ id }) => id)
+        )
+        if (discardAttachments) await discardAttachments.catch(() => undefined)
         if (draftThreadId.current === threadId) {
           draftCoordinator.acceptAuthoritativeDraft(nextDraft)
           initializedComposerRoute.current = {
@@ -4194,7 +4395,10 @@ export function ThreadWorkspace({
     void submitMessage()
   }
 
-  const prepareFiles = async (inputs: AttachmentPreparationInput[]): Promise<void> => {
+  const prepareFiles = async (
+    inputs: AttachmentPreparationInput[],
+    pastedText?: { text: string; editor: StructuredMentionComposerHandle; epoch: number }
+  ): Promise<void> => {
     if (
       draftLoadState.state !== 'ready'
       || composerSubmittingRef.current
@@ -4208,15 +4412,26 @@ export function ThreadWorkspace({
         ? file
         : new File([file], `粘贴图片-${Date.now()}-${index + 1}.png`, { type: file.type })
     }))
+    for (const item of pending) preparingAttachmentNames.current.set(item.id, item.file.name)
     setPreparingAttachments((current) => [
       ...current,
       ...pending.map(({ id, file, kind }) => ({ id, name: file.name, kind }))
     ])
+    const recoverPastedText = (): boolean => {
+      if (!pastedText || draftThreadId.current !== threadId
+        || draftCoordinator.getEpoch() !== pastedText.epoch) return false
+      pastedTextRecoveryThread.current = threadId
+      pastedText.editor.appendText(pastedText.text)
+      setPasteMessage(uiAttribute('未能创建附件，原文已追加到输入框末尾'))
+      // A recovered paste must not leave an error card blocking the send button.
+      setFailedAttachments((current) => current.filter(({ id }) => !pending.some(item => item.id === id)))
+      return true
+    }
     const preparePending = async (): Promise<void> => {
       try {
-        await composerHandleRef.current?.flush()
+        await (pastedText?.editor ?? composerHandleRef.current)?.flush()
       } catch (error) {
-        if (draftThreadId.current === threadId) {
+        if (!recoverPastedText() && draftThreadId.current === threadId) {
           setFailedAttachments((current) => [
             ...current,
             ...pending.map((item) => ({
@@ -4230,13 +4445,37 @@ export function ThreadWorkspace({
         setPreparingAttachments((current) => current.filter(
           ({ id }) => !pending.some((item) => item.id === id)
         ))
+        for (const item of pending) preparingAttachmentNames.current.delete(item.id)
         return
       }
       for (const item of pending) {
+        let accepted = false
+        let preparedAttachmentId: string | null = null
         try {
-          await draftCoordinator.addSourceAttachment(item.file)
+          if (pastedText && (draftThreadId.current !== threadId || draftCoordinator.getEpoch() !== pastedText.epoch)) continue
+          if (pastedText && (draftCoordinator.getCurrentDraft()?.attachments.length ?? 0) >= MAX_LOCAL_COMPOSER_ATTACHMENTS) {
+            throw new Error('Composer attachment limit reached')
+          }
+          await draftCoordinator.addSourceAttachment(item.file, pastedText ? {
+            pastedText: true,
+            onAccepted: () => { accepted = true },
+            onPrepared: attachment => { preparedAttachmentId = attachment.id }
+          } : undefined)
         } catch (error) {
-          if (draftThreadId.current === threadId) {
+          if (pastedText && accepted && draftThreadId.current === threadId) {
+            setComposerPersistenceError(error instanceof Error ? error : new Error(readErrorMessage(error)))
+          } else if (recoverPastedText()) {
+            // Restore content first. Cleanup is secondary and never turns an
+            // otherwise usable editor into a failed draft.
+            if (preparedAttachmentId) {
+              await client.composerAttachments.removePastedText?.(threadId, preparedAttachmentId)
+                .catch(() => {
+                  if (draftThreadId.current === threadId) {
+                    setPasteMessage(uiAttribute('原文已回填，生成文件清理失败。'))
+                  }
+                })
+            }
+          } else if (draftThreadId.current === threadId) {
             setFailedAttachments((current) => [
               ...current,
               {
@@ -4248,6 +4487,7 @@ export function ThreadWorkspace({
             ])
           }
         } finally {
+          preparingAttachmentNames.current.delete(item.id)
           setPreparingAttachments((current) => current.filter(({ id }) => id !== item.id))
         }
       }
@@ -4257,6 +4497,25 @@ export function ThreadWorkspace({
       preparePending
     )
     await attachmentPreparationQueue.current
+  }
+
+  const pasteLongText = (text: string): boolean => {
+    const editor = composerHandleRef.current
+    if (!editor || !client.composerAttachments.preparePastedText || memberCreation
+      || draftLoadState.state !== 'ready' || composerSubmittingRef.current || routingMutatingRef.current) return false
+    let file: File
+    try {
+      const names = [
+        ...(draftCoordinator.getCurrentDraft()?.attachments.map(item => item.displayName) ?? []),
+        ...preparingAttachmentNames.current.values()
+      ]
+      file = new File([text], pastedTextFileName(names, index => uiAttribute('粘贴内容-{0}.txt', index)), { type: 'text/plain;charset=utf-8' })
+    } catch {
+      // Still inside paste: the ordinary text branch can insert the original.
+      return false
+    }
+    void prepareFiles([{ file, kindHint: 'file' }], { text, editor, epoch: draftCoordinator.getEpoch() })
+    return true
   }
 
   const clearAttachmentDragState = (): void => {
@@ -4357,8 +4616,25 @@ export function ThreadWorkspace({
       || composerSubmittingRef.current
       || routingMutatingRef.current
     ) return
-    await composerHandleRef.current?.flush()
-    await draftCoordinator.removeSourceAttachment(attachmentId)
+    const threadId = snapshot.thread.id
+    const pastedText = draftCoordinator.getCurrentDraft()?.attachments.some(
+      attachment => attachment.id === attachmentId && attachment.generatedBy === 'long_text_paste'
+    ) ?? false
+    let removedFromSavedDraft = false
+    try {
+      await composerHandleRef.current?.flush()
+      await draftCoordinator.removeSourceAttachment(attachmentId, pastedText, () => { removedFromSavedDraft = true })
+    } catch (error) {
+      setComposerPersistenceError(error instanceof Error ? error : new Error(readErrorMessage(error)))
+      if (!removedFromSavedDraft) return
+    }
+    if (pastedText) {
+      try {
+        await client.composerAttachments.removePastedText?.(threadId, attachmentId)
+      } catch {
+        if (draftThreadId.current === threadId) setPasteMessage(uiAttribute('附件已移除，生成文件清理失败。'))
+      }
+    }
   }
 
   const copyMessage = (
@@ -4387,7 +4663,6 @@ export function ThreadWorkspace({
     try {
       await onWithdrawMessage(message)
       setWithdrawalMessage(null)
-      onNotify(uiAttribute('消息已撤回'))
     } catch (error) {
       setWithdrawalError(readErrorMessage(error, uiAttribute('撤回失败，请重试。')))
     } finally {
@@ -4399,6 +4674,37 @@ export function ThreadWorkspace({
     if (composerInteractionDisabled || composerDraft?.threadId !== snapshot.thread.id) return
     composerHandleRef.current?.setDocument(composerDocumentFromText(prompt), 'end')
     if (announceDraft) setStarterNotice(uiAttribute('内容已填入，可编辑后发送。'))
+  }
+
+  const restoreWithdrawnText = (messageId: string): void => {
+    const document = reeditStore?.readReady(snapshot.thread.id, messageId)
+    if (!document) {
+      const message = uiAttribute('重新编辑已过期，当前草稿已保留。')
+      if (reeditMessageId) setReeditError(message)
+      else onNotify(message)
+      return
+    }
+    if (composerInteractionDisabled || busy || composerDraft?.threadId !== snapshot.thread.id) return
+    const handle = composerHandleRef.current
+    if (!handle) return
+    handle.adoptHistoryPreview()
+    handle.setDocument(document, 'end')
+    setReeditMessageId(null)
+    setReeditError(null)
+    requestAnimationFrame(() => { if (draftThreadId.current === snapshot.thread.id) handle.focus('end') })
+  }
+  const requestReedit = (messageId: string): void => {
+    if (composerInteractionDisabled || busy) return
+    if (!reeditStore?.readReady(snapshot.thread.id, messageId)) { restoreWithdrawnText(messageId); return }
+    const visible = composerHandleRef.current?.getDocument()
+    const original = draftCoordinator.getCurrentDraft()
+    const hasText = (document: ComposerDocument | undefined): boolean => Boolean(document?.segments.some(segment =>
+      segment.kind === 'atom' || segment.text.length > 0))
+    if (hasText(visible) || hasText(original?.content) || original?.attachments.length || original?.quotes.length
+      || original?.replyIntent || preparingAttachments.length || failedAttachments.length) {
+      setReeditError(null)
+      setReeditMessageId(messageId)
+    } else restoreWithdrawnText(messageId)
   }
 
   const selectInspectorTab = (tab: ThreadInspectorTab): void => {
@@ -4733,7 +5039,9 @@ export function ThreadWorkspace({
     const submittedExecutionRequest = submittedExecutionRequests[0]
     if (!submittedExecutionRequest) return
     const consumeRequest = (): void => { setSubmittedExecutionRequests((current) => current.slice(1)) }
-    if (suppressExecutionAutoOpen) { consumeRequest(); return }
+    // Consume even before the Run arrives so leaving the preview cannot replay
+    // an automatic navigation that was declined while the user was reading.
+    if (suppressExecutionAutoOpen || rightPreviewBlocksExecutionAutoOpen) { consumeRequest(); return }
     if (taskCreationBlocksSubmittedRunAutoFocus(
       taskCreationActive,
       inspectorVisible,
@@ -4781,7 +5089,8 @@ export function ThreadWorkspace({
     initializePreviewMinimumWidth,
     mobile,
     taskCreationActive,
-    suppressExecutionAutoOpen
+    suppressExecutionAutoOpen,
+    rightPreviewBlocksExecutionAutoOpen
   ])
 
   const conversationFindTotal = conversationFind.snapshot?.totalMatchCount ?? 0
@@ -4809,10 +5118,35 @@ export function ThreadWorkspace({
   const conversationFindNavigationDisabled = conversationFindBusy
     || conversationFindTotal <= 0
 
+  // Share message semantics with the timeline; only the reader's outer layout differs.
+  const renderPublicMessageBody = (message: ThreadMessageView, context: 'timeline' | 'reply', forceExpanded = false): JSX.Element => {
+    const onFileReference: FileReferenceActivation = (rawReference, source, target) => {
+      if (!filePreview) return
+      if (context === 'reply') closeReplyDetails()
+      else captureFilePreviewAnchor(source)
+      void filePreview.open({ kind: 'message_reference', threadId: snapshot.thread.id,
+        messageId: message.id, rawReference }, target).then(outcome => {
+        if (outcome.kind === 'error') notifyError(outcome.error.message)
+      })
+    }
+    if (message.authorType === 'agent' && !message.content?.some(segment => segment.kind === 'current_user_mention')) {
+      return <AgentMessageMarkdownBody body={message.body} content={message.content} members={snapshot.members}
+        pendingMemberProfiles={pendingMemberProfiles} onActivateMemberMention={openMemberProfilePopover}
+        onFileReference={onFileReference} />
+    }
+    return <TruncatedStructuredMessageBody body={message.body} content={message.content} members={snapshot.members}
+      pendingMemberProfiles={pendingMemberProfiles} leadingRecipientAgentId={defaultRecipientMentionAgentId(message)}
+      truncate={context === 'timeline' && (message.authorType === 'user' || message.authorType === 'external_principal')}
+      forceExpanded={forceExpanded} renderLeadingCurrentUserMarkdown={message.authorType === 'agent'}
+      onActivateCurrentUserMention={openCurrentUserProfilePopover} onActivateMemberMention={openMemberProfilePopover}
+      onActivateAllMembersMention={(trigger, focusPanel) => openAllMembersMentionPopover('history', message.addressedAgentIds, trigger, focusPanel)}
+      onActivateSkillMention={openSkillPreview} onFileReference={onFileReference} />
+  }
+
   const executionDrawer = executionDrawerProcess ? (
     <ExecutionDrawer
       key={executionDrawerProcess.agentId}
-      placement={executionPlacement}
+      placement={replyExecutionVisible ? 'inspector' : executionPlacement}
       process={executionDrawerProcess}
       overview={executionDrawerOverview}
       memberFast={memberFast}
@@ -4835,7 +5169,7 @@ export function ThreadWorkspace({
       confirmingRunIds={confirmingRunIds}
       focusedRunId={executionDrawerFocusedRunId}
       focusRequest={executionDrawerFocusRequest}
-      onClose={closeExecutionProcess}
+      onClose={replyExecutionVisible ? () => setReplyExecutionVisible(false) : closeExecutionProcess}
       onCancelAgentRun={onCancelAgentRun}
       memberById={memberById}
       onRevealMessage={(messageId) => void revealReplyParent(messageId)}
@@ -4927,7 +5261,7 @@ export function ThreadWorkspace({
         navigateUserAnchor(messageId)
       }
     }}>
-    <section ref={workspaceShellRef} className="workspace-shell camp-workspace" data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} data-mobile-execution-maximized={mobile && mobileExecutionMaximized || undefined} aria-label={uiAttribute("会话：{0}", String(formatThreadTitle(snapshot.thread, firstRunThreadId)))}>
+    <section ref={workspaceShellRef} className={`workspace-shell camp-workspace${replyDetail.messageId ? ' reply-detail-open' : ''}${replyFull ? ' reply-detail-full' : ''}`} style={{ '--reply-detail-width': `${replyWidth}px` } as CSSProperties} data-mobile-panel={mobile && inspectorVisible ? inspectorSurfaceTab : undefined} data-mobile-execution-maximized={mobile && mobileExecutionMaximized || undefined} aria-label={uiAttribute("会话：{0}", String(formatThreadTitle(snapshot.thread, firstRunThreadId)))}>
       <FilePreviewWorkspace
       >
         <RevealNotificationConversation active={!!notificationFocus?.active
@@ -5087,12 +5421,15 @@ export function ThreadWorkspace({
               aria-label={uiAttribute("对话时间线")}
               hidden={conversationView !== 'conversation'}
               onWheelCapture={(event) => {
+                cancelReplyReveal()
                 captureFilePreviewAnchor()
                 if (event.deltaY < 0) checkHistoryAfterUserInput()
               }}
-              onTouchStartCapture={() => captureFilePreviewAnchor()}
+              onTouchStartCapture={() => { cancelReplyReveal(); captureFilePreviewAnchor() }}
+              onPointerDownCapture={cancelReplyReveal}
               onKeyDownCapture={(event) => {
                 if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+                  cancelReplyReveal()
                   captureFilePreviewAnchor()
                 }
                 if (campHistoryKeyboardInputMovesEarlier(event.key, event.shiftKey)) {
@@ -5141,7 +5478,8 @@ export function ThreadWorkspace({
                         confirming: confirmingRunIds.has(run.id),
                         turnCancelling: run.threadTurnId !== null && cancellingTurnIds.has(run.threadTurnId)
                       })}
-                      onStop={onCancelAgentRun} onOpen={openExecutionProcess} onOpenMotionSettings={onOpenMotionSettings} onError={notifyError} />)
+                      onContinued={runId => setContinuedRunIds(current => new Set(current).add(runId))}
+                      onStop={onCancelAgentRun} onOpen={openExecutionProcess} onError={notifyError} />)
                     continue
                   }
                   const dayKey = localDayKey(timelineItem.createdAt)
@@ -5232,7 +5570,7 @@ export function ThreadWorkspace({
                             ))}
                           </div>
                         )}
-                        {isUserInterruptedRun(run) && (
+                        {isUserInterruptedRun(run) && !retainedStopIds.has(run.id) && (
                           <RunInterruptionMarker run={run} author={author} onOpen={openExecutionProcess} />
                         )}
                       </section>
@@ -5281,6 +5619,8 @@ export function ThreadWorkspace({
                     continue
                   }
                   const campMessage = timelineItem.message
+                  const interruptedRun = timelineItem.interruptedRun && !retainedStopIds.has(timelineItem.interruptedRun.id)
+                    ? timelineItem.interruptedRun : undefined
                   if (campMessage.withdrawn) {
                     previousMessageAuthorKey = null
                     items.push(
@@ -5291,6 +5631,9 @@ export function ThreadWorkspace({
                         aria-label={uiAttribute("你撤回了第{0}条消息", String(campMessage.sequence))}
                       >
                         <span><UiText zh={"你撤回了一条消息"} /></span>
+                        {reeditStore && <MessageReeditButton store={reeditStore} threadId={snapshot.thread.id}
+                          messageId={campMessage.id} disabled={composerInteractionDisabled || busy}
+                          onSelect={() => requestReedit(campMessage.id)} />}
                         <time>{messageClockTime(campMessage.createdAt)}</time>
                       </div>
                     )
@@ -5335,6 +5678,13 @@ export function ThreadWorkspace({
                   const joinsNextMessage = nextItem?.kind === 'camp_message'
                     && shortPublicMessages.has(campMessage.id)
                     && samePublicMessageSegment(groupingMessage(campMessage), groupingMessage(nextItem.message))
+                  const messageTime = messageTimeParts(campMessage.createdAt, interfaceLanguage, messageTimeDate)
+                  const messageTimestamp = !joinsNextMessage && messageTime ? (
+                    <time className="message-action-time" dateTime={campMessage.createdAt} tabIndex={0}
+                      title={messageTime.full} aria-label={`${messageTime.full} · #${campMessage.sequence}`}>
+                      {messageTime.short}
+                    </time>
+                  ) : undefined
                   const campMessageDeliveries = snapshot.messageDeliveries.filter((delivery) =>
                     delivery.deliveryKind === 'public_a2a'
                     && !delivery.continuationRequest
@@ -5352,6 +5702,20 @@ export function ThreadWorkspace({
                     && replyAnchorWindows.has(replyParentId)
                     && replyAnchorWindows.get(replyParentId) === null
                   )
+                  const replyQuote = replyParentId && (
+                                  <ReplyParentQuote
+                                    parent={replyParent}
+                                    projectedBody={replyParent?.content
+                                      ? structuredThreadContentPlainText(replyParent.content, messageMentionNames, currentUserName)
+                                      : replyParent?.body ?? ''}
+                                    authorLabel={replyParent
+                                      ? campMessageAuthorLabel(replyParent, memberById, currentUserName)
+                                      : null}
+                                    unavailable={replyParentUnavailable}
+                                    loading={!replyParent && !replyParentUnavailable}
+                                    onReveal={() => openReplyDetails(campMessage.id)}
+                                  />
+                                )
                   const isConversationFindCurrent = conversationFind.open
                     && conversationFind.snapshot?.match?.messageId === campMessage.id
                   const trailingResultItems: Extract<
@@ -5440,11 +5804,6 @@ export function ThreadWorkspace({
                           <CurrentUserAvatar profile={currentUserProfile} className="local-message-avatar" />
                         </button>
                       )}
-                      {campMessage.authorType === 'agent' && (
-                        <time className="message-continuation-time" aria-hidden="true">
-                          {messageClockTime(campMessage.createdAt)}
-                        </time>
-                      )}
                       {(campMessage.authorType === 'user'
                         || campMessage.authorType === 'agent'
                         || campMessage.authorType === 'external_principal')
@@ -5467,10 +5826,10 @@ export function ThreadWorkspace({
                                   <MessageModelSummary message={campMessage} installations={installations}
                                     displayName={author} avatarRef={authorProfile?.avatarRef ?? null} />
                                 )}
-                                <time title={`#${campMessage.sequence}`}>{messageClockTime(campMessage.createdAt)}</time>
                               </div>
                               <div className="public-message-readout">
                               <MessageSurface
+                                timestamp={messageTimestamp}
                                 copied={copied}
                                 hasDelivery={campMessage.authorType === 'agent' && campMessageDeliveries.length > 0}
                                 showActions={campMessage.authorType !== 'agent'}
@@ -5499,20 +5858,8 @@ export function ThreadWorkspace({
                                 onCopy={handleCopy}
                               >
                                 <MessageQuotes history quotes={campMessage.quotes ?? []} onReveal={revealQuote} />
-                                {replyParentId && (
-                                  <ReplyParentQuote
-                                    parent={replyParent}
-                                    projectedBody={replyParent?.content
-                                      ? structuredThreadContentPlainText(replyParent.content, messageMentionNames, currentUserName)
-                                      : replyParent?.body ?? ''}
-                                    authorLabel={replyParent
-                                      ? campMessageAuthorLabel(replyParent, memberById, currentUserName)
-                                      : null}
-                                    unavailable={replyParentUnavailable}
-                                    loading={!replyParent && !replyParentUnavailable}
-                                    onReveal={() => void revealReplyParent(replyParentId)}
-                                  />
-                                )}
+
+                                {!displayBody.trim() && defaultRecipientAgentId === null && replyQuote && <div className="message-bubble">{replyQuote}</div>}
                                 {humanAuthored && (
                                   <MessageAttachmentGroups
                                     attachments={campMessage.attachments}
@@ -5528,63 +5875,23 @@ export function ThreadWorkspace({
                                     segment.kind === 'current_user_mention'
                                   )
                                     ? (
-                                        <div className="final-copy" data-message-quote-body={campMessage.id} data-quote-owner={`thread:${snapshot.thread.id}`}>
-                                          <AgentMessageMarkdownBody
-                                            body={displayBody}
-                                            content={campMessage.content}
-                                            members={snapshot.members}
-                                            pendingMemberProfiles={pendingMemberProfiles}
-                                            onActivateMemberMention={openMemberProfilePopover}
-                                            onFileReference={(rawReference, source, target) => {
-                                              if (!filePreview) return
-                                              captureFilePreviewAnchor(source)
-                                              void filePreview.open({
-                                                kind: 'message_reference',
-                                                threadId: snapshot.thread.id,
-                                                messageId: campMessage.id,
-                                                rawReference
-                                              }, target).then((outcome) => {
-                                                if (outcome.kind === 'error') onNotify(outcome.error.message)
-                                              })
-                                            }}
-                                          />
-                                        </div>
+                                        <AgentMessageContent className="final-copy" data-message-quote-body={campMessage.id} data-quote-owner={`thread:${snapshot.thread.id}`}>
+                                          {replyQuote}
+                                          {renderPublicMessageBody(campMessage, 'timeline')}
+                                        </AgentMessageContent>
                                       )
                                     : (
-                                        <div className="message-bubble" data-message-quote-body={campMessage.authorType === 'user' || campMessage.authorType === 'agent' ? campMessage.id : undefined} data-quote-owner={`thread:${snapshot.thread.id}`}>
-                                          <TruncatedStructuredMessageBody
-                                            body={displayBody}
-                                            content={campMessage.content}
-                                            members={snapshot.members}
-                                            pendingMemberProfiles={pendingMemberProfiles}
-                                            leadingRecipientAgentId={defaultRecipientAgentId}
-                                            truncate={humanAuthored}
-                                            forceExpanded={isConversationFindCurrent || quoteSourceId === campMessage.id}
-                                            renderLeadingCurrentUserMarkdown={campMessage.authorType === 'agent'}
-                                            onActivateCurrentUserMention={openCurrentUserProfilePopover}
-                                            onActivateMemberMention={openMemberProfilePopover}
-                                            onActivateAllMembersMention={(trigger, focusPanel) =>
-                                              openAllMembersMentionPopover(
-                                                'history',
-                                                campMessage.addressedAgentIds,
-                                                trigger,
-                                                focusPanel
-                                              )}
-                                            onActivateSkillMention={openSkillPreview}
-                                            onFileReference={(rawReference, source, target) => {
-                                              if (!filePreview) return
-                                              captureFilePreviewAnchor(source)
-                                              void filePreview.open({
-                                                kind: 'message_reference',
-                                                threadId: snapshot.thread.id,
-                                                messageId: campMessage.id,
-                                                rawReference
-                                              }, target).then((outcome) => {
-                                                if (outcome.kind === 'error') onNotify(outcome.error.message)
-                                              })
-                                            }}
-                                          />
-                                        </div>
+                                        campMessage.authorType === 'agent' ? (
+                                          <AgentMessageContent className="message-bubble" data-message-quote-body={campMessage.id} data-quote-owner={`thread:${snapshot.thread.id}`}>
+                                            {replyQuote}
+                                            {renderPublicMessageBody(campMessage, 'timeline', isConversationFindCurrent || quoteSourceId === campMessage.id)}
+                                          </AgentMessageContent>
+                                        ) : (
+                                          <div className="message-bubble" data-message-quote-body={campMessage.authorType === 'user' ? campMessage.id : undefined} data-quote-owner={`thread:${snapshot.thread.id}`}>
+                                            {replyQuote}
+                                            {renderPublicMessageBody(campMessage, 'timeline', isConversationFindCurrent || quoteSourceId === campMessage.id)}
+                                          </div>
+                                        )
                                       )
                                 )}
                                 {!humanAuthored && (
@@ -5610,9 +5917,11 @@ export function ThreadWorkspace({
                                 />
                               )}
                               {campMessage.authorType === 'agent'
-                                && trailingResultItems.length === 0 && !timelineItem.interruptedRun
+                                && trailingResultItems.length === 0 && !interruptedRun
                                 && (
                                   <MessageActions
+                                    timestamp={messageTimestamp}
+                                    timeAfter
                                     copied={copied}
                                     className={`agent-message-actions${campMessage.id === latestAgentMessageId ? ' is-persistent' : ''}`}
                                     onReply={handleReply}
@@ -5638,7 +5947,7 @@ export function ThreadWorkspace({
                           )}
                     </article>
                   )
-                  if (trailingResultItems.length > 0 || timelineItem.interruptedRun) {
+                  if (trailingResultItems.length > 0 || interruptedRun) {
                     items.push(
                       <div
                         className={`agent-message-output public-message-output${followsSameAuthor ? ' same-author' : ''}${isGroupContinuation ? ' is-group-continuation' : ''}`}
@@ -5667,10 +5976,12 @@ export function ThreadWorkspace({
                             />
                           ))}
                         </div>}
-                        {timelineItem.interruptedRun && (
-                          <RunInterruptionMarker run={timelineItem.interruptedRun} author={author} onOpen={openExecutionProcess} />
+                        {interruptedRun && (
+                          <RunInterruptionMarker run={interruptedRun} author={author} onOpen={openExecutionProcess} />
                         )}
                         <MessageActions
+                          timestamp={messageTimestamp}
+                          timeAfter
                           copied={copied}
                           className={`agent-message-output-actions${campMessage.id === latestAgentMessageId ? ' is-persistent' : ''}`}
                           onReply={handleReply}
@@ -5718,17 +6029,12 @@ export function ThreadWorkspace({
                   {uiAttribute('消息目录暂不可用，重试')}
                 </button>}
             </div>}
-            {conversationView === 'conversation' && runSourceNavigation.returnPoint && <div className="run-source-return-layer">
-              <button type="button" className="run-source-return" onClick={runSourceNavigation.returnToRun}>
-                <ReplyMark />{uiAttribute('返回执行位置')}
-              </button>
-            </div>}
             <ReturnToLatest
               viewportRef={timelineScrollRef}
               ownerKey={snapshot.thread.id}
               contentRevision={publishedMessageSequence}
               scope="camp"
-              enabled={conversationView === 'conversation' && !conversationFind.open && !runSourceNavigation.returnPoint}
+              enabled={conversationView === 'conversation' && !conversationFind.open}
               onLatest={() => followTimelineAfterUserSend(snapshot.thread.id)}
             />
             {worldMapEnabled && (
@@ -5744,6 +6050,13 @@ export function ThreadWorkspace({
               </div>
             )}
             {snapshot.thread.activationState === 'active' && <ThreadDetailPopover
+              portalHost={replyDetail.messageId ? workspaceShellRef.current : null}
+              executionActions={executionPlacement === 'inspector' ? <ExecutionPlacementControl
+                placement="inspector" placementButtonRef={inspectorPlacementButtonRef}
+                onPlacementMenuIntent={captureExecutionPlacementMenuReadingPosition}
+                onPlacementMenuOpenChange={trackExecutionPlacementMenu}
+                onMovePlacement={moveExecution} placementPending={executionPlacementPending}
+                placementError={executionPlacementError} /> : undefined}
               entryHost={detailEntryHost}
               activeTab={inspectorSurfaceTab}
               visible={inspectorVisible}
@@ -5777,7 +6090,7 @@ export function ThreadWorkspace({
               }}
               onClose={mobile && inspectorSurfaceTab !== 'execution' ? closeMobileSecondaryPanel : onCloseInspector}
             >
-            <section className="camp-detail-content execution-sidecar-panel" hidden={inspectorSurfaceTab !== 'execution'}>
+            <section className="camp-detail-content execution-sidecar-panel" data-empty={executionProcesses.length === 0} hidden={inspectorSurfaceTab !== 'execution'}>
               {executionPlacement === 'inspector' && (
                 <RunPulse
                   key={snapshot.thread.id}
@@ -5806,17 +6119,7 @@ export function ThreadWorkspace({
                 {!executionDrawerPortal && executionPlacement === 'inspector' && executionDrawer}
                 {executionPlacement === 'inspector' && !executionDrawer && (
                   <div className="execution-sidecar-empty">
-                    {executionProcesses.length > 0 ? uiAttribute("选择一位队员，查看连续执行历史。") : <>
-                      <span><UiText zh={"暂无执行记录"} /></span>
-                      <button
-                        ref={inspectorPlacementButtonRef}
-                        className="quiet-button compact"
-                        type="button"
-                        disabled={executionPlacementPending}
-                        onClick={() => void moveExecution('bottom')}
-                      >{executionPlacementPending ? uiAttribute("正在保存…") : uiAttribute("移到底部")}</button>
-                      {executionPlacementError && <span role="alert">{executionPlacementError.message}</span>}
-                    </>}
+                    {executionProcesses.length > 0 ? uiAttribute("选择一位队员，查看连续执行历史。") : uiAttribute("暂无执行记录")}
                   </div>
                 )}
               </div>
@@ -5846,7 +6149,6 @@ export function ThreadWorkspace({
                 onAddMembers={onAddMembers}
                 onPreviewMemberRemoval={onPreviewMemberRemoval}
                 onRemoveMember={onRemoveMember}
-                onNotify={onNotify}
               />
             </section>
             </ThreadDetailPopover>}
@@ -5873,6 +6175,7 @@ export function ThreadWorkspace({
           {executionPlacement === 'bottom' && (
             <RunPulse
               placement="bottom"
+              showEmpty={snapshot.thread.activationState === 'active'}
               placementButtonRef={bottomPlacementButtonRef}
               processes={executionProcesses}
               memberById={memberById}
@@ -5897,6 +6200,39 @@ export function ThreadWorkspace({
             {!executionDrawerPortal && executionPlacement === 'bottom' && executionDrawer}
           </div>
         </section>
+
+        {replyDetail.messageId && <ReplyDetails state={replyDetail} reader={replyReader} width={replyWidth} full={replyFull}
+          onWidth={setReplyWidth} onFull={() => setReplyFull(value => !value)} onClose={() => closeReplyDetails()}
+          snapshot={snapshot} profiles={agents} eventsByRunId={executionEventsByRunId} windowedEvidence={openCoverage !== null}
+          author={message => campMessageAuthorLabel(message, memberById, currentUserName)}
+          onReveal={messageId => void revealReplyParent(messageId, true)}
+          onOpenExecution={(agentId, trigger, options) => {
+            onCloseInspector()
+            onCloseSingleChat()
+            setReplyExecutionVisible(true)
+            openExecutionProcess(agentId, trigger, { ...options, reveal: false })
+          }}
+          onError={error => notifyError(readErrorMessage(error, uiAttribute('复制失败')))}
+          onCopy={async message => {
+            const structured = createStructuredMessageClipboardData(message.content, messageMentionNames, currentUserName)
+            if (!await writeClipboardText(structured?.text ?? (message.body || message.attachments.map(item => item.displayName).join('\n')), structured?.html)) {
+              throw new Error(uiAttribute('复制失败'))
+            }
+          }}
+          renderBody={message => <>
+            <div className="reply-detail-body">
+              {renderPublicMessageBody(message, 'reply')}
+            </div>
+            <MessageAttachmentGroups attachments={message.attachments} threadId={snapshot.thread.id} messageId={message.id}
+              presentation={message.authorType === 'agent' ? 'agent' : 'user'} onNotify={onNotify} />
+          </>} />}
+        {replyDetail.messageId && replyExecutionVisible && <aside ref={replyExecutionPanelRef} tabIndex={-1} className="camp-detail-popover reply-execution-popover" role="dialog" aria-modal={false} aria-label={uiAttribute('执行过程')}>
+          <header className="camp-detail-heading"><strong>{uiAttribute('执行过程')}</strong>
+            <ThreadPanelCollapseButton label={uiAttribute('收起执行过程')} mobile={mobile} onDismiss={dismissReplyExecution} />
+          </header>
+          <div ref={replyExecutionHost} className="execution-drawer-host execution-drawer-host-inspector" />
+          <footer className="camp-detail-footer"><ThreadPanelDismissHint /></footer>
+        </aside>}
 
         {filePreview ? (
           <>
@@ -6177,7 +6513,15 @@ export function ThreadWorkspace({
             <StructuredMentionComposer
               ref={composerHandleRef}
               id="camp-message"
+              referenceScope={{ threadId: snapshot.thread.id, client }}
               draftIdentity={`${snapshot.thread.id}:composer`}
+              inputHistory={() => threadInputHistory(visibleThreadMessages)}
+              onEffectiveDocumentChange={content => {
+                const atoms: ComposerDocument = { version: 2, segments: content.segments.filter(segment => segment.kind === 'atom') }
+                setLiveComposerAtoms(previous => previous?.threadId === snapshot.thread.id
+                  && composerDocumentsEqualDirect(previous.content, atoms)
+                  ? previous : { threadId: snapshot.thread.id, content: atoms })
+              }}
               document={composerDraft?.threadId === snapshot.thread.id
                 ? composerDraft.content
                 : emptyComposerDocument()}
@@ -6194,6 +6538,7 @@ export function ThreadWorkspace({
               onPasteFiles={(files) => void prepareFiles(
                 files.map((file) => ({ file, kindHint: 'file' }))
               )}
+              onPasteLongText={pasteLongText}
               onSubmit={submitMessage}
               members={composerMentionCandidates}
               pendingInviteIds={pendingInviteIds}
@@ -6241,6 +6586,11 @@ export function ThreadWorkspace({
             {composerInviteMessage && (
               <span className="composer-reply-status composer-invite-error" role="alert">
                 {composerInviteMessage}
+              </span>
+            )}
+            {pasteMessage && (
+              <span className="composer-reply-status composer-paste-status" role="status" aria-live="polite">
+                {pasteMessage}
               </span>
             )}
           </div>
@@ -6351,9 +6701,10 @@ export function ThreadWorkspace({
       )}
       {executionPlacement === 'right' && executionPreviewHost && createPortal(
         <>
-          {executionProcesses.length > 0 && <RunPulse
+          <RunPulse
             key={snapshot.thread.id}
             placement="right"
+            showEmpty={snapshot.thread.activationState === 'active'}
             placementButtonRef={rightPlacementButtonRef}
             processes={executionProcesses}
             memberById={memberById}
@@ -6368,7 +6719,7 @@ export function ThreadWorkspace({
             onMovePlacement={moveExecution}
             placementPending={executionPlacementPending}
             placementError={executionPlacementError}
-          />}
+          />
           {!executionDrawer && (
             <div className="execution-sidecar-empty execution-preview-empty">
               {executionProcesses.length > 0 ? uiAttribute("选择一位队员，查看连续执行历史。") : uiAttribute("暂无执行记录")}
@@ -6378,6 +6729,22 @@ export function ThreadWorkspace({
         executionPreviewHost
       )}
       {executionDrawerPortal && createPortal(executionDrawer, executionDrawerPortal)}
+      <Dialog.Root open={reeditMessageId !== null} onOpenChange={open => {
+        if (!open) { setReeditMessageId(null); setReeditError(null) }
+      }}>
+        <Dialog.Portal><Dialog.Overlay className="dialog-overlay app-dialog-overlay" />
+          <AppDialogContent className="message-reedit-dialog" width="compact" onCloseAutoFocus={event => event.preventDefault()}>
+            <AppDialogHeader title={uiAttribute('替换当前输入文字？')}
+              description={uiAttribute('将填入撤回消息的正文，当前输入文字会被替换。')} />
+            {reeditError && <AppDialogBody><p className="message-withdraw-error" role="alert">{reeditError}</p></AppDialogBody>}
+            <AppDialogFooter>
+              <button className="quiet-button" type="button" onClick={() => { setReeditMessageId(null); setReeditError(null) }}><UiText zh="取消" /></button>
+              <button className="primary-button conversation-primary-action" type="button" disabled={composerInteractionDisabled || busy}
+                onClick={() => { if (reeditMessageId) restoreWithdrawnText(reeditMessageId) }}><UiText zh="替换文字" /></button>
+            </AppDialogFooter>
+          </AppDialogContent>
+        </Dialog.Portal>
+      </Dialog.Root>
       <Dialog.Root
         open={withdrawalMessage !== null}
         onOpenChange={(open) => {
@@ -6454,23 +6821,29 @@ export function runPulseMemberNameLines(
 
 type RunPulseStateShape = ExecutionStatusShape
 
-function pendingRuntimeCleanupLabel(runs: readonly AgentRunView[]): string | null {
-  const pending = runs.find(run =>
-    ['succeeded', 'failed', 'cancelled'].includes(run.status)
-    && run.cancelRequestedAt !== null
-    && run.cancelAcknowledgedAt === null
-  )
-  if (!pending) return null
-  const age = Date.now() - Date.parse(pending.cancelRequestedAt!)
-  return age >= 5_000
-    ? uiAttribute('上次执行清理未确认，正在重试')
-    : uiAttribute('等待上次执行清理')
+/** Use only the work already visible in this member's execution pane. */
+export function executionDeliveryQueuePresentation(process: AgentExecutionProcess, agentId = process.agentId): {
+  label: string
+  detail: string | null
+  blocked: boolean
+  tone: 'neutral'
+} {
+  const runs = process.runs.filter(run => run.agentId === agentId && run.invocationKind !== 'single_chat')
+  const active = runs.some(run => NON_TERMINAL_RUNS.has(run.status))
+  const blocked = active || process.waitingDeliveries.some(delivery =>
+    delivery.recipientAgentId === agentId && delivery.waitCondition != null)
+  return {
+    label: blocked ? '排队中' : '准备中…',
+    tone: 'neutral',
+    blocked,
+    detail: active ? '等待上一轮完成' : null
+  }
 }
 
 function runPulseStateShape(run: AgentRunView, stopping: boolean): RunPulseStateShape {
   if (stopping && NON_TERMINAL_RUNS.has(run.status)) return 'cancelling'
   if (run.status === 'running') return 'running'
-  if (run.status === 'queued') return 'queued'
+  if (run.status === 'queued') return 'running'
   if (run.status === 'waiting') return 'waiting'
   if (run.status === 'succeeded') return 'completed'
   if (run.status === 'failed') return 'failed'
@@ -6489,15 +6862,12 @@ function runPulseProcessState(
 } {
   const run = preferredAgentProcessRun(process.runs)
   if (run && NON_TERMINAL_RUNS.has(run.status)) {
-    if (run.status === 'queued') {
-      const cleanupLabel = pendingRuntimeCleanupLabel(process.runs)
-      if (cleanupLabel) return { run, label: cleanupLabel, tone: 'attention', shape: 'queued' }
-    }
     const presentation = localizedAgentRunPresentation(run, stopping && NON_TERMINAL_RUNS.has(run.status))
     return { run, label: presentation.label, tone: presentation.tone, shape: runPulseStateShape(run, stopping) }
   }
   if (process.waitingDeliveries.length > 0) {
-    return { run: null, label: pendingRuntimeCleanupLabel(process.runs) ?? uiAttribute("排队中"), tone: 'attention', shape: 'queued' }
+    const queue = executionDeliveryQueuePresentation(process)
+    return { run: null, label: uiAttribute(queue.label), tone: queue.tone, shape: queue.blocked ? 'queued' : 'running' }
   }
   if (run) {
     const presentation = localizedAgentRunPresentation(run)
@@ -6508,6 +6878,7 @@ function runPulseProcessState(
 
 function RunPulse({
   placement,
+  showEmpty = false,
   placementButtonRef,
   processes,
   memberById,
@@ -6524,6 +6895,7 @@ function RunPulse({
   placementPending,
   placementError
 }: {
+  showEmpty?: boolean
   placement: ExecutionConsolePlacement
   placementButtonRef: RefObject<HTMLButtonElement | null>
   processes: AgentExecutionProcess[]
@@ -6549,12 +6921,17 @@ function RunPulse({
   const activeProcessCount = visibleProcesses.filter((process) =>
     process.runs.some(agentRunCountsAsExecuting) || process.waitingDeliveries.length > 0
   ).length
-  if (visibleProcesses.length === 0) return <></>
-  const placementLabel = placement === 'right'
-    ? uiAttribute('固定到右侧')
-    : placement === 'inspector'
-      ? uiAttribute('浮层')
-      : uiAttribute('底部')
+  if (visibleProcesses.length === 0) return showEmpty && placement !== 'inspector' ? (
+    <div className={`run-pulse run-pulse-${placement} run-pulse-empty`}>
+      {placement === 'bottom' && <>
+        <span className="run-pulse-bottom-caption"><ExecutionIcon /><span><UiText zh={"执行"} /></span></span>
+        <span className="run-pulse-empty-label"><UiText zh={"暂无执行记录"} /></span>
+      </>}
+      <ExecutionPlacementControl placement={placement} placementButtonRef={placementButtonRef}
+          onPlacementMenuIntent={onPlacementMenuIntent} onPlacementMenuOpenChange={onPlacementMenuOpenChange}
+          onMovePlacement={onMovePlacement} placementPending={placementPending} placementError={placementError} />
+    </div>
+  ) : <></>
   return (
     <div className={`run-pulse run-pulse-${placement}${placement === 'right' ? ' run-pulse-inspector' : ''}`} aria-label={uiAttribute("Agent 执行台")}>
       {placement === 'bottom' && <span className="run-pulse-bottom-caption">
@@ -6648,57 +7025,9 @@ function RunPulse({
           )
         })}
       </ul>}
-      <div className="execution-placement-control">
-        <DropdownMenu.Root onOpenChange={onPlacementMenuOpenChange}>
-          <DropdownMenu.Trigger asChild>
-            <button
-              ref={placementButtonRef}
-              className="execution-placement-button"
-              type="button"
-              aria-label={uiAttribute("切换执行台位置，当前{0}", String(placementLabel))}
-              aria-busy={placementPending}
-              title={placementPending ? uiAttribute("正在保存执行台位置") : uiAttribute("切换执行台位置 · {0}", String(placementLabel))}
-              disabled={placementPending}
-              onPointerDownCapture={onPlacementMenuIntent}
-              onKeyDownCapture={(event) => {
-                if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
-                  onPlacementMenuIntent()
-                }
-              }}
-            >
-              <ExecutionPlacementSwitchIcon />
-            </button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content className="execution-placement-menu" sideOffset={6} align="end">
-              <div className="execution-placement-menu-heading"><UiText zh={"切换执行台位置"} /></div>
-              {([
-                ['right', '固定到右侧', '与会话并排，不遮挡正文'],
-                ['inspector', '浮层', '保持会话宽度，按需展开'],
-                ['bottom', '底部', '宽幅查看过程与工具输出']
-              ] as const).map(([target, title, description]) => (
-                <DropdownMenu.Item
-                  className={`execution-placement-option${placement === target ? ' is-selected' : ''}`}
-                  data-placement={target}
-                  key={target}
-                  disabled={placementPending}
-                  onSelect={() => { void onMovePlacement(target) }}
-                >
-                  <ExecutionPlacementIcon target={target} />
-                  <span><strong>{uiAttribute(title)}</strong><small>{uiAttribute(description)}</small></span>
-                  {placement === target && <svg className="execution-placement-check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8 3 3 6-6" /></svg>}
-                </DropdownMenu.Item>
-              ))}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-        {placementError && (
-          <span className="execution-placement-feedback" role="alert" title={placementError.detail ?? undefined}>
-            <span>{placementError.message}</span>
-            <button type="button" onClick={() => void onMovePlacement(placementError.target)}><UiText zh={"重试"} /></button>
-          </span>
-        )}
-      </div>
+      {placement !== 'inspector' && <ExecutionPlacementControl placement={placement} placementButtonRef={placementButtonRef}
+          onPlacementMenuIntent={onPlacementMenuIntent} onPlacementMenuOpenChange={onPlacementMenuOpenChange}
+          onMovePlacement={onMovePlacement} placementPending={placementPending} placementError={placementError} />}
       {placement === 'bottom' && <button
         className="execution-bottom-collapse-button"
         type="button"
@@ -6715,6 +7044,78 @@ function RunPulse({
           <path d={selectedAgentId === null ? 'm5 15 7-7 7 7' : 'm5 9 7 7 7-7'} />
         </svg>
       </button>}
+    </div>
+  )
+}
+
+function ExecutionPlacementControl({
+  placement, placementButtonRef, onPlacementMenuIntent, onPlacementMenuOpenChange,
+  onMovePlacement, placementPending, placementError
+}: {
+  placement: ExecutionConsolePlacement
+  placementButtonRef: RefObject<HTMLButtonElement | null>
+  onPlacementMenuIntent(): void
+  onPlacementMenuOpenChange(open: boolean): void
+  onMovePlacement(target: ExecutionConsolePlacement): Promise<void>
+  placementPending: boolean
+  placementError: { message: string; detail: string | null; target: ExecutionConsolePlacement } | null
+}): JSX.Element {
+  const placementLabel = placement === 'right'
+    ? uiAttribute('固定到右侧')
+    : placement === 'inspector'
+      ? uiAttribute('浮层')
+      : uiAttribute('底部')
+  return (
+    <div className="execution-placement-control">
+      <DropdownMenu.Root onOpenChange={onPlacementMenuOpenChange}>
+        <DropdownMenu.Trigger asChild>
+          <button
+            ref={placementButtonRef}
+            className="execution-placement-button"
+            type="button"
+            aria-label={uiAttribute("切换执行台位置，当前{0}", String(placementLabel))}
+            aria-busy={placementPending}
+            title={placementPending ? uiAttribute("正在保存执行台位置") : uiAttribute("切换执行台位置 · {0}", String(placementLabel))}
+            disabled={placementPending}
+            onPointerDownCapture={onPlacementMenuIntent}
+            onKeyDownCapture={(event) => {
+              if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+                onPlacementMenuIntent()
+              }
+            }}
+          >
+            <ExecutionPlacementSwitchIcon />
+          </button>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content className="execution-placement-menu" sideOffset={6} align="end">
+            <div className="execution-placement-menu-heading"><UiText zh={"切换执行台位置"} /></div>
+            {([
+              ['right', '固定到右侧', '与会话并排，不遮挡正文'],
+              ['inspector', '浮层', '保持会话宽度，按需展开'],
+              ['bottom', '底部', '宽幅查看过程与工具输出']
+            ] as const).map(([target, title, description]) => (
+              <DropdownMenu.Item
+                className={`execution-placement-option${placement === target ? ' is-selected' : ''}`}
+                data-placement={target}
+                key={target}
+                disabled={placementPending}
+                onSelect={() => { void onMovePlacement(target) }}
+              >
+                <ExecutionPlacementIcon target={target} />
+                <span><strong>{uiAttribute(title)}</strong><small>{uiAttribute(description)}</small></span>
+                {placement === target && <svg className="execution-placement-check" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8 3 3 6-6" /></svg>}
+              </DropdownMenu.Item>
+            ))}
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+      {placementError && (
+        <span className="execution-placement-feedback" role="alert" title={placementError.detail ?? undefined}>
+          <span>{placementError.message}</span>
+          <button type="button" onClick={() => void onMovePlacement(placementError.target)}><UiText zh={"重试"} /></button>
+        </span>
+      )}
     </div>
   )
 }
@@ -6744,12 +7145,6 @@ function ExecutionPlacementSwitchIcon(): JSX.Element {
     <rect x="3" y="3" width="18" height="18" rx="2" />
     <path d="M3 8h18M8 8v13m3-8h7m-2-2 2 2-2 2m-5 3h7m-5-2-2 2 2 2" />
   </svg>
-}
-
-type ExecutionQueueBatch = {
-  agentId: string
-  runs: AgentRunView[]
-  createdAt: string
 }
 
 type ExecutionDeliveryQueueBatch = {
@@ -6818,22 +7213,6 @@ export function executionEmptyStateShouldRender(
   runHistoryComplete: boolean
 ): boolean {
   return currentEntryCount === 0 && historyRunCount === 0 && runHistoryComplete
-}
-
-export function executionQueueBatches(runs: readonly AgentRunView[]): ExecutionQueueBatch[] {
-  const byAgent = new Map<string, AgentRunView[]>()
-  for (const run of runs) {
-    if (run.status !== 'queued') continue
-    byAgent.set(run.agentId, [...(byAgent.get(run.agentId) ?? []), run])
-  }
-  return [...byAgent.entries()].map(([agentId, queuedRuns]) => {
-    const newestFirst = queuedRuns.slice().sort((left, right) =>
-      right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id)
-    )
-    return { agentId, runs: newestFirst, createdAt: newestFirst[0]?.createdAt ?? '' }
-  }).sort((left, right) =>
-    right.createdAt.localeCompare(left.createdAt) || left.agentId.localeCompare(right.agentId)
-  )
 }
 
 export function executionDeliveryQueueBatches(
@@ -6956,11 +7335,25 @@ function ExecutionContextPopover({ context }: { context: SessionContext | null }
   </Popover.Root>
 }
 
-function ExecutionRunMetric({ run, usage }: {
+function ExecutionRunMetric({ run, usage, cancelling, starting, threadId, windowedEvidence, liveRevision, hasCurrentActivity, onActivity }: {
   run: AgentRunView
   usage: RunUsage | null
+  cancelling: boolean
+  starting: boolean
+  threadId: string
+  windowedEvidence: boolean
+  liveRevision: unknown
+  hasCurrentActivity: boolean
+  onActivity(runId: string, epoch: number): void
 }): JSX.Element {
-  const live = NON_TERMINAL_RUNS.has(run.status) && run.status !== 'queued'
+  // Reuse the conversation preview's bounded tail reader while the empty card
+  // is collapsed. Web snapshots may only invalidate evidence, without live events.
+  const tail = useExecutionWindow(starting && windowedEvidence, threadId, run, liveRevision, null, true)
+  const tailHasActivity = agentRunHasCurrentActivity(run, tail.evidence.map(liveRuntimeEventFromExecutionEvidence))
+  useEffect(() => {
+    if (hasCurrentActivity || tailHasActivity) onActivity(run.id, run.executionEpoch)
+  }, [hasCurrentActivity, tailHasActivity, run.id, run.executionEpoch, onActivity])
+  const live = NON_TERMINAL_RUNS.has(run.status) && !starting
   const [duration, setDuration] = useState(() => executionRunDurationLabel(run, Date.now()))
   useEffect(() => {
     if (!live) return undefined
@@ -6970,11 +7363,14 @@ function ExecutionRunMetric({ run, usage }: {
     }, 1_000)
     return () => window.clearInterval(timer)
   }, [live, run.id, run.executionEpoch, run.startedAt, run.createdAt])
-  if (run.status === 'queued') return <span className="execution-run-metric is-queued">{uiAttribute('排队中')}</span>
+  if (cancelling || starting) return <span className="execution-run-status" role="status">
+    {uiAttribute(cancelling ? '正在停止…' : '启动中…')}
+  </span>
   if (live) return <span className="execution-run-metric">{duration}</span>
   const hasUsage = usage !== null && [usage.promptInputTotalTokens, usage.outputTokens,
     usage.cacheReadTokens, usage.cacheWriteTokens].some(value => value !== null)
   return <span className="execution-run-metric-group">
+    {run.status === 'cancelled' && <span className="execution-run-status">{localizedAgentRunPresentation(run).label}</span>}
     {hasUsage ? <ExecutionUsagePopover run={run} usage={usage} /> : <ExecutionDurationPopover run={run} />}
   </span>
 }
@@ -7177,6 +7573,10 @@ function ExecutionDrawer({
   const [submittingStopRunIds, setSubmittingStopRunIds] = useState<ReadonlySet<string>>(
     () => new Set()
   )
+  const [activeEpochs, setActiveEpochs] = useState<ReadonlyMap<string, number>>(() => new Map())
+  const recordActivity = useCallback((runId: string, epoch: number): void => {
+    setActiveEpochs(current => current.get(runId) === epoch ? current : new Map(current).set(runId, epoch))
+  }, [])
   const processRef = useRef(process)
   processRef.current = process
   const resolvedFocusedRun = process.runs.find((run) => run.id === focusedRunId)
@@ -7207,9 +7607,8 @@ function ExecutionDrawer({
     : metrics?.sessions.find((session) => session.conversationId === currentConversationId
         && session.agentId === process.agentId) ?? null
   const currentRuns = newestFirstRuns.filter((run) =>
-    NON_TERMINAL_RUNS.has(run.status) && run.status !== 'queued'
+    NON_TERMINAL_RUNS.has(run.status)
   )
-  const queueBatches = executionQueueBatches(newestFirstRuns)
   const deliveryQueueBatches = executionDeliveryQueueBatches(process.waitingDeliveries)
   const historyRuns = newestFirstRuns.filter((run) => !NON_TERMINAL_RUNS.has(run.status))
   const latestRun = resolvedFocusedRun ?? currentRuns[0] ?? null
@@ -7541,8 +7940,11 @@ function ExecutionDrawer({
     )
     const focused = run.id === resolvedFocusedRunId
     const expanded = expandedRunIds.has(run.id)
-    const state = localizedAgentRunPresentation(run, cancelling)
+    const hasCurrentActivity = activeEpochs.get(run.id) === run.executionEpoch
+      || agentRunHasCurrentActivity(run, executionEventsByRunId.get(run.id) ?? [])
+    const state = localizedAgentRunPresentation(run, cancelling, hasCurrentActivity)
     const stateShape = runPulseStateShape(run, cancelling)
+    const starting = !cancelling && agentRunIsStarting(run, hasCurrentActivity)
     const sourceMessage = executionTriggerMessage(run, turns, messageById)
     const inputMessageIds = executionRunInputMessageIds(run, turns)
     const summary = executionMessageSummary(sourceMessage, run)
@@ -7552,7 +7954,7 @@ function ExecutionDrawer({
     const contentId = `execution-run-content-${run.id}`
     return (
       <li
-        className={`execution-process-stage status-${run.status}${focused ? ' is-focused' : ''}`}
+        className={`execution-process-stage status-${starting ? 'starting' : run.status}${cancelling ? ' is-stopping' : ''}${focused ? ' is-focused' : ''}`}
         data-agent-run-id={run.id}
         key={run.id}
         tabIndex={-1}
@@ -7565,7 +7967,11 @@ function ExecutionDrawer({
         <article className="execution-process-card">
           <header className="execution-run-card-header">
             <h3 className="execution-run-heading">
-              <button
+              {starting ? (<span className="execution-run-toggle is-starting" title={`${runMemberName} · ${summary}`}>
+                  {overview && <MemberAvatar agentId={run.agentId} avatarRef={runMember?.avatarRef ?? null}
+                    displayName={runMemberName} size="execution" decorative />}
+                  <span className="execution-run-summary">{summary}</span>
+                </span>) : (<button
                 className="execution-run-toggle"
                 type="button"
                 aria-expanded={expanded}
@@ -7576,7 +7982,7 @@ function ExecutionDrawer({
                 {overview && <MemberAvatar agentId={run.agentId} avatarRef={runMember?.avatarRef ?? null}
                   displayName={runMemberName} size="execution" decorative />}
                 <span className="execution-run-summary">{summary}</span>
-              </button>
+              </button>)}
             </h3>
             <ExecutionInputCountPopover
               messageIds={inputMessageIds}
@@ -7586,18 +7992,20 @@ function ExecutionDrawer({
               subject={uiAttribute("本次执行")}
             />
             <span className="execution-run-trailing">
-              <ExecutionRunMetric run={run} usage={usageByRunId.get(run.id)?.executionEpoch === run.executionEpoch
+              <ExecutionRunMetric run={run} cancelling={cancelling} starting={starting}
+                threadId={threadId} windowedEvidence={windowedEvidence} liveRevision={executionEventsByRunId.get(run.id)}
+                hasCurrentActivity={hasCurrentActivity} onActivity={recordActivity} usage={usageByRunId.get(run.id)?.executionEpoch === run.executionEpoch
                 ? usageByRunId.get(run.id)! : null} />
               <span className="execution-run-operations">
-                <button type="button" aria-label={expanded ? uiAttribute("收起卡片") : uiAttribute("展开卡片")} aria-expanded={expanded}
+                {!starting && (<button type="button" aria-label={expanded ? uiAttribute("收起卡片") : uiAttribute("展开卡片")} aria-expanded={expanded}
                   aria-controls={contentId} onClick={() => toggleRun(run.id)}>
                   <ExecutionCardChevron expanded={expanded} />
-                </button>
+                </button>)}
                 {run.invocationKind === 'batch' && run.failure?.code !== 'context_payload_too_large'
                   && (run.status === 'failed' || run.status === 'cancelled') && inputMessageIds.length > 0 && (
                   <ContinueAgentRunButton threadId={threadId} agentRunId={run.id} onError={onFileOpenError} />
                 )}
-                {(stopState === 'available' || stopState === 'stopping' || stopState === 'confirming') && (
+                {(stopState === 'available' || stopState === 'confirming') && (
                   <button className="is-danger" type="button" aria-label={uiAttribute("终止{0}的本次执行", String(runMemberName))}
                     title={uiAttribute("终止本次执行")} disabled={stopState !== 'available'} onClick={() => stopRun(run)}>
                     <ExecutionStopIcon />
@@ -7606,7 +8014,7 @@ function ExecutionDrawer({
               </span>
             </span>
           </header>
-          <div id={contentId} hidden={!expanded}>
+          <div id={contentId} hidden={starting || !expanded}>
             <RunExecutionDisclosure
               run={run}
               windowedEvidence={windowedEvidence}
@@ -7632,93 +8040,20 @@ function ExecutionDrawer({
     )
   }
 
-  const renderQueueBatch = (batch: ExecutionQueueBatch): JSX.Element => {
-    const expansionKey = `run:${batch.agentId}`
-    const expanded = expandedQueueAgents.has(expansionKey)
-    const runMember = memberById.get(batch.agentId)
-    const runMemberName = runMember?.displayName ?? batch.agentId
-    const batchMessageIds = [...new Set(batch.runs.flatMap((run) =>
-      executionRunInputMessageIds(run, turns)
-    ))]
-    const summary = executionMessageSummary(
-      batchMessageIds.flatMap((messageId) => {
-        const message = messageById.get(messageId)
-        return message ? [message] : []
-      })[0] ?? null,
-      batch.runs[0]
-    )
-    const stoppingBatch = batch.runs.some((run) => runStopState(run) !== 'available')
-    const queueLabel = pendingRuntimeCleanupLabel(process.runs)
-      ?? uiAttribute('排队中')
-    const contentId = `execution-queue-content-${batch.agentId}`
-    const toggle = (): void => setExpandedQueueAgents((current) => {
-      const next = new Set(current)
-      if (next.has(expansionKey)) next.delete(expansionKey)
-      else next.add(expansionKey)
-      return next
-    })
-    return (
-      <li className="execution-process-stage status-queued" data-queue-agent-id={batch.agentId} key={`queue:${batch.agentId}`}>
-        <span className="execution-process-node tone-attention state-queued" aria-hidden="true">
-          <ExecutionStatusGlyph status="queued" />
-        </span>
-        <article className="execution-process-card">
-          <header className="execution-run-card-header">
-            <h3 className="execution-run-heading">
-              <button className="execution-run-toggle" type="button" aria-expanded={expanded}
-                aria-controls={contentId} title={`${runMemberName} · ${summary}`} onClick={toggle}>
-                {overview && <MemberAvatar agentId={batch.agentId} avatarRef={runMember?.avatarRef ?? null}
-                  displayName={runMemberName} size="execution" decorative />}
-                <span className="execution-run-summary">{summary}</span>
-              </button>
-            </h3>
-            <ExecutionInputCountPopover
-              messageIds={batchMessageIds}
-              messageById={messageById}
-              memberById={memberById}
-              onRevealMessage={onRevealMessage}
-              subject={uiAttribute("排队批次")}
-            />
-            <span className="execution-run-trailing">
-              <span className="execution-run-metric is-queued">{queueLabel}</span>
-              <span className="execution-run-operations">
-                <button type="button" aria-label={expanded ? uiAttribute("收起排队批次") : uiAttribute("展开排队批次")}
-                  aria-expanded={expanded} aria-controls={contentId} onClick={toggle}>
-                  <ExecutionCardChevron expanded={expanded} />
-                </button>
-                <button className="is-danger" type="button" aria-label={uiAttribute("终止{0}的本批排队", String(runMemberName))}
-                  title={uiAttribute("终止本批排队")} disabled={stoppingBatch} onClick={() => {
-                    for (const run of batch.runs) stopRun(run)
-                  }}>
-                  <ExecutionStopIcon />
-                </button>
-              </span>
-            </span>
-          </header>
-          <div className="execution-queue-inputs" id={contentId} hidden={!expanded}>
-            {batchMessageIds.length > 0
-              ? <ExecutionInputList messageIds={batchMessageIds} messageById={messageById}
-                  memberById={memberById} onRevealMessage={onRevealMessage} />
-              : <p className="execution-queue-empty"><UiText zh={"排队输入当前未载入。"} /></p>}
-          </div>
-        </article>
-      </li>
-    )
-  }
-
   const renderDeliveryQueueBatch = (batch: ExecutionDeliveryQueueBatch): JSX.Element => {
     const expansionKey = `delivery:${batch.deliveries[0].id}`
     const expanded = expandedQueueAgents.has(expansionKey)
     const runMember = memberById.get(batch.agentId)
     const runMemberName = runMember?.displayName ?? batch.agentId
-    const queueLabel = pendingRuntimeCleanupLabel(process.runs)
-      ?? uiAttribute('排队中')
+    const queue = executionDeliveryQueuePresentation(process, batch.agentId)
+    const queueLabel = uiAttribute(queue.label)
+    const queueDetail = queue.detail ? uiAttribute(queue.detail) : undefined
     const sourceMessage = messageById.get(batch.messageIds[0]) ?? null
     const summary = sourceMessage
       ? sourceMessage.body.trim().replace(/\s+/gu, ' ')
         || sourceMessage.attachments.map((item) => item.displayName).join('、')
-        || uiAttribute('排队消息')
-      : uiAttribute('排队消息')
+        || uiAttribute(queue.blocked ? '排队消息' : '待处理消息')
+      : uiAttribute(queue.blocked ? '排队消息' : '待处理消息')
     const contentId = `execution-delivery-queue-content-${batch.deliveries[0].id}`
     const toggle = (): void => setExpandedQueueAgents((current) => {
       const next = new Set(current)
@@ -7727,10 +8062,10 @@ function ExecutionDrawer({
       return next
     })
     return (
-      <li className="execution-process-stage status-queued" data-delivery-queue-agent-id={batch.agentId}
+      <li className={`execution-process-stage status-${queue.blocked ? 'queued' : 'preparing'}`} data-delivery-queue-agent-id={batch.agentId}
         key={`delivery-queue:${batch.deliveries[0].id}`}>
-        <span className="execution-process-node tone-attention state-queued" aria-hidden="true">
-          <ExecutionStatusGlyph status="queued" />
+        <span className={`execution-process-node tone-neutral state-${queue.blocked ? 'queued' : 'running'}`} aria-hidden="true">
+          <ExecutionStatusGlyph status={queue.blocked ? 'queued' : 'running'} />
         </span>
         <article className="execution-process-card">
           <header className="execution-run-card-header">
@@ -7747,12 +8082,12 @@ function ExecutionDrawer({
               messageById={messageById}
               memberById={memberById}
               onRevealMessage={onRevealMessage}
-              subject={uiAttribute("排队消息")}
+              subject={uiAttribute(queue.blocked ? '排队消息' : '待处理消息')}
             />
             <span className="execution-run-trailing">
-              <span className="execution-run-metric is-queued">{queueLabel}</span>
+              <span className="execution-run-status" title={queueDetail}>{queueLabel}</span>
               <span className="execution-run-operations">
-                <button type="button" aria-label={expanded ? uiAttribute("收起排队消息") : uiAttribute("展开排队消息")}
+                <button type="button" aria-label={expanded ? uiAttribute(queue.blocked ? '收起排队消息' : '收起待处理消息') : uiAttribute(queue.blocked ? '展开排队消息' : '展开待处理消息')}
                   aria-expanded={expanded} aria-controls={contentId} onClick={toggle}>
                   <ExecutionCardChevron expanded={expanded} />
                 </button>
@@ -7770,7 +8105,6 @@ function ExecutionDrawer({
 
   const currentEntries = [
     ...currentRuns.map((run) => ({ kind: 'run' as const, createdAt: run.createdAt, id: run.id, run })),
-    ...queueBatches.map((batch) => ({ kind: 'queue' as const, createdAt: batch.createdAt, id: batch.agentId, batch })),
     ...deliveryQueueBatches.map((batch) => ({
       kind: 'delivery_queue' as const,
       createdAt: batch.createdAt,
@@ -7800,16 +8134,16 @@ function ExecutionDrawer({
           role="separator"
           aria-label={uiAttribute("调整执行详情高度")}
           aria-orientation="horizontal"
-          aria-valuemin={heightSplitter.phase === 'closing' ? 0 : accessibleBounds.min}
+          aria-valuemin={heightSplitter.active ? 0 : accessibleBounds.min}
           aria-valuemax={accessibleBounds.max}
           aria-valuenow={accessibleHeight}
           aria-valuetext={uiAttribute("{0} 像素；上下方向键调整，Enter 恢复默认高度", String(accessibleHeight))}
           tabIndex={0}
-          title={uiAttribute("上下拖动调整，最矮处停留后继续向下拖动收起；Enter 恢复默认高度；Delete 收起；Escape 取消拖动")}
+          title={uiAttribute("上下拖动调整，最矮处继续向下内推直接收起；Enter 恢复默认高度；Delete 收起；Escape 取消拖动")}
           {...heightSplitter.handlers}
           onKeyDown={handleResizeKeyDown}
           onDoubleClick={() => { heightSplitter.cancel(); resetPreferredHeight() }}
-        />
+        ><SplitterFeedback phase={heightSplitter.phase} target={heightSplitter.target} label={uiAttribute('继续拖动收起执行详情')} /></div>
       )}
         <header className={`execution-drawer-header${overview ? ' is-overview' : ''}`}>
           <div className="execution-drawer-agent">
@@ -7880,9 +8214,7 @@ function ExecutionDrawer({
             <ol className="execution-process-timeline">{currentEntries.map((entry) =>
               entry.kind === 'run'
                 ? renderRunCard(entry.run)
-                : entry.kind === 'queue'
-                  ? renderQueueBatch(entry.batch)
-                  : renderDeliveryQueueBatch(entry.batch)
+                : renderDeliveryQueueBatch(entry.batch)
             )}</ol>
           </section>}
           {(historyRuns.length > 0 || !runHistoryComplete) && <section className={`execution-history-section${currentEntries.length === 0 ? ' is-first' : ''}`} aria-label={uiAttribute("执行历史")}>
@@ -8009,11 +8341,11 @@ function ThreadMessageDeliveryFooter({
 
 function userMessageRunStatusLabel(run: AgentRunView | null): string {
   if (!run) return uiAttribute("未读")
-  if (run.status === 'queued') return uiAttribute("待处理")
+  if (agentRunIsStarting(run)) return uiAttribute("启动中")
   if (run.status === 'running') return uiAttribute("处理中")
   if (run.status === 'waiting') return uiAttribute("等待中")
   if (run.status === 'succeeded') return uiAttribute("已完成")
-  if (run.status === 'failed') return uiAttribute("未完成")
+  if (run.status === 'failed') return uiAttribute("执行失败")
   return uiAttribute("已停止")
 }
 
@@ -8048,10 +8380,12 @@ function UserMessageDeliveryReceipt({
     // its target Run later finishes; ordinary targets describe execution.
     const status = delivery?.requestedMode === 'steer' && delivery.inputDeliveryStatus === 'accepted' ? 'steered'
       : delivery?.inputDeliveryStatus === 'delivery_unknown' ? 'unknown'
-      : delivery?.status === 'failed' || delivery?.status === 'cancelled' || run?.status === 'failed' || run?.status === 'cancelled' ? 'incomplete'
+      : delivery?.status === 'failed' || run?.status === 'failed' ? 'failed'
+      : delivery?.status === 'cancelled' || run?.status === 'cancelled' ? 'stopped'
       : delivery?.requestedMode === 'steer' && delivery.status === 'claimed' ? delivery.dispatchPhase === 'attempting' ? 'steerSending' : 'steerPending'
       : run?.status === 'succeeded' || (!run && delivery?.status === 'settled') ? 'completed'
-      : delivery?.status === 'waiting' || !run || (run.status === 'queued' && !run.cancelRequestedAt) ? 'pending'
+      : run && agentRunIsStarting(run) ? 'starting'
+      : delivery?.status === 'waiting' || !run ? 'pending'
       : 'inProgress'
     return { agentId, delivery, run, status }
   })
@@ -8059,26 +8393,31 @@ function UserMessageDeliveryReceipt({
   const unknown = ordered.filter(item => item.status === 'unknown')
   const steerPending = ordered.filter(item => item.status === 'steerPending')
   const steerSending = ordered.filter(item => item.status === 'steerSending')
+  const starting = ordered.filter(item => item.status === 'starting')
   const pending = ordered.filter(item => item.status === 'pending')
   const inProgress = ordered.filter(item => item.status === 'inProgress')
-  const incomplete = ordered.filter(item => item.status === 'incomplete')
+  const stopped = ordered.filter(item => item.status === 'stopped')
+  const failed = ordered.filter(item => item.status === 'failed')
   const canWithdraw = message.canWithdraw && Boolean(onWithdraw)
     && deliveries.every(delivery => delivery.status === 'waiting')
-  const receiptLabel = [
+  const ordinaryLabels = [
     steered.length ? (ordered.length === 1 ? uiAttribute('已插话') : uiAttribute('已插话 {0}', String(steered.length))) : '',
     steerPending.length ? (ordered.length === 1 ? uiAttribute('待插话') : uiAttribute('待插话 {0}', String(steerPending.length))) : '',
     steerSending.length ? (ordered.length === 1 ? uiAttribute('发送中') : uiAttribute('发送中 {0}', String(steerSending.length))) : '',
+    starting.length ? uiAttribute('启动中 {0}', String(starting.length)) : '',
     inProgress.length ? uiAttribute('处理中 {0}', String(inProgress.length)) : '',
     pending.length ? uiAttribute('待处理 {0}', String(pending.length)) : '',
     unknown.length ? uiAttribute('待核对 {0}', String(unknown.length)) : '',
-    incomplete.length ? uiAttribute('未完成 {0}', String(incomplete.length)) : ''
-  ].filter(Boolean).join(' · ')
+    stopped.length ? (ordered.length === 1 ? uiAttribute('已停止') : uiAttribute('已停止 {0}', String(stopped.length))) : ''
+  ].filter(Boolean)
+  const failureLabel = failed.length ? (ordered.length === 1 ? uiAttribute('执行失败') : uiAttribute('执行失败 {0}', String(failed.length))) : ''
+  const receiptLabel = [...ordinaryLabels, failureLabel].filter(Boolean).join(' · ')
   if (!receiptLabel) return null
   const presentation = {
-    className: unknown.length ? 'is-unknown' : incomplete.length ? 'is-incomplete' : steerSending.length ? 'is-sending' : inProgress.length ? 'is-progress' : pending.length || steerPending.length ? 'is-queued' : 'is-confirmed',
+    className: unknown.length ? 'is-unknown' : failed.length ? 'is-failed' : steerSending.length ? 'is-sending' : inProgress.length || starting.length ? 'is-progress' : pending.length || steerPending.length ? 'is-queued' : stopped.length ? 'is-stopped' : 'is-confirmed',
     label: receiptLabel
   }
-  const hasMixedStatus = [steered, steerPending, steerSending, inProgress, pending, unknown, incomplete].filter(items => items.length > 0).length > 1
+  const hasMixedStatus = ordinaryLabels.length + Number(Boolean(failureLabel)) > 1
   return (
     <div className="user-message-receipt-row">
       {canWithdraw && <button className="user-message-withdraw" type="button" aria-label={uiAttribute("撤回尚未领取的消息")} title={uiAttribute("撤回消息")} onClick={onWithdraw}>
@@ -8092,12 +8431,18 @@ function UserMessageDeliveryReceipt({
             aria-label={uiAttribute("查看消息处理状态，{0}", String(presentation.label))}
           >
             {['is-progress', 'is-sending'].includes(presentation.className) ? <ExecutionIcon />
+              : presentation.className === 'is-stopped' ? <ExecutionStatusGlyph status="stopped" />
+              : presentation.className === 'is-failed' ? <ExecutionStatusGlyph status="failed" />
               : presentation.className === 'is-confirmed' ? <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8 3 3 6-6" /></svg>
-              : presentation.className === 'is-unknown' || presentation.className === 'is-incomplete' ? <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m8 2 6 11H2Z" /><path d="M8 6v3m0 2h.01" /></svg>
+              : presentation.className === 'is-unknown' ? <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m8 2 6 11H2Z" /><path d="M8 6v3m0 2h.01" /></svg>
               : <svg viewBox="0 0 16 16" aria-hidden="true">
                   <circle cx="8" cy="8" r="5.6" /><path d="M8 4.7V8l2.2 1.4" />
                 </svg>}
-            <span>{presentation.label}</span>
+            <span>
+              {ordinaryLabels.join(' · ')}
+              {ordinaryLabels.length > 0 && failureLabel && <span aria-hidden="true"> · </span>}
+              {failureLabel && <span className="user-message-receipt-failure">{failureLabel}</span>}
+            </span>
           </button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Portal>
@@ -8106,9 +8451,16 @@ function UserMessageDeliveryReceipt({
             {ordered.map(({ agentId, run, delivery, status }) => {
               const member = memberById.get(agentId)
               const displayName = member?.displayName ?? agentId
+              const statusLabel = status === 'failed' ? uiAttribute('执行失败')
+                : status === 'stopped' ? uiAttribute('已停止')
+                : delivery?.requestedMode === 'steer'
+                  ? delivery.inputDeliveryStatus === 'accepted' ? uiAttribute('运行时已接收')
+                    : delivery.inputDeliveryStatus === 'delivery_unknown' ? uiAttribute('是否送达待核对')
+                    : status === 'steerPending' ? uiAttribute('待插话') : uiAttribute('发送中')
+                  : userMessageRunStatusLabel(run)
               return <div className="user-message-receipt-recipient" key={agentId}>
                 <MemberAvatar agentId={agentId} avatarRef={member?.avatarRef ?? null} displayName={displayName} size="mention" decorative />
-                <span><strong>{displayName}</strong><small>{delivery?.requestedMode === 'steer' ? delivery.inputDeliveryStatus === 'accepted' ? uiAttribute('运行时已接收') : delivery.inputDeliveryStatus === 'delivery_unknown' ? uiAttribute('是否送达待核对') : ['failed','cancelled'].includes(delivery.status) ? uiAttribute(delivery.status === 'cancelled' ? '已停止' : '未完成') : status === 'steerPending' ? uiAttribute('待插话') : uiAttribute('发送中') : !run && delivery?.status === 'failed' ? uiAttribute('未完成') : !run && delivery?.status === 'cancelled' ? uiAttribute('已停止') : userMessageRunStatusLabel(run)}</small></span>
+                <span><strong>{displayName}</strong><small>{statusLabel}</small></span>
                 {delivery?.inputDeliveryStatus === 'delivery_unknown' && onReconcile ? <button type="button" disabled={checking === delivery.id} onClick={async () => {
                   setChecking(delivery.id); setCheckResult(null)
                   try {
@@ -8490,8 +8842,7 @@ function ThreadMembersPanel({
   onChangeLead,
   onAddMembers,
   onPreviewMemberRemoval,
-  onRemoveMember,
-  onNotify
+  onRemoveMember
 }: {
   addDialogOpen: boolean
   setAddDialogOpen(open: boolean): void
@@ -8504,7 +8855,6 @@ function ThreadMembersPanel({
   onAddMembers?(agentIds: string[]): Promise<ThreadMemberAddOutcome>
   onPreviewMemberRemoval?(agentId: string): Promise<ThreadMemberRemovalPreview>
   onRemoveMember?(preview: ThreadMemberRemovalPreview): Promise<ThreadMemberRemoveOutcome>
-  onNotify(message: string): void
 }): JSX.Element {
   const mobile = useMobileLayout()
   const members = campInspectorMembers(snapshot.members)
@@ -8597,9 +8947,6 @@ function ThreadMembersPanel({
       if (outcome.failures.length === 0) {
         setAddDialogOpen(false)
         setSelectedCandidateIds(new Set())
-        onNotify(outcome.addedAgentIds.length === 1
-          ? uiAttribute('1 位队员已加入；将在之后新建的执行中生效')
-          : uiAttribute("{0} 位队员已加入；将在之后新建的执行中生效", String(outcome.addedAgentIds.length)))
         return
       }
       setSelectedCandidateIds(new Set(outcome.failures.map((failure) => failure.agentId)))
@@ -8656,12 +9003,8 @@ function ThreadMembersPanel({
     try {
       const outcome = await onRemoveMember(removalPreviewState.preview)
       if (outcome.status === 'removed') {
-        const displayName = removalPreviewState.preview.displayName
         setRemovalTarget(null)
         setRemovalPreviewState({ status: 'idle' })
-        onNotify(outcome.reconciliationStatus === 'reconciling'
-          ? uiAttribute("已将{0}移出当前会话；正在收拢已开始的工作", String(displayName))
-          : uiAttribute("已将{0}移出当前会话", String(displayName)))
         return
       }
       setRemovalPreviewState({
@@ -9654,10 +9997,10 @@ function ReplyParentQuote({
 }): JSX.Element {
   if (!parent) {
     return (
-      <div className={`reply-parent-quote is-static${unavailable ? ' is-unavailable' : ''}`}>
-        <ReplyMark />
+      <button type="button" onClick={onReveal} className={`reply-parent-quote${unavailable ? ' is-unavailable' : ''}`}>
+        <span className="reply-quote-prefix">{uiAttribute('回复')}</span>
         <span>{unavailable ? uiAttribute("引用的消息当前不可用") : loading ? uiAttribute("正在载入引用…") : uiAttribute("引用消息")}</span>
-      </div>
+      </button>
     )
   }
   return (
@@ -9670,6 +10013,7 @@ function ReplyParentQuote({
 }
 
 function MessageSurface({
+  timestamp,
   copied,
   hasDelivery,
   showActions = true,
@@ -9680,6 +10024,7 @@ function MessageSurface({
   withdrawing = false,
   children
 }: {
+  timestamp?: React.ReactNode
   copied: boolean
   hasDelivery: boolean
   showActions?: boolean
@@ -9696,6 +10041,7 @@ function MessageSurface({
       {showActions && (
         <div className="message-action-line">
           <MessageActions
+            timestamp={timestamp}
             copied={copied}
             onReply={onReply}
             onCopy={onCopy}
@@ -9710,6 +10056,8 @@ function MessageSurface({
 }
 
 function MessageActions({
+  timestamp,
+  timeAfter = false,
   copied,
   className,
   onReply,
@@ -9717,6 +10065,8 @@ function MessageActions({
   onWithdraw,
   withdrawing = false
 }: {
+  timestamp?: React.ReactNode
+  timeAfter?: boolean
   copied: boolean
   className?: string
   onReply?(modality: ReplyFocusModality): void
@@ -9733,6 +10083,7 @@ function MessageActions({
       <span className="copy-feedback" role="status" aria-live="polite">
         {copied ? uiAttribute("已复制") : ''}
       </span>
+      {!timeAfter && timestamp}
       <MessageCopyButton copied={copied} onCopy={onCopy} />
       {onWithdraw && (
         <button
@@ -9760,6 +10111,7 @@ function MessageActions({
           <MessageReplyIcon />
         </button>
       )}
+      {timeAfter && timestamp}
     </div>
   )
 }
@@ -9767,9 +10119,12 @@ function MessageActions({
 function MessageReplyIcon(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M16.7 17.3H10l-4.2 3.1v-3.1h-.7a2.6 2.6 0 0 1-2.6-2.6V7.6A2.6 2.6 0 0 1 5.1 5h11.8a2.6 2.6 0 0 1 2.6 2.6v2.2" />
-      <path d="m15.2 9.2-3.6 3.5 3.6 3.5" />
-      <path d="M11.8 12.7h8.7" />
+      <path d="M6.4 5.3h11.2a1.9 1.9 0 0 1 1.9 1.9v7a1.9 1.9 0 0 1-1.9 1.9h-6.4l-4.5 2.8v-2.8h-.3a1.9 1.9 0 0 1-1.9-1.9v-7a1.9 1.9 0 0 1 1.9-1.9Z" />
+      <g fill="currentColor" stroke="none">
+        <circle cx="8" cy="10.7" r=".7" />
+        <circle cx="12" cy="10.7" r=".7" />
+        <circle cx="16" cy="10.7" r=".7" />
+      </g>
     </svg>
   )
 }
@@ -10021,6 +10376,7 @@ export function StructuredMessageBody({
             </span>
           )
         }
+        if (isReferenceSegment(segment)) return <InlineThreadReference key={`reference-${index}`} segment={segment} />
         if (segment.kind === 'skill_mention') {
           return (
             <button
@@ -10475,6 +10831,7 @@ function RunExecutionContent({
   historyStatus,
   finalBody,
   cancelling,
+  showStopFeedback,
   onLoadHistoricalEvidence,
   onFileOpenError
 }: {
@@ -10489,6 +10846,7 @@ function RunExecutionContent({
   historyStatus: RunExecutionHistoryStatus
   finalBody: string | null
   cancelling: boolean
+  showStopFeedback: boolean
   onLoadHistoricalEvidence(): Promise<void>
   onFileOpenError(message: string): void
 }): JSX.Element {
@@ -10636,7 +10994,7 @@ function RunExecutionContent({
 
   return (
     <ExecutionContentContext.Provider value={windowedEvidence ? windowPage.contentCache : null}>
-    <div className="process-content" ref={windowPage.root}
+    <div className={`process-content${cancelling && nonTerminal ? ' is-stopping' : ''}`} ref={windowPage.root}
       data-execution-run-id={run.id}
       data-execution-loaded-count={windowedEvidence ? windowPage.blocks.length : undefined}
       data-execution-first-sequence={windowedEvidence ? windowPage.blocks[0]?.sequence : undefined}>
@@ -10829,8 +11187,8 @@ function RunExecutionContent({
             <RunningText text={feedback} />
           </div>
         )}
-      {cancelling && nonTerminal && (
-        <div className="process-action cancelling" role="status"><UiText zh={"正在提交停止请求，完成后即可继续发送。"} /></div>
+      {cancelling && nonTerminal && showStopFeedback && (
+        <div className="run-stop-feedback" role="status"><UiText zh="正在停止…" /></div>
       )}
       {publicFailure && <RuntimeFailureNotice failure={publicFailure} presentation="agent-run" />}
     </div>
@@ -10881,7 +11239,7 @@ export function RunExecutionDisclosure({
   const recoveryKey = `mobile-run:${threadId}:${run.id}`
   const nonTerminal = NON_TERMINAL_RUNS.has(run.status)
   const active = executionDisclosureIsLiveOpen(run.status, focused, cancelling)
-  const cancellingActive = nonTerminal && cancelling && focused
+  const cancellingActive = nonTerminal && cancelling
   const publicFailure = run.status === 'failed' ? run.failure : null
   const hasPublicFailure = publicFailure !== null
   const defaultOpen = (mobile ? nonTerminal : active) || hasPublicFailure
@@ -10972,6 +11330,7 @@ export function RunExecutionDisclosure({
       historyStatus={historyStatus}
       finalBody={finalBody}
       cancelling={cancelling}
+      showStopFeedback={!hideSummary}
       onLoadHistoricalEvidence={loadHistoricalEvidence}
       onFileOpenError={onFileOpenError}
     />

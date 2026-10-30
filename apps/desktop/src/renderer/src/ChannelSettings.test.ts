@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { languageTestApi } from './interface-language-test-api'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, expectTypeOf, it } from 'vitest'
@@ -367,10 +367,7 @@ describe('Channel settings', () => {
   })
 
   it('keeps Lark provider copy and actions in English mode', async () => {
-    const languageApi = {
-      setInterfaceLanguage: async (language: 'zh-CN' | 'en') =>
-        ({ ...DEFAULT_GENERAL_PREFERENCES, interfaceLanguage: language })
-    } as GeneralPreferencesApi
+    const languageApi = languageTestApi
     await changeInterfaceLanguage(languageApi, 'en')
     try {
       const markup = renderToStaticMarkup(createElement(ChannelSettingsView, {
@@ -433,61 +430,6 @@ describe('Channel settings', () => {
     expect(lark).not.toContain('飞书连接异常')
   })
 
-  it.each(['published', 'failed'] as const)('offers local deletion for %s publication while the account is disconnected', (publicationStatus) => {
-    const snapshot = threeProviderSnapshot()
-    snapshot.channels[0].connection = { status: 'not_connected', account: null }
-    Object.assign(snapshot.channels[0].memberBots[0], { publicationStatus, published: true, connectionStatus: 'offline' })
-    const markup = renderToStaticMarkup(createElement(ChannelSettingsView, {
-      agents: [agent('agent-a', 0)], snapshot, onDelete: () => undefined
-    }))
-    expect(markup).toContain('class="channel-row-action is-danger" type="button">删除</button>')
-    if (publicationStatus === 'published') expect(markup).toContain('飞书管理</a><button class="channel-row-action is-danger"')
-  })
-
-  it('keeps deletion off hosted Web, other providers, and bindings without publication facts', () => {
-    const snapshot = threeProviderSnapshot()
-    snapshot.channels[2].memberBots = [{ ...snapshot.channels[0].memberBots[0] }]
-    const render = (props: Partial<Parameters<typeof ChannelSettingsView>[0]> = {}) => renderToStaticMarkup(createElement(ChannelSettingsView, {
-      agents: [agent('agent-a', 0)], snapshot, onDelete: () => undefined, ...props
-    }))
-    expect(render({ desktopManagedWeb: true })).not.toContain('channel-row-action is-danger')
-    expect(render({ selectedKind: 'lark' })).not.toContain('channel-row-action is-danger')
-    expect(render({ selectedKind: 'dingtalk' })).not.toContain('channel-row-action is-danger')
-    expect(render({ onDelete: undefined })).not.toContain('channel-row-action is-danger')
-    snapshot.channels[0].memberBots[0].appId = null
-    expect(render()).not.toContain('channel-row-action is-danger')
-    Object.assign(snapshot.channels[0].memberBots[0], { appId: 'cli_frozen', publicationStatus: 'failed', published: false })
-    expect(render()).not.toContain('channel-row-action is-danger')
-  })
-
-  it.each(['busy', 'provisioning', 'unavailable'])('disables local deletion while %s', (state) => {
-    const snapshot = threeProviderSnapshot()
-    if (state === 'provisioning') Object.assign(snapshot.channels[0].memberBots[0], { publicationStatus: 'provisioning', published: true })
-    if (state === 'unavailable') snapshot.channels[0].hostStatus = 'unavailable'
-    const markup = renderToStaticMarkup(createElement(ChannelSettingsView, {
-      agents: [agent('agent-a', 0)], snapshot, onDelete: () => undefined,
-      busy: state === 'busy' ? 'delete:feishu:agent-a' : null
-    }))
-    expect(markup).toContain('class="channel-row-action is-danger" type="button" disabled="">删除</button>')
-  })
-
-  it('keeps the frozen local deletion target and dialog error until a successful snapshot', () => {
-    const source = readFileSync(new URL('./ChannelSettings.tsx', import.meta.url), 'utf8')
-    expect(source).toContain('setDeleteTarget({ agentId: agent.agentId, displayName: agent.displayName, expectedAppId })')
-    const dialog = source.slice(source.indexOf('{channels.native && deleteTarget &&'), source.indexOf('{channels.native && <QrDialog'))
-    expect(dialog).toContain('title={uiAttribute("删除发布记录？")}')
-    expect(dialog).toContain('仅清除本地发布记录和凭据，不删除飞书 Bot、队员或聊天记录。')
-    expect(dialog).toContain('if (!open && !busy) setDeleteTarget(null)')
-    expect(dialog).toContain('closeDisabled={busy !== null}')
-    expect(dialog).toContain('className="channel-dialog-error" role="alert"')
-    expect(dialog).toContain("channels.native!.deleteMemberBot(deleteTarget.agentId, deleteTarget.expectedAppId, 'feishu')")
-    expect(dialog).toContain('if (next) setDeleteTarget(null)')
-    const runner = source.slice(source.indexOf('const run = useCallback'), source.indexOf('const cancelQrAttempt'))
-    expect(runner).toContain('setSnapshot(next)')
-    expect(runner).toContain('setError(channelActionError(kind, nextError))')
-    expect(runner).toContain('return null')
-  })
-
   it('keeps only present members in deterministic roster order', () => {
     expect(visibleChannelMembers([
       agent('later', 8),
@@ -498,7 +440,6 @@ describe('Channel settings', () => {
     ]).map((member) => member.agentId)).toEqual(['first', 'same-a', 'same-z', 'later'])
   })
 })
-
 
 function threeProviderSnapshot(): ChannelSettingsSnapshot {
   const account = (brand: 'feishu' | 'lark' | 'dingtalk', tenantName: string) => ({

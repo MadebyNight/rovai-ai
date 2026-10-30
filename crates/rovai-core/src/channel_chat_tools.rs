@@ -74,7 +74,7 @@ pub fn migrate(database: &mut Database) -> Result<()> {
             department TEXT,
             UNIQUE(agent_run_id,execution_epoch,input_id,external_id)
         );
-        INSERT INTO schema_migration VALUES(211,datetime('now'));
+        INSERT INTO schema_migration VALUES(221,datetime('now'));
     "#)?;
     anyhow::ensure!(schema_matches(&tx)?, "chat tool migration layout mismatch");
     tx.commit()?;

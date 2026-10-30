@@ -3,10 +3,30 @@ document_type: version-decisions
 version: v1.72
 authority: decision-rationale
 lifecycle: current
-last_updated: 2026-10-18
+last_updated: 2026-10-29
 ---
 
 # v1.72 版本决定
+
+<a id="v1-72-d69"></a>
+## V1.72-D69：历史进程清理不决定工作区可用性
+
+- 状态：accepted
+- 日期：2026-10-29
+- 授权：User sequence 6 确认四条实施边界并要求独立 worktree；sequence 8 要求先验开发包，稍后退出日常 App。
+- 当前权威：[Availability-first Runtime](../../architecture/availability-first-runtime.md#optional-startup-boundary)、[Managed Process](../../contracts/managed-runtime-process-v2.md#macos-acp-descendants)、[Run recovery](../../architecture/agent-run-recovery.md#4-cleanuplane-与-execution-root)。
+
+前代 PID 被复用、身份查询无权限或账本损坏会通过启动恢复与 Adapter 初始化重复传播；即使打开窗口，旧任务缺 ACK
+也会在工作区准备、领取和共享目录门禁继续阻止新工作。选择 ready 后唯一有界后台尝试，逐条保留诊断，失败不降级运行环境。
+四处任务准入、Mission 清理入口/命令与会话删除统一使用现有内存中的精确 Run/epoch 所有权；
+历史缺 ACK 或未知状态不作为活跃冲突，也不回填虚假清理成功。排队提示只使用当前执行或 Core 的等待原因，
+不从历史 ACK 推断。该边界同样覆盖新会话在 App 崩溃、强制退出或断电后留下的记录。
+
+接受少量前代残留继续存在和旧清理事实保持未知，优先保证老用户在原会话、原成员、原 Runtime 继续工作。
+保留当前执行的真实停止/退出结果、共享进程范围和旧输入不自动重投语义。数据库打开、迁移和业务任务恢复仍各自报告真实错误。
+不选择持久清理队列、恢复服务、合并全部账本或全局放宽进程身份查询；这些方案增加机制或会让当前停止误报结果。
+本决定替代 D26 中“前代回收失败关闭启动准入”的当前要求，其他进程生命周期判断保持。无 schema 变更。
+
 
 <a id="v1-72-d06"></a>
 ## V1.72-D06：Claude Code 打印模式通过原生双向控制协议接入审批
@@ -1115,13 +1135,338 @@ Task 与消息协作重复，直接删除会破坏存量责任和恢复。因此
 
 
 <a id="v1-72-d53"></a>
-## V1.72-D53：聊天来源说明与现有工具授权分开
+## V1.72-D53：长粘贴文件归属 Thread，以单向发送保护限制删除
 
 - 状态：accepted
-- 日期：2026-10-28
-- 确认：开发者经父级msg_bfe84aabceb6明确选择revision3；未声称逐字阅读技术全文
-- 当前权威：[Manifest43](../../contracts/context-manifest-evidence-v43.md)、[聊天Bot v3](../../contracts/feishu-chat-bot-v3.md)、[聊天架构](../../architecture/feishu-channel.md#聊天-bot-普通回复与逐输入来源)
+- 日期：2026-10-20
+- 当前权威：[Public Composer](../../architecture/camp-composer-draft.md#长粘贴生成文件)、[Composer Draft v19](../../contracts/camp-composer-draft-v19.md)
 
-普通回复由Host自动回原聊天，却缺少模型可见的逐输入来源说明。选择在动态输入中完整说明身份、内容保护、自动回复和受托工具区别，并保留claim冻结与历史恢复，不修改Bootstrap或制造新授权。
+### 背景与选择
 
-FRR-10证明旧grant仍绑定初始来信，不证明合法目标上的合成调用已扩大权限。拒绝全工具冻结、窄写冻结及本轮逐调用授权重构，保留正常受托发送和result；代价是服务器仍无逐调用新委托来源硬保证。该限制明确公开，提示词不冒充安全凭据；真实模型错误归属、泄露、无委托外发及缺证据仍阻断交付。
+长粘贴自动生成文件需要跨普通退出恢复，系统临时目录不足以拥有这份内容；同项目可以有多个草稿，
+因此使用既有 Thread 输出目录与 Main 登记。首次发送不搬迁文件，也不把正文存入 Core 或再复制进草稿。
+
+选择仅对最终发送快照中的生成附件持久写入、首版不撤销的保护标记，并在同一登记队列内协调删除。
+已移除附件不受后续发送连带保护，本次无附件也不解除更早保护。用户优先要求可用性和架构简洁：
+接受少量实际未发布的文件保留到 Thread 删除，以避免误删已发布文件。移除引用不以物理清理成功为条件；
+草稿保存失败与清理失败分开处理，发送后先保存新草稿再释放恢复登记。
+
+2026-10-21 按 User 的实际复现收窄 Clipboard 豁免：私有 MIME 同时承载纯正文，不能把格式存在当作
+含有结构化身份。只在恢复后仍有 Member、All Members 或 Skill Atom 时优先插入结构化内容；
+内部纯正文沿用同一单次长粘贴入口，保留现有复制格式及附件生命周期。
+
+2026-10-22 补齐 Web：浏览器不能依赖 Electron Main；现有上传回执不可变，不能用更新回执或
+逐次追加发送事件记录删除资格。因此在 Core 原 SQLite 中增加一张仅属于生成文件的资格表，
+复用数据库锁和上传事务；不新建数据库服务，也不重做普通上传。
+
+### 未选择方案与后果
+
+未选择每次发送关联、失败解除保护、结果轮询或后台对账；它们可以精确回收更多文件，但需要新增状态和恢复责任。
+也不建立定时扫描、引用计数或垃圾回收器。必要登记的裁剪豁免和既有 Pending 启动目录清理仍需补齐，否则
+文件在磁盘上存在也不能保证草稿恢复。普通外部文件、消息删除和 Run 取消不在本次变更范围。
+
+<a id="v1-72-d54"></a>
+
+## V1.72-D54：中断复用事件通知，短亮与持久已读分离
+
+- 状态：accepted
+- 日期：2026-10-21
+- 确认：User 的 R2 计划讨论与消息 c2984afb-b95c-4699-8114-387552b6d7c1 授权独立 worktree 实施。
+- 当前权威：[Notification Episode v11](../../contracts/notification-episode-v11.md)、[Current User Attention v9](../../contracts/current-user-attention-v9.md)、[通知架构](../../architecture/notification-episodes.md#中断蓝点与实时反馈)。
+- 后续：[V1.72-D55](#v1-72-d55) 收窄并替代本决定的停止来源、精确确认及短亮机制；以下保留当时理由。
+
+强退时无法依赖前端离开回调。沿用 Core 已有恢复收口事务，将真实中断作为通知来源，保留唯一
+Disposition 已读真源；不采用启动逐会话推断或本机标记未读，因为前者扩大恢复扫描，后者把用户
+手动提醒与结果注意力混在一起，跨窗口确认和重启恢复都难以一致。
+
+立即确认可见结果可能早于侧栏第一次读取，所以另用精确实时准入与本机操作意图短亮。
+等待侧栏绘制才 ACK 会让折叠、裁切或隐藏状态槽阻塞已读，因此不采用该屏障。
+代价是短亮只保证在当时可绘制的槽位出现；已结束的私有来源退出候选而保留未确认审计，
+本轮不引入历史单聊产品。新增分类、Journal 描述和有界确认接口构成持久兼容边界。
+
+规模实测发现，轻量 SQL 若等待启动附件维护持有的主连接锁，仍会延迟首份蓝点结果。
+因此只将该批量读取放入既有独立读队列，以已准入数据库的惰性只读 WAL 连接读取。
+快照事务仍包含同一 Journal 边界与 Disposition；写入、恢复和准入责任保持在原 owner。
+连接失败只让读取失败，不扩大为 Core 启动失败。
+
+<a id="v1-72-d55"></a>
+
+## V1.72-D55：执行中断提醒以 Thread 展示确认，删除手动停止短亮
+
+- 状态：accepted
+- 日期：2026-10-21
+- 确认：User 消息 613cf2d5-70c3-41c9-a5fb-7f7b9ee4c3de 收窄为 App 退出提醒；67fde392-eb82-4f7e-8284-54075161ff78 授权修改并清理多余代码。fb453917-508a-49ce-ba19-8fa4fe1481f2 补充确认保留 Run 异常退出提醒。
+- 当前权威：[Notification Episode v12](../../contracts/notification-episode-v12.md)、[Current User Attention v10](../../contracts/current-user-attention-v10.md)、[执行中断提醒](../../architecture/notification-episodes.md#执行中断提醒)。
+- 替代：[V1.72-D54](#v1-72-d54) 的手动停止来源、精确结果确认及独立短亮；通知事实与唯一 Disposition 继续保留。
+
+原实现把“退出打断过这个会话”扩展为逐 Run 的停止注意力。无输出的停止可能没有可见来源供确认，
+精确短亮又要求本机意图、准入描述、计时和槽位判断。普通快照推进还会通过 callback 身份触发重复读取。
+这些成本与本次所需的退出提醒不相称，继续补终态标记只能修局部症状。
+
+选择保留现有退出/启动恢复事务与通知持久性，包括 App 运行期间已确认的执行丢失，
+把已读依据收窄为正式 Thread 内容成功展示。
+读取仍按通知事件和已有恢复机制，普通执行进度不参与。删除手动停止 producer 与整套短亮链路，
+旧手动停止事实保留审计但不参与侧栏候选，不伪造已读。协议删除准入描述，数据库升级只换 producer。
+
+拒绝给空输出逐个补占位或增加展示状态机，也不改用本机标记未读、独立退出清单或每次启动全会话计算。
+代价是打开会话即可确认执行中断提醒，不证明用户看过每个被中断 Run；这一语义符合本次会话级目标。
+其他精确通知、回复水位、手动提醒与运行显示保持各自责任。
+
+<a id="v1-72-d56"></a>
+
+## V1.72-D56：环境编辑直接显示完整值，标量转换集中在 Renderer
+
+- 状态：accepted
+- 日期：2026-10-21
+- 确认：User 消息 85cf3936-84af-4e82-886f-28aa1c277c83 要求删除全部隐藏逻辑；6aa5baf6-aeb5-4e9f-8a3e-0a98edc7cb6e 确认标量输入及取消非必要校验。
+- 当前权威：[Runtime Launch v69](../../contracts/runtime-launch-and-verification-v69.md)、[队员环境变量](../../ui/components/member-identity.md#队员环境变量)。
+
+凭据占位混入可编辑 JSON，会让用户修改其他字段时遭遇保留标记校验，且额外查看请求带来版本与迟到回包交互。
+选择完整值直接编辑，移除遮蔽状态及标记，Owner 权限、加密持久化和公开输出脱敏继续各自负责。
+不再用眼睛按钮或逐项编辑器补充状态，也不增加变量行入口。
+
+数字和布尔值是常见设置，要求用户逐个补引号没有必要。转换集中在公共 Renderer 解析函数，
+预览和提交共享同一字符串映射；Core 保持字符串合同，避免 JS/Rust 的数值表现差异。
+原始草稿保留到成功保存，保证输入与失败恢复不被自动格式化打断；不支持的结构值与不安全数字明确拒绝。
+独立条数和名称长度上限缺少额外收益，取消后仍由 UTF-8 容量、名称语法、保留名和版本冲突保护实际边界。
+
+<a id="v1-72-d57"></a>
+## V1.72-D57：Team 作为创建预设，Custom 独立保留，指引在创建时固定
+
+- 状态：accepted
+- 日期：2026-10-18
+- 确认：User 在 Team 设计 Thread sequence 29 确认 R1 和实施。
+- 当前权威：[Team Templates v1](../../contracts/team-templates-v1.md)、[Bootstrap v6](../../contracts/native-session-bootstrap-v6.md)、[Team 架构](../../architecture/team-management.md)。
+
+User 要求不创建团队也能配置一键新建，且指引只作启动材料，不因编辑重新投递。因此保留独立 Custom
+默认值，Team 仅提供有版本的创建输入；拒绝旧配置自动生成团队与 Thread 实时绑定 Team。
+指引在成功创建事务内固定，后续队员和合法 Bootstrap 补发读同一文本；不提供会话指引编辑器。
+代价是旧会话不跟随模板修订，换用新指引需要创建新会话。
+
+创建偏好从旧 JSON 只导入一次到 SQLite，使默认 Team 删除与回退可在一个事务完成。保留旧文件用于
+恢复，避免跨文件提交失败时出现已删 Team 仍被选中的状态。模型输入仅增加非空 TEAM_GUIDANCE 段，
+版本与确认见 [R1](model-context-change-team-guidance.md)。
+
+<a id="v1-72-d58"></a>
+## V1.72-D58：引用只定位公开来源，沿用正文和发布事务
+
+- 状态：accepted
+- 日期：2026-10-22
+- 当前权威：[Thread Reference v1](../../contracts/thread-reference-v1.md)、[Composer 架构](../../architecture/camp-composer-draft.md)
+
+### 背景与选择
+
+User 要求在既有输入框选择对话，并在交互迭代中加入使命；明确拒绝上下文版本兼容工程。
+Atom 按 ID 绑定，本机标签只展示；Core 首次发布捕获标题并保存在原消息段。来源弱引用，读取 live 内容，
+不复制全文或自动安排摘要。引用沿既有 body 输出定位链接，成员 mentions 与 Skill 语义保持原样。
+
+### 后果与替代方案
+
+不新增 references 数组、上下文块、Composer V3、serializer 版本或数据库表；不改变已冻结 Context Blob。
+命令回放先于目标读取，源删除不使合法消息失效。若未来需要发送时历史快照，须独立定义读取边界，不能
+用当前引用 ID/标题冒充。未选择标题重绑、自动解析普通文本、跨 Host ID 或引用引发执行的方案。
+
+<a id="v1-72-d59"></a>
+## V1.72-D59：Command Code 回归原生 HOME 与 Binding 身份
+
+- 状态：accepted
+- 日期：2026-10-24
+- 当前权威：[Runtime Launch and Verification v72](../../contracts/runtime-launch-and-verification-v72.md)、[Command Code ACP 边界](../../architecture/runtime-catalog-boundaries.md#command-code-acp-实施边界)
+
+### 背景与选择
+
+官方 1.88 已提供 ACP BYOK 目录/选模与正式 Mod 参数。用户明确要求删除私有 HOME、配置副本及摘要
+兼容性机制，避免原生状态有多个所有者、外部配置变化被解释为新会话。保留现有共享 Fleet，以实际所属
+身份及进程健康/租约选择 Host，以精确原生 Session ID 延续会话；显式修改通过既有失效事件应用。
+后续审查确认 dispatch 在 Fleet 之前验证磁盘入口仍会阻断 warm；将既有启动验证/刷新收回 cold spawn，
+继续保留显式禁用/删除安装准入。MCP 成功保存不能等同于配置变化，Store 直接传递实际改动涉及成员，
+Fleet 按成员限定失效，不引入配置差异扫描或新依赖管理器。
+后续可用性修复删除新旧 Bootstrap 相等门槛与 JSON 封装额外上限；每 Run 发送前用既有 Context 的
+冻结 B 更新现有 binding，使成员指令在后继 Run 生效，不新增跨 Host 冻结状态。
+成员环境保存只传播实际修改事实，命令重放不重复退役。
+health probe 删除覆盖所有错误的 Command 特例，沿其他 ACP 已有分类与脱敏处理。
+
+### 后果与替代方案
+
+不迁移或清空旧摘要和 Session，不改变冻结 Bootstrap。原生配置加载时机由 CLI 拥有；外部编辑不会由
+Rovai 自动扫描后重启。拒绝保留旧 HOME fallback、把摘要换名为 profile/generation、每轮比较配置快照或
+新增 Command 专属池/缓存。MCP 同名优先交给原生行为，仅保留有实测依据的 cwd/字面量适配。
+冷恢复删除目录预检，直接向原生提交精确 ID；接受 1.88 可能静默打开空会话的代价，不额外承诺恢复证明。
+此决定替代 D27 中 Command 私有原生 MCP 文件路径，不改变 Cline，也不代表公开资格通过。
+
+<a id="v1-72-d60"></a>
+## V1.72-D60：Command Code 在 macOS 与 Windows 开放 Preview
+
+- 状态：accepted
+- 日期：2026-10-25
+- 确认：User 消息 17fcec4d-6c8b-4004-8450-f70af4e7b588（seq61）要求“mac两个端都开放”。
+- 补充确认：同日 Windows 会话要求“缺口你快速验证一下，验证完就开放”，并要求将 Windows 与上述 macOS 提交一同合入。
+- 当前权威：[Runtime Platform Admission v2](../../contracts/runtime-platform-admission-v2.md#8-command-code-macos-preview)、[Command Code ACP 边界](../../architecture/runtime-catalog-boundaries.md#command-code-acp-实施边界)。
+
+原生 HOME、官方 Mod/ACP、共享 Fleet 简化已合入；1.88 的 BYOK 与 MCP 原生实测具备使用依据，
+但现有记录不覆盖完整 Core/App、Intel 与子代理资格。选择已有 Preview 状态在 macOS arm64/x64
+允许正常发现、配置、检查和执行，保留缺失资格原因与空 evidenceRevision，不把开放请求当作完整验收证明。
+同日 Windows 真实 Core/MCP、配置更新与撤销、原生压缩、权限拒绝及强杀回收补验后，Windows x64 也采用
+Preview。保留原生 Windows MCP 路径／参数及拒绝后缺少最终回复的已知边界；不据此宣称完整资格。
+最低版本仍为 1.88.0 稳定版；Linux 继续 NotQualified，Cline 与 Cursor 继续暂缓公开。
+
+公开入口共用现有产品目录和 Core 平台准入，不增加 Renderer 平台白名单、专属检查、实验标签或启动分支。
+拒绝继续全平台隐藏 Command，也不凭单平台原生试验直接标为 qualified。此次只改变准入范围，不调整
+Bootstrap、Host/Session 生命周期或用户原生配置；后续完整资格仍须以实际平台证据确认。
+
+
+<a id="v1-72-d61"></a>
+## V1.72-D61：Command Code Linux 随目标机验收开放 Preview
+
+- 状态：accepted
+- 日期：2026-10-25
+- 确认：维护者要求“剩下的赶紧跑完”，随后要求 Linux 完成后更新到 macOS 开放分支。
+- 当前权威：[Runtime Platform Admission v2](../../contracts/runtime-platform-admission-v2.md#9-command-code-linux-preview)、[Command Code ACP 边界](../../architecture/runtime-catalog-boundaries.md#command-code-acp-实施边界)。
+
+GNU x64 目标机已用官方 1.88.0、真实 Sub2API 与隔离 Core/浏览器执行验收。选择沿既有 Preview
+开放 Linux，保持稳定版 ≥1.88.0、原生配置所有权和共享 Fleet；不继续全平台隐藏，也不把单台机器
+证据扩张为所有发行版或子代理的完整资格。Windows 的公开范围独立决定。
+
+官方 ACP 将 shell `exit 7` 的 Tool 状态报告为 completed，输出仍包含实际 Exit code: 7；Core 如实
+采用该状态。维护者明确接受这项差异，本轮不再以它阻断开放；不从输出文本另造退出码解析或状态管理。
+其余未通过或未覆盖项按实际证据记录，不由这一接受决定自动豁免。
+
+<a id="v1-72-d62"></a>
+
+## V1.72-D62：Hermes 使用官方 ACP 与专用 Gateway，逐 Run 冷恢复并保持最低版本策略
+
+- 状态：accepted
+- 日期：2026-10-23
+- 授权：User 在 Hermes Thread 的 2026-10-22 sequence 3 要求开启 worktree 接入；sequence 4 允许真实 LLM 与原生 BYOK/Sub2API；sequence 10 要求最低版本策略；2026-10-23 sequence 18 在官方入口验证后要求开始切换。不宣称跨平台资格确认。
+- 当前权威：[Hermes Managed Runtime v1](../../contracts/hermes-managed-runtime-v1.md)、[Runtime Catalog](../../architecture/runtime-catalog-boundaries.md#hermes-受管-acp)、[平台准入](../../contracts/runtime-platform-admission-v2.md#hermes-初始准入)。
+
+只包装官方 ACP viewer 不能保证执行者退出，暖 Gateway 也会保留旧 B 与终端环境。
+官方入口 Probe 已证明专用 Gateway 每 Run 重启后能恢复原 Session、刷新 B 和 CLI 环境。因此本轮取代早期
+进程内 SessionManager/AIAgent 覆盖，选择 Fleet 拥有的官方 ACP＋专用 Gateway，以公开 RPC 完成精确
+Steer/取消、reasoning/MCP mutation 和原生事件补充。controller 借用发行物的传输及纯格式化帮助函数，
+不修改服务端执行器、聊天循环或安装源码。
+
+代价是每 Run 冷启动成本、binding 独立 Home 和多进程回收；官方结果只足以提供文件片段，不能延续早期
+完整文件快照的能力宣称。保留 >=0.22.4，不锁 commit/dirty/上界，实际能力与协议仍探测核对。
+macOS arm64 维持 Preview，其他平台与完整 Fleet/CLI/UI 矩阵未完成不晋升 Qualified；已测版本与兼容策略分开。
+
+
+<a id="v1-72-d63"></a>
+## V1.72-D63：Hermes 规则随用户输入交付，原生提示词由 Hermes 解析
+
+- 状态：accepted
+- 日期：2026-10-23
+- 当前权威：[Hermes Managed Runtime v1](../../contracts/hermes-managed-runtime-v1.md#session-与输入)、[Bootstrap v6](../../contracts/native-session-bootstrap-v6.md#hermes-的-user-层投递例外)、[Bootstrap Redelivery](../../architecture/native-session-bootstrap-redelivery.md#hermes-完成通知与下一普通输入)。
+- 确认：[Hermes 首次输入 R1](model-context-change-hermes-first-input.md)，User sequence 31。
+
+原先 system overlay 注入要求 Rovai 复刻原生 env/config/personality 优先级，增加持续兼容责任。
+选择复用 Core 的 B、在首条实际普通用户输入前置规则，让 Hermes 自行拥有原生系统提示词；代价是 user 层
+规则没有 system/developer 优先级，并且需要按精确接受事实跟踪规则更新和冷恢复。
+
+0.22.4 原生 protect_first_n 在首次压缩后退化，不能证明无限次完整保留。使用官方 committed Hook
+及已有输入账本，在下一普通输入补发，不介入当前 Run 的原生模型循环。接受这段完整规则可见性空窗。
+未选择继续解析并拼接原生 system overlay，也未选择补丁原生压缩器或在每轮无条件重复 B。
+进程/CLI lease 生命周期仍按 D62，不由投递位置改变推导旧进程可跨 Run 复用。
+
+<a id="v1-72-d64"></a>
+## V1.72-D64：Hermes 未知执行由用户明确处理，原生与 Rovai 终态分别保留
+
+- 状态：accepted
+- 日期：2026-10-23
+- 授权：User sequence 34 要求修正能力残留，并提供官方精确 unknown 恢复操作；不返回 system 注入。
+- 当前权威：[Hermes 未知执行](../../contracts/hermes-managed-runtime-v1.md#用户明确处理未知执行)、[恢复架构](../../architecture/agent-run-recovery.md)、[User Automation](../../contracts/user-automation-v6.md#hermes-显式恢复)。
+
+强杀后 Core 失败收口不能消除原生 unknown admission，普通恢复门禁又先于聊天输入，故 `/discard`
+文本不能充当可靠出口。选择用户 CLI 的检查／明确确认操作，用官方精确 receipt 与 resolve_unknown
+解除原会话阻塞，保留旧任务失败和副作用证据；下一任务仍由用户另行提交。
+
+代价是当前需用户普通终端操作，尚无专用聊天按钮。未选择自动放弃未知任务、重放原输入、编辑原生数据库，
+或自动换 Session 绕过。与既有“继续执行”产生独立 Run 的语义分开，不改其他 Adapter 或共享队列合同。
+
+<a id="v1-72-d65"></a>
+## V1.72-D65：Hermes 优先恢复原会话，执行门禁与恢复分开
+
+- 状态：accepted
+- 日期：2026-10-23
+- 授权：User sequence 36 要求按可用性处理版本、路径、安装记录与指纹漂移，取消全局长锁。
+- 当前权威：[Hermes Session 与输入](../../contracts/hermes-managed-runtime-v1.md#session-与输入)、[恢复架构](../../architecture/agent-run-recovery.md)。
+
+采用共享同类 CLI 的当前目标选择，旧 Run 的安装信息不永久绑定可执行文件。原 binding 的 Home/profile
+和 Session ID 继续保留；实际兼容性由当前选定 Runtime 验证。先恢复历史与状态，再按原生执行、审批、
+排队或 unknown 阻塞新输入。读取断线只重连原受管 Gateway；不重放业务输入、不自动换 Session。
+
+移除跨 Hermes 会话的长锁，复用调度 lane、Fleet owner 与同 Home 文件锁。不同成员/Session 不互相
+等待。用户维护入口只用于 D64 的异常确认，不能成为普通续聊的前置步骤。
+
+代价是实际缺失或不兼容的原生 Session 仍会如实失败，unknown 仍需用户明确处理；当前不新增聊天按钮。
+未选择以安装指纹永久封锁旧 Session，亦未选择通过新建 Session 掩盖原生阻塞。其他 Adapter 的回退策略不变。
+
+
+<a id="v1-72-d66"></a>
+## V1.72-D66：Hermes 普通交互直连官方 ACP，增强观测不决定任务终态
+
+- 状态：accepted
+- 日期：2026-10-24
+- 授权：User sequence 38 明确要求以可用性、原生兼容与低维护成本简化 Hermes 接入。
+- 当前权威：[Hermes Managed Runtime v1](../../contracts/hermes-managed-runtime-v1.md)、[Runtime Catalog](../../architecture/runtime-catalog-boundaries.md#hermes-受管-acp)。
+
+D62/D65 的控制器重复了官方 ACP 已有的 admission、事件回放与终态处理，并要求额外事件通道完整，
+使补充观测丢失也能破坏明确成功。选择共享 ACP 直接使用官方协议；启动器只准备 Home/进程，移除消息
+转发、工具过滤与重建、连续序号回放、逐 prompt receipt 成功门禁、额外文件锁及内部 reasoning 依赖。
+只在官方 ACP 的实际缺口保留按需 MCP 撤销、Steer 与已有 unknown 操作。
+
+代价是结构化 Diff、完整工具参数和可归属的 prompt 用量可能缺失；如实降级，不模拟上游没提供的保证。
+失败/取消照原生处理，中断未知不重放，错误 Session/请求不串联。沿用 FirstPayload、官方完成 Hook 的
+下一普通输入补发、原生能力关闭策略、逐 Run 冷启动、共享 Fleet/队列/Send/CLI lease。
+未选择扩大 Gateway/Fleet、恢复或证据框架，也不为内部实验分支持续维持私有接口兼容。
+
+
+<a id="v1-72-d67"></a>
+## V1.72-D67：Hermes 使用原生 Home 与调用时活动 Run，不追溯命令的原始执行
+
+- 状态：accepted
+- 日期：2026-10-25
+- 授权：User sequence 56 的完整方案与 sequence 60 的实施授权。
+- 当前权威：[Hermes Runtime](../../contracts/hermes-managed-runtime-v1.md)、[内置工具运输](../../contracts/builtin-tool-transport-v43.md)、[进程所有权](../../contracts/managed-runtime-process-v2.md)。
+
+私有 Home/逐 Run Gateway 与插件逐执行身份方案需要额外维护，且偏离用户原生环境。采用官方 ACP、
+原生共享 Home，通过原生逻辑 Session 在 Core 现有关系和活动 lease 中一次解析 Run；不新增映射、
+上下文交换、上游补丁或模型参数。CLI 与 Core 同包发布，其他 Runtime 的原有运输不动。
+
+明确接受旧后台执行在后继 Run 首次调用时归后继 Run；固定一次操作的身份，派发未知不自动重新定位。
+取消压缩补发，保留首次/真实变更的 user 层规则；多次原生压缩可能丢失完整规则。
+共享 Gateway 不属于 Run，关闭 ACP 不承诺工具停止；记忆与配置也不按成员隔离。
+
+取代 D62–D66 中私有 Home、专用 Gateway、Hook 补发和私有控制的当前实施选择，保留其历史理由。
+未选择插件安装、逐 Run 包装路径、MCP 替代 CLI 或原生执行来源证明；未上线实验无迁移和回退要求。
+
+User sequence 64/66/68/70 确认进一步删除没有消费者的 Hermes CLI 文件投影和没有有效决策用途的
+Host/Binding/runtime 兼容性摘要。复用 Command Code 分支已经定义的显式 Native Binding 策略，
+其他 Runtime 的调用路径保持原义；固定同包 CLI 入口由安装版 App 初始化提供，Run 不再重复安装。
+不增加表、握手或后台管理。旧实验规则记录只保留历史读取，不参与新的规则基线；当前 Diff、MCP cwd
+及用量能力按实际实现说明，不为旧文档承诺恢复封装。
+
+User sequence 81/82 继续确认模型菜单与执行分离、相同原生模型/模式不重复设置，以及 Hermes Skills
+固定目录发现。模型选择由原生接口判断；文件候选只索引用户/项目的四个约定目录，不还原原生加载
+状态。接受外部自定义目录不再自动列入菜单、原生未启用文档可被用户显式引用的边界，保留原生
+加载与现有精确文件引用。没有新缓存、配置同步或原生状态管理器。
+
+
+<a id="v1-72-d68"></a>
+## V1.72-D68：数据库以 SQLite 可用性为准，历史检查只在升级和恢复执行
+
+- 状态：accepted
+- 日期：2026-10-29
+- 授权：User 要求完成数据库启动减重、验证、Review、合并与遵守宿主保护的安装，以可用性和旧数据保留为首要目标。
+- 当前权威：[Availability-first Runtime](../../architecture/availability-first-runtime.md)、[Availability v3](../../contracts/desktop-runtime-availability-v3.md#数据库启动与有界重试)、[Windows Private Storage v2](../../contracts/windows-private-storage-v2.md#启动必需存储)。
+
+文件状态快照把正常 SQLite 恢复、WAL 提交和 macOS 来源标记变化当作身份漂移，增加连接与误阻断。选择目录实例锁下
+单次读写打开，无 CREATE；SQLite 负责日志恢复，Core 只保留路径类型、主文件稳定身份、版本与完成记录、事务升级及真实
+I/O 错误。当前版本不重演历史结构链；历史编号冲突和旧 switch 仅进入对应升级/恢复。新库仍要求已确认 absence 和 no-replace。
+
+Windows 以实际访问权限判断已有启动存储，不要求模板匹配或改 ACL 权限。新对象创建时保护，专用凭据函数不放宽。
+Desktop 最多追加一次启动重启，避免叠加 SQLite 5 秒等待。接受没有启动期全历史校验的边界，深度检查保留给诊断和特定迁移。
+不改变数据格式，允许同一 schema 的旧程序回滚；回滚也会恢复旧的误阻断风险。
+
+未选择继续增加 macOS/Windows 例外、自动修权、损坏库自动 quarantine 后建空库或引入新重试框架：这些选择或继续扩大
+状态空间，或会让老用户误见空会话。此决定替代历史启动票据/元数据复核与现有启动目录 ACL 模板的当前约束，保留历史理由。

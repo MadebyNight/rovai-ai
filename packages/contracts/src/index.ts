@@ -40,6 +40,7 @@ export type AdapterKind =
   | 'cursor-agent'
   | 'kimi-code-cli'
   | 'minimax-code-cli'
+  | 'hermes-cli'
   | 'grok-build'
   | 'zcode-app'
   | 'deepseek-harness'
@@ -389,6 +390,7 @@ export interface RuntimeStartupConfiguration {
 }
 
 export interface RuntimeStartupSettings {
+  commonEnvironment?: { revision: number; environment: Record<string, string> }
   runtimeKind: AdapterKind
   revision: number
   configuration: RuntimeStartupConfiguration
@@ -446,7 +448,7 @@ export interface ProductRuntimeCatalogEntry {
 
 export type HostPlatformKey = 'macos-arm64' | 'macos-x64' | 'windows-x64' | 'linux-x64'
 
-export type RuntimePlatformAdmissionStatus = 'qualified' | 'preview' | 'not_qualified' | 'unsupported'
+export type RuntimePlatformAdmissionStatus = 'enabled' | 'qualified' | 'preview' | 'not_qualified' | 'unsupported'
 
 export type RuntimePlatformAdmissionReasonCode =
   | 'runtime_platform.qualification_evidence_missing'
@@ -832,7 +834,24 @@ export interface PendingExecutionIntentView {
 export type ThreadCollaborationMode = 'peer' | 'lead_coordinated'
 export type ThreadActivationState = 'pending' | 'active'
 
+export interface TeamSelection { teamId: string; expectedVersion: number }
+
+export interface Team extends NewConversationDefaults {
+  id: string
+  name: string
+  guidance: string
+  version: number
+}
+
+export interface SaveTeamCommand extends NewConversationDefaults {
+  teamId: string | null
+  expectedVersion: number | null
+  name: string
+  guidance: string
+}
+
 export interface CreateThreadRequest {
+  team?: TeamSelection
   commandId: string
   name: string | null
   workspace: { projectPath: string } | null
@@ -1215,6 +1234,8 @@ export type StructuredThreadMessageSegment =
   | { kind: 'all_members_mention' }
   | { kind: 'current_user_mention'; userId: 'local_user' }
   | { kind: 'skill_mention'; skillId: string; nameAtSend: string }
+  | { kind: 'thread_reference'; threadId: string; titleAtSend: string }
+  | { kind: 'mission_reference'; missionId: string; titleAtSend: string }
   | {
       kind: 'external_quote'
       senderDisplayName: string
@@ -1238,6 +1259,8 @@ export type ComposerAtom =
   | MemberComposerAtom
   | AllMembersComposerAtom
   | SkillComposerAtom
+  | ThreadReferenceComposerAtom
+  | MissionReferenceComposerAtom
 
 export interface MemberComposerAtom {
   type: 'member'
@@ -1254,6 +1277,27 @@ export interface SkillComposerAtom {
   skillId: string
   nameAtSend: string
 }
+
+export interface ThreadReferenceComposerAtom {
+  type: 'thread_reference'
+  threadId: string
+  labelFallback?: string
+}
+
+export interface MissionReferenceComposerAtom {
+  type: 'mission_reference'
+  missionId: string
+  labelFallback?: string
+}
+
+export type ReferenceKind = 'thread' | 'mission'
+export interface ReferenceIdentity { kind: ReferenceKind; id: string }
+export interface ReferenceCandidate extends ReferenceIdentity {
+  title: string
+  projectBindingKind: 'directory' | 'quick_chat'
+  projectPath: string
+}
+export interface ReferencePage { items: ReferenceCandidate[]; nextCursor: string | null }
 
 export type SkillSelectionOmissionReason =
   | 'missing_at_send'
@@ -1350,6 +1394,8 @@ export interface ThreadMessageAttachmentView {
   byteSize: number | null
   previewKind: 'image' | 'none'
   availability: LocalAttachmentAvailability
+  /** Optional, display-only prefix (at most 160 Unicode code points) of generated pasted text. */
+  pastedTextPreview?: string
   /** Present only while an unsent local Composer owns this attachment. */
   sourcePath?: string
 }
@@ -1361,7 +1407,10 @@ export type LocalAttachmentAvailability =
   | 'unreadable'
   | 'kind_changed'
 
-export type LocalAttachmentSourceView = ThreadMessageAttachmentView
+export type LocalAttachmentSourceView = ThreadMessageAttachmentView & {
+  /** Main-authored hint for the local removal path; never grants deletion authority. */
+  generatedBy?: 'long_text_paste'
+}
 
 export type LocalAttachmentOwnerLocator =
   | { owner: 'composer'; threadId: string; attachmentRefId: string }
@@ -1407,23 +1456,15 @@ export type LocalAttachmentOwnerLocator =
 export interface MessageQuoteSnapshot {
   version: 1
   quoteId: string
-  source: { scope: 'camp' | 'single_chat'; campId: string; conversationId?: string; messageId: string }
-  authorAtCapture: { type: 'user'; displayName: string } | { type: 'agent'; agentId: string; displayName: string }
+  source?: { scope: 'camp' | 'single_chat'; campId: string; conversationId?: string; messageId: string }
+  authorAtCapture?: { type: 'user'; displayName: string } | { type: 'agent'; agentId: string; displayName: string }
   text: string
   format: 'plain_text'
   capturedAt: string
-  sourceContentDigest: string
-  /** Internal, immutable selection anchor. Never projected into model input. */
-  locator?: { projectionVersion: 1 | 2; startScalar: number; endScalar: number; projectionDigest: string }
-  snapshotDigest: string
 }
 
 export interface MessageQuoteSelection {
-  currentUserDisplayName?: string
-  messageId: string
-  bodyAtSelection: string
-  startScalar: number
-  endScalar: number
+  messageId?: string
   text: string
 }
 
@@ -2562,6 +2603,31 @@ export interface ThreadMessagePage {
   messages: ThreadMessageView[]
 }
 
+export interface ThreadReplyPageParams {
+  threadId: string
+  messageId: string
+  sequence?: number
+  before?: boolean
+  limit?: number
+  runAnchorMessageIds?: string[]
+}
+
+/** One chronological page in the component defined solely by replyToThreadMessageId. */
+export interface ThreadReplyPage {
+  schemaVersion: 1
+  threadId: string
+  messageId: string
+  rootMessageId: string | null
+  throughGlobalSequence: number
+  sourceAvailable: boolean
+  replyCount: number
+  hasEarlier: boolean
+  hasLater: boolean
+  messages: ThreadMessageView[]
+  /** Requested current Run anchors that belong to this chain, including unloaded pages. */
+  runAnchorMessageIds: string[]
+}
+
 export interface ThreadMessageAroundSnapshot {
   schemaVersion: 1
   throughGlobalSequence: number
@@ -2581,7 +2647,10 @@ export interface ThreadMessageChange {
   throughGlobalSequence: number
 }
 export interface ThreadReadInvalidation {
+  referencesChanged?: boolean
+  notificationsChanged?: boolean
   tasksChanged?: boolean
+  teamsChanged?: boolean
   resync?: boolean
   messages?: ThreadMessageChange[]
 }
@@ -2717,6 +2786,7 @@ export type NotificationSemantic =
   | 'turn_completed'
   | 'turn_failed'
   | 'turn_incomplete'
+  | 'run_stopped'
   | 'round_completed'
   | 'single_chat_reply'
   | 'mission_needs_you'
@@ -2820,7 +2890,7 @@ export interface NotificationEpisodeView {
 }
 
 export interface NotificationEpisodeInbox {
-  schemaVersion: 9
+  schemaVersion: 11
   throughChangeSequence: number
   unreadCount: number
   items: NotificationEpisodeView[]
@@ -2844,6 +2914,11 @@ export interface NotificationEpisodeChange {
   headsUpInvalidation: NotificationHeadsUpInvalidation | null
   changedAt: string
   episode: NotificationEpisodeView | null
+}
+
+export interface NotificationThreadInterruptions {
+  throughChangeSequence: number
+  threads: { threadId: string; hasUnreadInterruption: boolean }[]
 }
 
 export interface NotificationHeadsUpSignal {
@@ -2871,7 +2946,7 @@ export type NotificationHeadsUpInvalidation =
   }
 
 export interface NotificationEpisodeChangeBatch {
-  schemaVersion: 9
+  schemaVersion: 11
   requestedAfterChangeSequence: number
   nextChangeSequence: number
   throughChangeSequence: number
@@ -2992,7 +3067,9 @@ export interface SupervisorApi {
   onChanged(listener: (snapshot: SupervisorSnapshot) => void): () => void
 }
 
-export type ThemePreference = 'system' | 'day' | 'night'
+export type ThemeId = 'day' | 'night' | 'horizon' | 'classic-red' | 'ember'
+export type ThemePreference = 'system' | ThemeId
+/** Light/dark rendering mode, independent of the selected palette. */
 export type ResolvedTheme = 'day' | 'night'
 
 export interface AppearancePreferences {
@@ -3083,6 +3160,7 @@ export type StartupLocationMode = 'last_location' | 'quick_chat'
 export type ExecutionConsolePlacement = 'right' | 'inspector' | 'bottom'
 
 export type SettingsSection =
+  | 'memory'
   | 'remote'
   | 'general'
   | 'skills'
@@ -3317,6 +3395,7 @@ export type RestorableLocation =
   | { kind: 'camp'; threadId: string }
   | { kind: 'members'; agentId: string | null; tab: MemberWorkspaceLocationTab }
   | { kind: 'memory' }
+  | { kind: 'teams' }
 
 export interface NewConversationDefaults {
   memberAgentIds: string[]
@@ -3324,17 +3403,37 @@ export interface NewConversationDefaults {
 }
 
 export type InterfaceLanguage = 'zh-CN' | 'en'
+export type InterfaceLanguagePreference = 'system' | InterfaceLanguage
 
-export interface GeneralPreferencesSnapshot {
-  schemaVersion: 5
-  interfaceLanguage: InterfaceLanguage
+/** Disk/browser representation. Resolved language and read status are never persisted. */
+export interface GeneralPreferencesStorage {
+  schemaVersion: 7
+  interfaceLanguagePreference: InterfaceLanguagePreference
   startupLocationMode: StartupLocationMode
   lastSettingsSection: SettingsSection
   executionConsolePlacement: ExecutionConsolePlacement
   newConversationDefaults: NewConversationDefaults | null
+  newConversationTeamId: string | null
   newConversationDefaultsRequireConfirmation: boolean
   oneClickNewConversationEnabled: boolean
   worldMapEnabled: boolean
+}
+
+export interface InterfaceLanguageSnapshot {
+  interfaceLanguagePreference: InterfaceLanguagePreference
+  interfaceLanguage: InterfaceLanguage
+  systemLanguage: InterfaceLanguage
+  languageRevision: number
+  readError: StructuredError | null
+}
+
+export interface GeneralPreferencesSnapshot extends GeneralPreferencesStorage, InterfaceLanguageSnapshot {}
+
+export interface InterfaceLanguageApi {
+  /** Local-only read and retry; never waits for the business service. */
+  getInterfaceLanguage(): Promise<InterfaceLanguageSnapshot>
+  setInterfaceLanguagePreference(preference: InterfaceLanguagePreference): Promise<GeneralPreferencesSnapshot>
+  onInterfaceLanguageChanged(listener: (snapshot: InterfaceLanguageSnapshot) => void): () => void
 }
 
 export interface DesktopStartupSnapshot {
@@ -3379,21 +3478,22 @@ export interface WindowResetResult {
 
 export interface DesktopSessionApi {
   getStartupSnapshot(): Promise<DesktopStartupSnapshot>
-  getInterfaceLanguage(): Promise<InterfaceLanguage>
+  getInterfaceLanguage(): Promise<InterfaceLanguageSnapshot>
   commitRestorableLocation(location: RestorableLocation): Promise<void>
 }
 
-export interface GeneralPreferencesApi {
+export interface GeneralPreferencesApi extends InterfaceLanguageApi {
   get(): Promise<GeneralPreferencesSnapshot>
-  setInterfaceLanguage(language: InterfaceLanguage): Promise<GeneralPreferencesSnapshot>
   setStartupLocationMode(mode: StartupLocationMode): Promise<GeneralPreferencesSnapshot>
   setLastSettingsSection(section: SettingsSection): Promise<GeneralPreferencesSnapshot>
   setExecutionConsolePlacement(placement: ExecutionConsolePlacement): Promise<GeneralPreferencesSnapshot>
   /** Saves the team atomically with enabling one-click when requested; otherwise preserves its current flag. */
+  setNewConversationTeam(teamId: string | null, enableOneClick?: boolean): Promise<GeneralPreferencesSnapshot>
   setNewConversationDefaults(defaults: NewConversationDefaults, enableOneClick?: boolean): Promise<GeneralPreferencesSnapshot>
   setOneClickNewConversationEnabled(enabled: boolean): Promise<GeneralPreferencesSnapshot>
   setWorldMapEnabled(enabled: boolean): Promise<GeneralPreferencesSnapshot>
-  invalidateNewConversationDefaults(expectedDefaults?: NewConversationDefaults | null): Promise<GeneralPreferencesSnapshot>
+  /** Both fields must come from the snapshot that was judged invalid. */
+  invalidateNewConversationDefaults(expected: { expectedTeamId: string | null; expectedDefaults: NewConversationDefaults | null }): Promise<GeneralPreferencesSnapshot>
 }
 
 export type OnboardingStep = 'welcome' | 'member' | 'runtime'
@@ -3404,6 +3504,7 @@ export interface OnboardingRuntimeSelection {
 }
 
 export interface OnboardingProvisioningOperation {
+  interfaceLanguage: InterfaceLanguage
   memberCommandId: string
   runtimeCommandId: string
   campCommandId: string
@@ -3429,11 +3530,11 @@ export type OnboardingRuntimeCopyOutcome = 'applied' | 'skipped' | 'retry'
 
 export type OnboardingSnapshot =
   | {
-      schemaVersion: 3
+      schemaVersion: 4
       status: 'uninitialized'
     }
   | {
-      schemaVersion: 3
+      schemaVersion: 4
       status: 'in_progress'
       step: OnboardingStep
       selectedMemberRole: BuiltinMemberAvatarRole | null
@@ -3441,7 +3542,7 @@ export type OnboardingSnapshot =
       provisioning: OnboardingProvisioningOperation | null
     }
   | {
-      schemaVersion: 3
+      schemaVersion: 4
       status: 'completed'
       origin: 'onboarding' | 'runtime_deferred' | 'existing_installation'
       completedAt: string
@@ -3461,7 +3562,8 @@ export interface OnboardingApi {
   deferRuntimeSetup(): Promise<OnboardingSnapshot>
   beginProvisioning(
     selection: OnboardingRuntimeSelection,
-    runtimePermissions: AdapterPermissionConfig
+    runtimePermissions: AdapterPermissionConfig,
+    interfaceLanguage: InterfaceLanguage
   ): Promise<OnboardingSnapshot>
   recordProvisionedMember(agentId: string, version: number): Promise<OnboardingSnapshot>
   recordProvisionedRuntime(version: number): Promise<OnboardingSnapshot>
@@ -3671,6 +3773,7 @@ export type SkillDeliveryGroupKey =
   | 'cursor'
   | 'kimi'
   | 'minimax'
+  | 'hermes'
   | 'grok'
   | 'zcode'
   | 'dsh'
@@ -4106,6 +4209,15 @@ export type AutomationProjectRef =
   | { kind: 'quick_chat' }
   | { kind: 'directory'; path: string }
 
+/** Core freezes the resulting title when admitting an occurrence. */
+export interface AutomationThreadNaming {
+  includeDate: boolean
+  includeTime: boolean
+  dateFormat: 'iso'
+  timeFormat: '24'
+  position: 'prefix' | 'suffix'
+}
+
 export interface AutomationRunSummary {
   runId: string
   status: 'running' | 'cancelling' | 'completed' | 'failed' | 'skipped'
@@ -4132,6 +4244,7 @@ export interface AutomationView {
   lastRun: AutomationRunSummary | null
   createdAt: string
   updatedAt: string
+  threadNaming: AutomationThreadNaming
 }
 
 export interface AutomationListPage {
@@ -4153,6 +4266,7 @@ export interface CreateAutomationCommand {
   projectRef: AutomationProjectRef
   schedule: AutomationSchedule
   notifyChannels: AutomationNotifyChannel[]
+  threadNaming?: AutomationThreadNaming
 }
 
 export interface UpdateAutomationCommand {
@@ -4165,11 +4279,16 @@ export interface UpdateAutomationCommand {
   schedule?: AutomationSchedule
   notifyChannels?: AutomationNotifyChannel[]
   enabled?: boolean
+  threadNaming?: AutomationThreadNaming
 }
 
 export type CoreMethod =
   | 'preferences.tasks.get'
   | 'preferences.tasks.set'
+  | 'teams.list'
+  | 'teams.save'
+  | 'teams.delete'
+  | 'preferences.newConversation.setTeam'
   | 'preferences.newConversation.get'
   | 'preferences.newConversation.setDefaults'
   | 'preferences.newConversation.setOneClick'
@@ -4188,6 +4307,7 @@ export type CoreMethod =
   | 'runtime.product.ensure'
   | 'runtime.product.check'
   | 'runtime.startup.get'
+  | 'runtime.environment.get'
   | 'member.runtimeEnvironment.get'
   | 'runtime.environmentLegacy.list'
   | 'runtime.environmentLegacy.get'
@@ -4261,6 +4381,8 @@ export type CoreMethod =
   | 'nativeSkills.list'
   | 'nativeSkills.read'
   | 'skills.candidates'
+  | 'threadReferences.list'
+  | 'threadReferences.resolve'
   | 'skills.content.read'
   | 'skills.deliveryGroups.list'
   | 'skills.import.inspect'
@@ -4429,6 +4551,7 @@ export type CoreMethod =
   | 'thread.messages.page'
   | 'thread.messages.anchors'
   | 'thread.messages.anchorPreview'
+  | 'thread.messages.replies'
   | 'thread.messages.around'
   | 'thread.messages.find'
   | 'thread.messages.withdraw'
@@ -4448,9 +4571,11 @@ export type CoreMethod =
   | 'userAutomation.thread.send'
   | 'action.approvals.resolve'
   | 'notifications.inbox'
+  | 'notifications.threadInterruptions'
   | 'notifications.changesSince'
   | 'notifications.acknowledge'
   | 'notifications.acknowledgeVisibleSources'
+  | 'notifications.acknowledgeThreadInterruptions'
   | 'notifications.markAllRead'
   | 'notifications.clear'
   | 'notifications.preference.get'
@@ -4508,10 +4633,14 @@ export interface RovaiApi {
   memberAvatars: MemberAvatarsApi
   composerAttachments: {
     prepare(threadId: string, expectedRevision: number, file: File): Promise<LocalAttachmentSourceView>
+    /** Public Composer; generated in the canonical Host Thread output directory. */
+    preparePastedText?(threadId: string, file: File): Promise<LocalAttachmentSourceView>
+    /** After saving the draft without this ref. Main/Host decides whether the file is deletable. */
+    removePastedText?(threadId: string, attachmentRefId: string): Promise<'deleted' | 'retained'>
     preview(locator: LocalAttachmentOwnerLocator): Promise<AttachmentPreviewResult>
-    /** Desktop-local authority restore; absent on remote/browser adapters. */
+    /** Restore through the owning Main registry or verified Web upload receipts. */
     restore?(threadId: string, attachments: LocalAttachmentSourceView[]): Promise<LocalAttachmentSourceView[]>
-    /** Releases Desktop-local authority after remove, send, or Thread deletion. */
+    /** Releases draft recovery registration; never physically deletes files. */
     discard?(threadId: string, attachmentRefIds?: string[]): Promise<void>
     location?(locator: LocalAttachmentOwnerLocator): Promise<string | null>
   }
@@ -4565,7 +4694,7 @@ export type MissionStatus = 'needs_you' | 'not_started' | 'in_progress' | 'compl
 export interface MissionInfo { missionId: string; title: string; description: string; status: MissionStatus; sourceMessageId: string | null }
 export interface MissionWorkspaceCleanupView { state: 'cleaning' | 'failed' | 'cleaned'; worktreeRemoved: boolean; branchRemoved: boolean; diagnostic: string | null }
 export interface MissionRecord extends MissionInfo { descriptionContent?: MissionDescriptionContent; number: number; hasUnread: boolean; threadId: string; projectPath: string; projectBindingKind: ProjectBindingKind; detailsVersion: number; tags: string[]; attachments: LocalAttachmentSourceView[]; createdAt: string; updatedAt: string; memberAgentIds: string[]; defaultLeadAgentId: string | null; runningAgentIds: string[]; startAvailable: boolean; workspaceEverCreated: boolean; workspaceResourcesPresent: boolean; cleanupAvailable: boolean; workspaceCleanup?: MissionWorkspaceCleanupView }
-export interface MissionCreate { descriptionContent?: MissionDescriptionContent; title: string; description: string; projectPath: string; projectBindingKind: ProjectBindingKind; memberAgentIds: string[]; defaultLeadAgentId: string; tags: string[] }
+export interface MissionCreate { team?: TeamSelection; descriptionContent?: MissionDescriptionContent; title: string; description: string; projectPath: string; projectBindingKind: ProjectBindingKind; memberAgentIds: string[]; defaultLeadAgentId: string; tags: string[] }
 export interface MissionUpdate { descriptionContent?: MissionDescriptionContent; missionId: string; title?: string; description?: string; tags?: string[]; expectedDetailsVersion?: number }
 export interface MissionAttachmentDraft { id: string; file: File; kindHint: 'file' | 'directory' }
 export interface MissionAttachmentsApi {

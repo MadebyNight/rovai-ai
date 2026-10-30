@@ -2,7 +2,7 @@
 document_type: architecture
 authority: mission-architecture
 status: accepted
-last_updated: 2026-09-26
+last_updated: 2026-10-29
 ---
 
 # Missions
@@ -35,6 +35,10 @@ refusal leaves a ready workspace ready. Startup/periodic recovery scans unfinish
 becomes `cleanup_failed` unless an intact-resource audit proves that no Worktree removal occurred for a still-live
 Mission, in which case the attempt ends back at `ready`; failed rows are never automatically retried. The same audit
 lets an explicit retry or later execution recover legacy non-destructive failures without trusting checkpoint booleans.
+Cleanup availability and command admission use the same occupancy predicate. Nonterminal Runs and waiting
+Deliveries still occupy the workspace; terminal cleanup blocks only for exact Run/epoch keys owned by this
+Core, including other Threads sharing the execution root. Historical missing ACKs alone do not block cleanup
+and are not repaired. The existing in-memory ownership snapshot supplies this request context.
 The cleanup request performs only permission, durable-state, occupancy and idempotency admission; the worker owns
 the only filesystem/Git safety observation. Its ordinary successful attached-worktree path combines identity,
 `HEAD`, managed OID and actual checkout into one Git observation, then uses non-force Worktree removal, one branch
@@ -115,7 +119,7 @@ board return, retaining the same Camp draft and preview ownership. Renderer cons
 Core's cleanup capability and does not infer it from Mission status. Deletion defaults to leaving worktree and
 branch in place. Optional cleanup records its intent in the same transaction that deletes the Mission, removes
 the card immediately, and exposes only failed orphan work through the existing cleanup route; retained resources
-never enter that route. Protocol and failure behavior live in [Mission v12](../contracts/mission-v12.md); UI in
+never enter that route. Protocol and failure behavior live in [Mission v13](../contracts/mission-v13.md); UI in
 [Mission board](../ui/components/mission-board.md). Reasons for the durable workspace and simplified model
 interface are in [V1.59-D11](../versions/v1.59/decisions.md#v1-59-d11); the explicit minimal cleanup choice is in
 [V1.59-D14](../versions/v1.59/decisions.md#v1-59-d14). Global discovery and current-only mutation are explained
@@ -137,4 +141,13 @@ The shared Composer has a Mission mode for individual references and Enter-to-ne
 broadcast semantics in this surface. Renderer derives pending invitations from the current document and current
 membership; it does not maintain a second invite list. Core validates identities again at save. Model-facing
 Mission reads retain the existing readable `description` field, while UI reads receive the ordered structure.
-Storage/upgrade and legacy text replacement semantics are owned by [Mission v12](../contracts/mission-v12.md).
+Storage/upgrade and legacy text replacement semantics are owned by [Mission v13](../contracts/mission-v13.md).
+
+## Saved Team creation
+
+User creation may choose a saved Team or independent Custom roster. Mission delegates the optional Team
+selection and description member IDs to the existing Thread creation transaction. That owner resolves the
+authoritative roster and Lead, adds distinct mentioned members, and freezes nonempty guidance together with
+the Thread. Mission insertion remains in the same transaction. There is no live Team binding or Mission-specific
+Bootstrap path; editing/deleting Teams cannot change existing Mission Threads. General defaults only initialize
+the dialog; Mission creation never writes one-click preferences. See [Mission v13](../contracts/mission-v13.md).

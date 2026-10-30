@@ -1,6 +1,7 @@
+import { DEFAULT_GENERAL_PREFERENCES } from '../../../apps/desktop/src/shared/general-preferences-model'
 import { shortcutDefaults } from '../../../apps/desktop/src/shared/shortcuts'
 import { EMPTY_SNAPSHOT, sanitizeSnapshot, registerNavigationProjects } from '../../../apps/desktop/src/shared/navigation-preferences-model'
-import type { NavigationSnapshot, NavigationPreferencesSnapshot } from '@contracts'
+import type { GeneralPreferencesSnapshot, NavigationSnapshot, NavigationPreferencesSnapshot, MissionRecord } from '@contracts'
 import type { ThreadCreationPreflight, CoreEvent, DesktopStartupSnapshot, HealthStatus, OnboardingSnapshot, RestorableLocation, RovaiApi, SupervisorSnapshot } from '@contracts'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
@@ -20,6 +21,8 @@ const calls: string[] = []
 const listeners = new Set<(snapshot: SupervisorSnapshot) => void>()
 const coreListeners = new Set<(event: CoreEvent) => void>()
 const navigationPreferenceListeners = new Set<(snapshot: NavigationPreferencesSnapshot) => void>()
+const languageListeners = new Set<(snapshot: GeneralPreferencesSnapshot) => void>()
+let localLanguage: GeneralPreferencesSnapshot = { ...DEFAULT_GENERAL_PREFERENCES, interfaceLanguagePreference: 'zh-CN', interfaceLanguage: 'zh-CN' }
 const responses = new Map<string, unknown>()
 const requestHandlers = new Map<string, (params: any) => unknown>()
 let now = 0
@@ -111,13 +114,23 @@ function api(path = ''): unknown {
         calls.push(path)
         return Promise.resolve(next)
       }
+      if (path === 'generalPreferences.onInterfaceLanguageChanged') {
+        languageListeners.add(args[0])
+        return () => languageListeners.delete(args[0])
+      }
+      if (path === 'generalPreferences.setInterfaceLanguagePreference') {
+        localLanguage = { ...localLanguage, interfaceLanguagePreference: args[0],
+          interfaceLanguage: args[0] === 'system' ? localLanguage.systemLanguage : args[0], languageRevision: localLanguage.languageRevision + 1 }
+        languageListeners.forEach(listener => listener(localLanguage))
+        return Promise.resolve(localLanguage)
+      }
       if (path.split('.').at(-1)?.startsWith('on')) return () => undefined
       if (path === 'supervisor.getSnapshot') return initialSupervisor.promise
       if (path === 'desktopSession.getStartupSnapshot') { calls.push(path); return localSession.promise }
-      if (path === 'desktopSession.getInterfaceLanguage') { calls.push(path); return Promise.resolve('zh-CN') }
+      if (path === 'generalPreferences.getInterfaceLanguage') { calls.push(path); return Promise.resolve(localLanguage) }
       if (path === 'currentUserProfile.get') return Promise.resolve({ displayName: '', avatarDataUrl: null })
       if (path === 'appearance.get') return Promise.resolve({ ...DEFAULT_APPEARANCE, resolvedTheme: appearanceTheme })
-      if (path === 'generalPreferences.get') return Promise.resolve({ schemaVersion: 4,
+      if (path === 'generalPreferences.get') return Promise.resolve({ ...localLanguage,
         startupLocationMode: 'last_location', lastSettingsSection: 'general', executionConsolePlacement: 'bottom',
         newConversationDefaults: null, newConversationDefaultsRequireConfirmation: false,
         oneClickNewConversationEnabled: false, worldMapEnabled: true, ...(responses.get(path) ?? {}) })
@@ -156,6 +169,8 @@ async function reset(target: RestorableLocation | null = { kind: 'camp', threadI
   listeners.clear()
   coreListeners.clear()
   navigationPreferenceListeners.clear()
+  languageListeners.clear()
+  localLanguage = { ...DEFAULT_GENERAL_PREFERENCES, interfaceLanguagePreference: 'zh-CN', interfaceLanguage: 'zh-CN' }
   responses.clear()
   requestHandlers.clear()
   calls.length = 0
@@ -170,8 +185,8 @@ async function reset(target: RestorableLocation | null = { kind: 'camp', threadI
   if (resolveSupervisor) initialSupervisor.resolve(supervisor)
   root = createRoot(document.getElementById('root')!)
   flushSync(() => root!.render(<App />))
-  check(document.querySelector('.startup-loading-canvas'),
-    'The first committed frame must show loading before any timer or IPC response')
+  check(document.querySelector('.language-bootstrap') && !document.querySelector('.startup-loading-canvas'),
+    'The first committed frame must wait for the local language before rendering localized startup content')
   await flush()
 }
 
@@ -227,7 +242,7 @@ function recoveryFrame(kind: string) {
 function noAuthority() {
   // Session state, interface language and preview retention are Main-owned
   // local reads; none enter Core authority before admission.
-  check(calls.every(call => ['desktopSession.getStartupSnapshot', 'desktopSession.getInterfaceLanguage', 'filePreview.updateRetention'].includes(call)), `Pre-ready authority calls: ${calls.join(', ')}`)
+  check(calls.every(call => ['desktopSession.getStartupSnapshot', 'generalPreferences.getInterfaceLanguage', 'filePreview.updateRetention'].includes(call)), `Pre-ready authority calls: ${calls.join(', ')}`)
 }
 
 Object.assign(window, { startupTest: {
@@ -318,7 +333,7 @@ Object.assign(window, { startupTest: {
     await reset(null, false)
     pageFrame('location', true)
     noAuthority()
-    cases.push('null initial snapshots show the brand canvas from the first frame')
+    cases.push('the local language resolves before null initial snapshots show the brand canvas')
 
     for (const target of [{ kind: 'camp', threadId }, { kind: 'members', agentId: null, tab: 'identity' },
       { kind: 'memory' }, { kind: 'quick_chat' }] as RestorableLocation[]) {
@@ -396,6 +411,19 @@ Object.assign(window, { startupTest: {
     check(!document.querySelector('.startup-loading-canvas, .bootstrap-shell'), 'Ready onboarding replaces the initial loading canvas')
     check(!calls.includes('threads.enter'), 'A fresh first-run flow must not enter an existing Camp')
     cases.push('first-run authority gate stays intact and ready onboarding replaces loading immediately')
+    const welcome = document.querySelector('.onboarding-welcome')
+    const languages = document.querySelectorAll<HTMLInputElement>('input[name="onboarding-language"]')
+    check(languages.length === 3, 'Onboarding exposes system, Simplified Chinese and English in the existing position')
+    document.querySelector<HTMLInputElement>('input[name="onboarding-language"][value="en"]')!.click()
+    await flush()
+    check(document.documentElement.lang === 'en' && document.querySelector('#onboarding-welcome-title')?.textContent === 'Welcome to Rovai',
+      'Manual English updates app-owned content and the page language')
+    document.querySelector<HTMLInputElement>('input[name="onboarding-language"][value="system"]')!.click()
+    await flush()
+    check(localLanguage.interfaceLanguagePreference === 'system' && document.querySelector<HTMLInputElement>('input[name="onboarding-language"][value="system"]')!.checked,
+      'Switching to system retains the preference even when the effective language stays English')
+    check(document.querySelector('.onboarding-welcome') === welcome, 'Changing language preserves the current component tree')
+    cases.push('Onboarding language choices update in place and distinguish system from its resolved language')
 
     await reset()
     await advance(350)
@@ -546,6 +574,17 @@ Object.assign(window, { startupTest: {
     }
     const back = async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: '[', metaKey: true, bubbles: true, cancelable: true })); await flush(); await flush() }
     const forward = async () => { window.dispatchEvent(new KeyboardEvent('keydown', { key: ']', metaKey: true, bubbles: true, cancelable: true })); await flush(); await flush() }
+    const shortcut = async (key: string) => { window.dispatchEvent(new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true, cancelable: true })); await flush(); await flush() }
+    const openMemory = async () => {
+      await clickNavigation('设置', '.unified-sidebar button')
+      await clickNavigation('记忆', '.settings-sidebar-menu button')
+    }
+    const jumpToThread = async (name: string) => {
+      await shortcut('k')
+      const button = [...document.querySelectorAll<HTMLButtonElement>('.command-palette-item')].find(item => item.querySelector('.truncate')?.textContent === name)
+      check(button && !button.disabled, 'Missing conversation jump result: ' + name)
+      button.click(); await flush(); await flush()
+    }
     check(document.querySelector<HTMLButtonElement>('[aria-label="后退"]')?.disabled, 'Restored home begins a new one-entry history')
     await clickNavigation('设置', '.unified-sidebar button')
     check(document.querySelector('.settings-panel-general'), 'Settings open directly to their default section')
@@ -557,7 +596,7 @@ Object.assign(window, { startupTest: {
     await forward(); check(document.querySelector('.settings-panel-general'), 'Forward restores settings')
     await clickNavigation('返回 App', '.settings-sidebar-back')
     check(document.querySelector('.compose-content'), 'Return App restores the page preceding settings')
-    await clickNavigation('记忆', '.unified-sidebar button')
+    await openMemory()
     check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Memory uses the real initial list selection')
     const memoryRows = [...document.querySelectorAll<HTMLButtonElement>('.memory-catalog-item')]
     check(memoryRows.length === 2, 'The fixture must have two distinct memory targets')
@@ -565,10 +604,14 @@ Object.assign(window, { startupTest: {
     check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 N'), 'Selecting a resource navigates to it')
     await back()
     check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Back restores the previous memory detail')
-    await back(); check(document.querySelector('.compose-content'), 'Automatic first memory selection replaces rather than pushes')
+    await back(); check(document.querySelector('.settings-panel-general'), 'Automatic first memory selection replaces rather than pushes')
+    await back(); check(document.querySelector('.compose-content'), 'Memory entry retains the real Settings step')
+    await forward(); check(document.querySelector('.settings-panel-general'), 'Forward restores the Settings entry')
     await forward(); check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Forward restores memory ID after remount')
-    await clickNavigation('设置', '.unified-sidebar button')
+    await clickNavigation('通用', '.settings-sidebar-menu button')
     await back()
+    await back(); check(document.querySelector('.settings-panel-general'), 'Back traverses the Settings entry before the main workspace')
+    await back(); check(document.querySelector('.compose-content'), 'Main-page layout controls remain outside Settings and Memory')
     await clickNavigation('收起导航侧栏')
     check(document.querySelectorAll('.navigation-history-button').length === 0, 'Folded main pages show only the expand button')
     await forward()
@@ -827,6 +870,191 @@ Object.assign(window, { startupTest: {
       await flush()
     }
 
+    // Hold the authority response so cached navigation is a behavioral assertion,
+    // independent of machine speed or the post-response meaningful-paint log.
+    {
+      let tasksEnabled = false
+      let taskSequence = 0
+      const taskSnapshot = () => ({ enabled: tasksEnabled, headsUpAfterSequence: 0,
+        observedThroughChangeSequence: taskSequence })
+      const cachedProjection = (id: string) => {
+        const projection = campProjection(id)
+        const body = '缓存正文 ' + id
+        return { ...projection, tasksEnabled,
+          ...(tasksEnabled ? { tasks: [] } : { tasks: undefined }),
+          messages: [{ ...runFixture.messages[0], id: 'cached-' + id, sequence: 1,
+            body, content: [{ kind: 'text', text: body }] }],
+          coverage: { ...projection.coverage, tasks: tasksEnabled ? coverage : undefined,
+            messages: { loadedCount: 1, totalCount: 1, omittedCount: 0, complete: true,
+              hasEarlier: false, oldestLoadedSequence: 1, newestLoadedSequence: 1 } } }
+      }
+      const displayed = (id: string) => document.querySelector('.camp-topbar h1')?.textContent === '导航会话 ' + id
+        && document.querySelector('[data-message-id="cached-' + id + '"]')?.textContent?.includes('缓存正文 ' + id)
+      const taskEntry = () => document.querySelector<HTMLButtonElement>('.camp-detail-entry[data-detail="tasks"]')
+      const publishTasks = async (enabled: boolean) => {
+        tasksEnabled = enabled
+        ++taskSequence
+        responses.set('preferences.tasks.get', taskSnapshot())
+        coreListeners.forEach(listener => listener({ method: 'preferences.tasks_changed', params: {} } as CoreEvent))
+        await flush(); await flush()
+      }
+      await captureNavigation('day', false, () => {
+        responses.set('preferences.tasks.get', taskSnapshot())
+        responses.set('generalPreferences.get', { worldMapEnabled: false })
+        campRequest = cachedProjection
+      })
+      check(displayed('B'), 'The cache scenario starts with real message content in B')
+      for (const enabled of [false, true]) {
+        if (enabled) {
+          await publishTasks(true)
+          check(taskEntry(), 'Enabling Tasks refreshes the current projection')
+        }
+        for (const id of ['A', 'B', 'A', 'B']) {
+          const authority = deferred<ReturnType<typeof cachedProjection>>()
+          campRequest = target => target === id ? authority.promise : cachedProjection(target)
+          const before = calls.length
+          await clickNavigation('导航会话 ' + id, '.camp-nav-open')
+          check(displayed(id), 'A revisit must display cached messages before authority returns; tasks=' + enabled)
+          check(calls.slice(before).filter(method => method === 'threads.enter').length === 1,
+            'A cached revisit still verifies authority exactly once')
+          check(!calls.slice(before).includes('threads.open'), 'Ordinary switching must not add a capability refresh')
+          authority.resolve(cachedProjection(id))
+          await flush(); await flush()
+          campRequest = cachedProjection
+          check(Boolean(taskEntry()) === enabled, 'The verified projection uses the current Task capability')
+        }
+      }
+      const unchangedStart = calls.length
+      await publishTasks(true)
+      check(!calls.slice(unchangedStart).includes('threads.open'), 'An unchanged capability observation must not refresh the Thread')
+      cases.push('Cached Thread revisits show messages before authority returns without redundant reads, with Tasks off and on')
+
+      taskEntry()!.click(); await flush(); await flush()
+      check(document.querySelector('.task-panel-scroll'), 'The Task panel is open before disabling the capability')
+      const lateEnabled = deferred<ReturnType<typeof cachedProjection>>()
+      const oldEnabledProjection = cachedProjection('B')
+      let firstRead = true
+      campRequest = id => {
+        if (id === 'B' && firstRead) { firstRead = false; return lateEnabled.promise }
+        return cachedProjection(id)
+      }
+      coreListeners.forEach(listener => listener({ method: 'agent_run.terminal', params: { threadId: 'B' } } as CoreEvent))
+      await flush(); await flush()
+      check(!firstRead, 'A projection read is in flight before disabling Tasks')
+      await publishTasks(false)
+      check(displayed('B') && !taskEntry() && !document.querySelector('.task-panel-scroll'),
+        'Disabling Tasks closes its panel and keeps the conversation content')
+      lateEnabled.resolve(oldEnabledProjection)
+      await flush(); await flush()
+      check(!taskEntry(), 'A late enabled projection cannot restore disabled Task UI')
+      campRequest = cachedProjection
+      const afterDisable = deferred<ReturnType<typeof cachedProjection>>()
+      campRequest = id => id === 'A' ? afterDisable.promise : cachedProjection(id)
+      await clickNavigation('导航会话 A', '.camp-nav-open')
+      check(displayed('B'), 'An actual disable invalidates A cached under the enabled capability')
+      afterDisable.resolve(cachedProjection('A'))
+      await flush(); await flush()
+      check(displayed('A') && !taskEntry(), 'A fresh disabled projection becomes the new cache entry')
+      campRequest = cachedProjection
+      cases.push('Actual Task disable clears incompatible caches and panels while rejecting late enabled UI')
+
+      // Enabling can race an enter for a different Thread. The old disabled
+      // response must not leave that destination without its restored Task UI.
+      const lateDisabled = deferred<ReturnType<typeof cachedProjection>>()
+      const oldDisabledProjection = cachedProjection('C')
+      let firstEnter = true
+      campRequest = id => {
+        if (id === 'C' && firstEnter) { firstEnter = false; return lateDisabled.promise }
+        return cachedProjection(id)
+      }
+      await clickNavigation('导航会话 C', '.camp-nav-open')
+      check(displayed('A') && !firstEnter, 'A cold destination waits for its in-flight enter')
+      await publishTasks(true)
+      lateDisabled.resolve(oldDisabledProjection)
+      await flush(); await flush(); await flush()
+      check(displayed('C') && taskEntry(), 'Enabling during enter must converge the destination to the enabled projection')
+      const cycled = deferred<ReturnType<typeof cachedProjection>>()
+      campRequest = id => id === 'D' ? cycled.promise : cachedProjection(id)
+      await clickNavigation('导航会话 D', '.camp-nav-open')
+      await publishTasks(false)
+      const intermediateProjection = cachedProjection('D')
+      await publishTasks(true)
+      campRequest = cachedProjection
+      cycled.resolve(intermediateProjection)
+      await flush(); await flush(); await flush()
+      check(displayed('D') && taskEntry(), 'An off/on cycle must also reject a projection from the intermediate disabled state')
+
+      const alreadyCurrent = deferred<ReturnType<typeof cachedProjection>>()
+      campRequest = id => id === 'B' ? alreadyCurrent.promise : cachedProjection(id)
+      await clickNavigation('导航会话 B', '.camp-nav-open')
+      await publishTasks(false)
+      const currentStart = calls.length
+      alreadyCurrent.resolve(cachedProjection('B'))
+      await flush(); await flush()
+      check(displayed('B') && !taskEntry() && !calls.slice(currentStart).includes('threads.open'),
+        'A response already matching the new capability commits without another read')
+      cases.push('Task capability changes during enter cannot commit the previous capability projection')
+    }
+
+    // Use the real startup restore and workspace gates: the Thread is ready
+    // before missions.list, so selection/snapshot readiness alone cannot ACK.
+    const originalHasFocus = document.hasFocus.bind(document)
+    Object.defineProperty(document, 'hasFocus', { configurable: true, value: () => true })
+    for (const outcome of ['loaded', 'failed'] as const) {
+      await reset({ kind: 'camp', threadId: 'A' })
+      for (const [method, response] of navigationResponses) responses.set(method, response)
+      for (const [method, handler] of navigationHandlers) requestHandlers.set(method, handler)
+      const mission: MissionRecord = { missionId: 'mission-attention', threadId: 'A', number: 1,
+        title: '恢复的使命', description: '', status: 'not_started', sourceMessageId: null,
+        projectPath: '/fixture/quick-chat', projectBindingKind: 'quick_chat', detailsVersion: 1,
+        tags: [], attachments: [], createdAt: stamp, updatedAt: stamp, memberAgentIds: [],
+        defaultLeadAgentId: null, runningAgentIds: [], startAvailable: false, hasUnread: false,
+        workspaceEverCreated: false, workspaceResourcesPresent: false, cleanupAvailable: false }
+      const projection = campProjection('A')
+      campRequest = id => id === 'A'
+        ? { ...projection, thread: { ...projection.thread, missionId: mission.missionId } }
+        : campProjection(id)
+      const missions = deferred<MissionRecord[]>()
+      requestHandlers.set('missions.list', () => missions.promise)
+      const task = { enabled: false, headsUpAfterSequence: 0, observedThroughChangeSequence: 10 }
+      responses.set('preferences.tasks.get', task)
+      responses.set('notifications.inbox', { schemaVersion: 11, throughChangeSequence: 10, unreadCount: 1, items: [], nextCursor: null })
+      responses.set('notifications.changesSince', { schemaVersion: 11, nextChangeSequence: 10,
+        resetRequired: false, hasMore: false, taskCapability: task, changes: [] })
+      let unread = true
+      const acknowledgements: unknown[] = []
+      requestHandlers.set('notifications.threadInterruptions', ({ threadIds }) => ({ throughChangeSequence: 10,
+        threads: threadIds.map(threadId => ({ threadId, hasUnreadInterruption: threadId === 'A' && unread })) }))
+      requestHandlers.set('notifications.acknowledgeThreadInterruptions', request => {
+        acknowledgements.push(request)
+        unread = false
+        return { commandId: request.commandId, status: 'applied', code: 'ok', payload: { resultingChangeSequence: 10 } }
+      })
+      onboarding.resolve({ schemaVersion: 2, status: 'completed', origin: 'existing_installation', completedAt: stamp,
+        selectedMemberRole: null, memberAgentId: null, quickChatThreadId: null })
+      publish({ runtimeMode: 'full_core', fullCoreState: 'ready', startupPhase: null, authorityState: { kind: 'current', origin: 'existing' },
+        capabilities: { ...supervisor.capabilities, authoritativeWorkspace: true, coreRequests: true } })
+      await flush(); await advance(0); await flush(); await advance(STARTUP_LOADING_EXIT_MS)
+      const placeholder = () => document.querySelector<HTMLElement>('.camp-content > .mission-section-empty')
+      check(placeholder()?.textContent?.includes('正在读取使命'), 'Mission restore must wait for the separate mission list')
+      check(!document.querySelector('.workspace-shell') && unread && acknowledgements.length === 0,
+        'Loading mission content cannot acknowledge its interruption')
+      if (outcome === 'failed') {
+        missions.reject(new Error('Mission list unavailable'))
+        await flush(); await flush()
+        check(placeholder()?.getAttribute('role') === 'alert' && !document.querySelector('.workspace-shell'),
+          'Mission failure must keep the workspace unmounted')
+        check(unread && acknowledgements.length === 0, 'Mission load failure must preserve the interruption')
+        requestHandlers.set('missions.list', () => [mission])
+        await clickNavigation('重试', '.camp-content > .mission-section-empty button')
+      } else missions.resolve([mission])
+      await flush(); await flush()
+      check(document.querySelector('.workspace-shell') && !unread && acknowledgements.length === 1,
+        'Only successfully displayed mission content acknowledges the observed interruption')
+    }
+    Object.defineProperty(document, 'hasFocus', { configurable: true, value: originalHasFocus })
+    cases.push('mission restore waits for actual content before interruption ACK, including load failure and retry')
+
     // Exercise the shared App with Web-style invalidation, including a refresh
     // already in flight when deletion is accepted and removal in another client.
     const invalidationListeners = new Set<() => void>()
@@ -888,14 +1116,16 @@ Object.assign(window, { startupTest: {
     const memoryLoading = deferred<unknown>(), campLoading = deferred<unknown>()
     requestHandlers.set('memory.list', () => memoryLoading.promise)
     campRequest = id => id === 'C' ? campLoading.promise : campProjection(id)
-    await clickNavigation('记忆', '.unified-primary-nav button')
-    await clickNavigation('导航会话 C', '.camp-nav-open')
+    await openMemory()
+    await jumpToThread('导航会话 C')
     memoryLoading.resolve(responses.get('memory.list')); await flush(); await flush()
     check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Memory may normalize its displayed entry while C loads')
     campLoading.resolve(campProjection('C')); await flush(); await flush()
     check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 C', 'Old memory normalization must not cancel the newer C navigation')
     await back()
     check(document.querySelector('.memory-catalog-item.selected')?.textContent?.includes('导航记忆 M'), 'Memory correction survives the pending Camp commit')
+    await back()
+    check(document.querySelector('.settings-panel-general'), 'Memory history retains the real Settings entry')
     await back()
     check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Memory normalization must not create an extra history entry')
     cases.push('Pending pushes never enter history and memory normalization cannot supersede newer navigation')
@@ -937,20 +1167,22 @@ Object.assign(window, { startupTest: {
     requestHandlers.set('threads.create', () => lateCreation.promise)
     await clickNavigation('新对话', '.unified-primary-nav button')
     check(calls.includes('threads.create'), 'One-click creation must reach Core before navigation moves')
-    await clickNavigation('记忆', '.unified-primary-nav button')
+    await openMemory()
     lateCreation.resolve({ status: 'applied', payload: { threadId: 'NEW' } }); await flush(); await flush()
     check(document.querySelector('.memory-catalog-item.selected'), 'Late Camp creation must leave the newer memory page visible')
     check(!document.querySelector('.camp-topbar'), 'Late creation must not activate its new Camp')
+    await back()
+    check(document.querySelector('.settings-panel-general'), 'Leaving the newer Memory page first restores Settings')
     await back()
     check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 B', 'Late creation must not add a navigation step')
     const failedCreation = deferred<unknown>()
     requestHandlers.set('threads.create', () => failedCreation.promise)
     await clickNavigation('新对话', '.unified-primary-nav button')
-    await clickNavigation('记忆', '.unified-primary-nav button')
+    await openMemory()
     failedCreation.reject(new Error('Fixture creation rejected')); await flush(); await flush()
     check(!document.querySelector('.new-camp-dialog'), 'Obsolete creation failure must not reopen its dialog over the newer page')
     requestHandlers.set('threads.create', () => ({ status: 'applied', payload: { threadId: 'NEW' } }))
-    await clickNavigation('新对话', '.unified-primary-nav button')
+    await shortcut('n')
     check(document.querySelector('.camp-topbar h1')?.textContent === '导航会话 NEW', 'Current creation intent still opens its new Camp')
     await back()
     check(document.querySelector('.memory-catalog-item.selected'), 'Successful current creation adds exactly one history entry')

@@ -30,7 +30,7 @@ use windows_sys::Win32::{
     },
     System::{
         JobObjects::{
-            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
             JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
             QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
@@ -41,20 +41,19 @@ use windows_sys::Win32::{
             DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
             GetProcessTimes, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
             OpenProcess, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_JOB_LIST,
-            PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, STARTF_USESTDHANDLES,
-            STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
+            PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
+            WaitForSingleObject,
         },
     },
 };
 
 #[cfg(test)]
-use windows_sys::Win32::{
-    Foundation::ERROR_INVALID_PARAMETER, System::Threading::PROCESS_SYNCHRONIZE,
-};
+use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
 
 use super::{
     ManagedChildStderr, ManagedChildStdin, ManagedChildStdout, ManagedProcessLaunchSpec,
-    ManagedStdinPolicy, ManagedWindowsArgvDialect, WindowsRuntimeEntrypoint,
+    ManagedProcessPurpose, ManagedStdinPolicy, ManagedWindowsArgvDialect, WindowsRuntimeEntrypoint,
 };
 use crate::platform::windows_security::{PrivateObjectKind, PrivateSecurityDescriptor};
 use crate::windows_runtime_entrypoint::{
@@ -84,7 +83,7 @@ pub(super) struct WindowsApplicationIdentity {
 
 pub(super) struct WindowsManagedProcess {
     process: OwnedHandle,
-    job: OwnedHandle,
+    job: Option<OwnedHandle>,
     job_name: String,
     pid: u32,
     stdin: Option<ManagedChildStdin>,
@@ -172,8 +171,18 @@ impl WindowsManagedProcess {
                 Some(lock)
             }
         };
-        let job_name = format!("{RUNTIME_JOB_NAME_PREFIX}{}", uuid::Uuid::new_v4());
-        let job = create_kill_on_close_job(&job_name)?;
+        // A shared native executor is not owned by its ACP connection. Keep the
+        // same executable identity and stdio handle policy, without placing its
+        // descendants in a Rovai kill-on-close Job.
+        let owns_descendants = spec.purpose() != ManagedProcessPurpose::RuntimeConnection;
+        let job_name = if owns_descendants {
+            format!("{RUNTIME_JOB_NAME_PREFIX}{}", uuid::Uuid::new_v4())
+        } else {
+            String::new()
+        };
+        let job = owns_descendants
+            .then(|| create_kill_on_close_job(&job_name))
+            .transpose()?;
         let (child_stdin, parent_stdin) = child_read_pipe()?;
         let parent_stdin = match spec.stdin_policy() {
             ManagedStdinPolicy::Null => None,
@@ -182,19 +191,21 @@ impl WindowsManagedProcess {
         let (child_stdout, parent_stdout) = child_write_pipe()?;
         let (child_stderr, parent_stderr) = child_write_pipe()?;
 
-        let job_handles = [raw_handle(&job)];
         let inherited_handles = [
             raw_handle(&child_stdin),
             raw_handle(&child_stdout),
             raw_handle(&child_stderr),
         ];
-        let mut attributes = ProcThreadAttributeList::new(2)?;
-        attributes.update(
-            PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
-            job_handles.as_ptr().cast(),
-            size_of::<HANDLE>(),
-            "managed_process.atomic_assignment_failed",
-        )?;
+        let job_handles = [job.as_ref().map(raw_handle).unwrap_or(null_mut())];
+        let mut attributes = ProcThreadAttributeList::new(if job.is_some() { 2 } else { 1 })?;
+        if job.is_some() {
+            attributes.update(
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                job_handles.as_ptr().cast(),
+                size_of::<HANDLE>(),
+                "managed_process.atomic_assignment_failed",
+            )?;
+        }
         attributes.update(
             PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
             inherited_handles.as_ptr().cast(),
@@ -214,7 +225,8 @@ impl WindowsManagedProcess {
         let created = unsafe {
             // SAFETY: every pointer targets storage that remains alive and stable
             // through CreateProcessW. HANDLE_LIST contains exactly the three
-            // inheritable stdio handles; JOB_LIST contains the non-inheritable Job.
+            // inheritable stdio handles; an owned tree additionally receives its
+            // non-inheritable Job through JOB_LIST.
             CreateProcessW(
                 application.as_ptr(),
                 command_line.as_mut_ptr(),
@@ -233,8 +245,10 @@ impl WindowsManagedProcess {
         }
         drop(command_shim_lock);
 
-        let process = owned_handle(process_information.hProcess, "managed_process.spawn_failed")?;
-        let thread = owned_handle(process_information.hThread, "managed_process.spawn_failed")?;
+        // Successful CreateProcessW returns two valid owned handles. Transfer
+        // them infallibly: no error may discard a running, atomically assigned Job.
+        let process = unsafe { OwnedHandle::from_raw_handle(process_information.hProcess) };
+        let thread = unsafe { OwnedHandle::from_raw_handle(process_information.hThread) };
         drop(thread);
         drop(child_stdin);
         drop(child_stdout);
@@ -260,6 +274,37 @@ impl WindowsManagedProcess {
 
     pub(super) fn job_name(&self) -> &str {
         &self.job_name
+    }
+
+    pub(super) fn owns_process_id(&self, pid: u32) -> bool {
+        if pid == 0 {
+            return false;
+        }
+        let Some(job) = self.job.as_ref() else {
+            return pid == self.pid && !process_has_exited(&self.process).unwrap_or(true);
+        };
+        let raw = unsafe {
+            // SAFETY: only query/synchronize access is requested, without
+            // inheritance; the resulting handle is immediately owned.
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                pid,
+            )
+        };
+        let Ok(process) = owned_handle(raw, "managed_process.process_query_failed") else {
+            return false;
+        };
+        if process_has_exited(&process).unwrap_or(true) {
+            return false;
+        }
+        let mut belongs_to_job = 0;
+        let queried = unsafe {
+            // SAFETY: both handles are owned and the output remains valid.
+            // Use this launch's Job, never the process's ambient parent Job.
+            IsProcessInJob(raw_handle(&process), raw_handle(job), &mut belongs_to_job)
+        };
+        queried != 0 && belongs_to_job != 0
     }
 
     pub(super) fn take_stdin(&mut self) -> Option<ManagedChildStdin> {
@@ -307,15 +352,38 @@ impl WindowsManagedProcess {
     }
 
     pub(super) fn tree_is_empty(&self) -> io::Result<bool> {
-        // The current Job membership count is the Windows cleanup boundary.
-        // Completion notifications and lifetime totals are not reliable gates.
-        Ok(job_accounting(&self.job)?.ActiveProcesses == 0)
+        // Only an owned tree uses the current Job membership count. A connection
+        // owns its captured root handle, never the native shared server.
+        match &self.job {
+            Some(job) => Ok(job_accounting(job)?.ActiveProcesses == 0),
+            None => process_has_exited(&self.process),
+        }
     }
 
-    pub(super) fn terminate_job(&mut self) -> io::Result<()> {
+    pub(super) fn terminate_owned_processes(&mut self) -> io::Result<()> {
+        let Some(job) = self.job.as_ref() else {
+            if process_has_exited(&self.process)? {
+                return Ok(());
+            }
+            let terminated = unsafe {
+                // SAFETY: terminate only the captured client process handle;
+                // PID reuse and native Gateway descendants are never targeted.
+                TerminateProcess(raw_handle(&self.process), MANAGED_PROCESS_TERMINATION_CODE)
+            };
+            return if terminated != 0 {
+                Ok(())
+            } else {
+                let error = io::Error::last_os_error();
+                if process_has_exited(&self.process)? {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            };
+        };
         let terminated = unsafe {
             // SAFETY: job is owned by this process wrapper and never inherited.
-            TerminateJobObject(raw_handle(&self.job), MANAGED_PROCESS_TERMINATION_CODE)
+            TerminateJobObject(raw_handle(job), MANAGED_PROCESS_TERMINATION_CODE)
         };
         if terminated != 0 {
             Ok(())
@@ -331,7 +399,7 @@ impl WindowsManagedProcess {
 
     #[cfg(test)]
     pub(super) fn job_process_counts_for_test(&self) -> io::Result<(u32, u32)> {
-        let accounting = job_accounting(&self.job)?;
+        let accounting = job_accounting(self.job.as_ref().expect("owned tree has a Job"))?;
         Ok((accounting.TotalProcesses, accounting.ActiveProcesses))
     }
 }
@@ -777,7 +845,9 @@ impl TestProcess {
             // SAFETY: the helper owns this PID before termination. Keeping this
             // non-inheritable handle pins that exact process, including its PID.
             OpenProcess(
-                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                PROCESS_SYNCHRONIZE
+                    | PROCESS_QUERY_LIMITED_INFORMATION
+                    | windows_sys::Win32::System::Threading::PROCESS_TERMINATE,
                 0,
                 pid,
             )
@@ -789,6 +859,18 @@ impl TestProcess {
 
     pub(super) fn is_running(&self) -> io::Result<bool> {
         process_has_exited(&self.handle).map(|exited| !exited)
+    }
+
+    pub(super) fn terminate(&self) -> io::Result<()> {
+        let result = unsafe {
+            // SAFETY: this test-owned handle pins the exact helper process.
+            TerminateProcess(raw_handle(&self.handle), MANAGED_PROCESS_TERMINATION_CODE)
+        };
+        if result != 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
     }
 }
 

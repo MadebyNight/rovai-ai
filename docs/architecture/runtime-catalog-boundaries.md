@@ -3,7 +3,7 @@ document_type: architecture
 architecture: runtime-catalog-boundaries
 authority: runtime-catalog-and-preview-boundaries
 status: accepted
-last_updated: 2026-10-19
+last_updated: 2026-10-28
 ---
 
 # Runtime Catalog Boundaries
@@ -14,8 +14,17 @@ last_updated: 2026-10-19
 [Runtime Platform Admission v2](../contracts/runtime-platform-admission-v2.md)拥有；Runtime 启动与延迟验证边界见
 [Runtime 进程与校验不变量](foundational-invariants.md#runtime-process-verification)、
 [Runtime 恢复与关闭不变量](foundational-invariants.md#runtime-recovery-shutdown)及
-[Runtime Launch and Verification v64](../contracts/runtime-launch-and-verification-v64.md)。实测版本和能力只由
+[Runtime Launch and Verification v65](../contracts/runtime-launch-and-verification-v65.md)。实测版本和能力只由
 [Runtime 兼容性清单](../runtime-compatibility.md)记录。
+
+## 原生提问边界
+
+问卷承载用户输入，不能进入执行审批来选择答案。Claude、Copilot、Qwen 在统一正式启动处关闭已验证的
+提问工具；Copilot、Qwen 策略属于 Host 兼容输入，不改变原生会话绑定。Kimi 与 Qwen 的意外请求复用 ACP 当前请求归属、
+Prompt 观察与终态，先识别并取消，再让普通权限进入现有审批。已识别但损坏的问卷也不能自动允许。
+Claude 控制通道拒绝意外问卷并把观察传到现有整轮结果校验；不新增用户回复或自动重跑机制。
+具体字段与优先级见 [Runtime Launch v67](../contracts/runtime-launch-and-verification-v67.md)。
+MiniMax 保留现有行为，不以修改用户配置关闭问卷；本轮不扩大到其他适配器。
 
 ## Antigravity 执行边界
 
@@ -32,15 +41,17 @@ Antigravity 适配器通过 `--print-timeout 0` 等待原生整轮结束，保�
 | Product Runtime Availability | Core 对某一 Product Runtime 的 discovery、静态身份或 deep-verification snapshot | light ready、checking、legacy installed unverified、ready、needs login、not installed、incompatible、transient failure 等当前机器状态 | 新产品身份、把静态可尝试误作深检 Ready 或静默 Runtime fallback |
 | Settings Runtime Preview Catalog | Renderer 内受审查的静态 presentation rows | Runtime 设置页中的名称、图标、`待支持`文案和 disabled 状态 | Contracts、Core request、数据库、成员选择、诊断、Probe、AgentRun 或支持数量 |
 
-Product Runtime Catalog 当前包含十九种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
+Product Runtime Catalog 当前包含二十种已实现 Adapter。Preview 与它不是“同一目录的另一种状态”；
 Renderer 当前不展示 Settings Preview row。DeepSeek Harness 通过官方 ACP profile 接入；macOS arm64、macOS x64、
 Windows x64 与 Linux x64 分别绑定平台专属证据并取得 qualified。
 产品目录的机器可判数量、全量检查、诊断分母和
-普通执行仍只来自逐平台 Admission。Cursor 与暂缓公开的 Cline、Command Code 保留 closed identity 和历史 reader，但不进入
+普通执行仍只来自逐平台 Admission。Cursor 与暂缓公开的 Cline 保留 closed identity 和历史 reader，但不进入
 Settings Runtime Preview Catalog；隐藏该 row 不删除持久 identity，也不改变未准入状态。普通成员 Runtime
-selector 同样不展示 Cursor、Cline 与 Command Code；其他成员选项来自 `AdapterKind`，并在当前主机上继续经过 Runtime Platform Admission。
+selector 同样不展示 Cursor 与 Cline。Hermes 在 macOS arm64/x64、Windows x64 与 Linux x64 均普通开放；
+Command Code 在 macOS arm64/x64、Windows x64 与 Linux x64 均为 Preview。成员选项继续经过 Runtime Platform Admission，Renderer 不另建平台白名单。
 
-`qualified` 与 `preview` 可以进入 Product Runtime Availability；`preview` 保留缺失资格证据，检查详情说明记录未齐备。
+`enabled`、`qualified` 与 `preview` 可以进入 Product Runtime Availability；`enabled` 不宣称完整资格，
+`preview` 在内部保留缺失资格证据，用户界面不显示资格记录未齐备的提示。
 `qualified` 行只在有实际 reported version 时显示版本副文案，否则仅显示居中的产品名，不再回退到静态
 “稳定 / 测试 / 实验性”标签。当前主机平台在目录标题旁统一显示，机器状态徽标继续来自 Availability。
 `not_qualified` 按目标平台显示“Windows 尚未验证”或“当前平台尚未验证”，`unsupported` 显示平台不支持。
@@ -50,39 +61,52 @@ selector 同样不展示 Cursor、Cline 与 Command Code；其他成员选项来
 <a id="command-code-研究接入边界"></a>
 ## Command Code ACP 实施边界
 
-`command-code-cli` 使用官方 `command-code acp`（最低 1.74.1），复用共享 ACP Host/Fleet、精确 Native
-Session、模型/权限、Action、取消和终态路径；不建立另一套进程池。Migration 185 将 schema 134 升为 135，
-原子扩展 Runtime 与 Skill group `command_code` 的闭合集合。按
-[V1.72-D25](../versions/v1.72/decisions.md#v1-72-d25)曾仅在 macOS arm64 开放开发 Preview。
-2026-10-09 按 User 105 撤回 Preview，所有平台为 NotQualified；Settings、新手引导、成员/Skill 选择、
-安装引导与监控筛选不提供 Command Code。ACP 实现、既有配置和历史 reader 保留；没有 qualification
-evidence，不声称 First-Class。headless 传输、事件归约器、专属测试及探针已删除，历史报告指向退役前固定提交。
+`command-code-cli` 以官方 1.88.0 为基线，接入只有用户原生 HOME、官方 `--mod`、标准 ACP
+与现有共享 Fleet。Adapter 不复制认证/配置、不镜像 HOME、不遍历原生 Mod/MCP，不管理用户原生历史。
+完整字段与行为见 [Runtime Launch and Verification v72](../contracts/runtime-launch-and-verification-v72.md)。
 
-Bootstrap 使用 `managed_system_prompt`，完整交付语义见[revision 5](../versions/v1.72/model-context-change-command-code-acp.md)。
-Host 私有 Home 保留原生 auth/provider/Skill/Mod/Session 路径，仅覆盖私有 settings 的 `mods.paths` 与原生 `mcp.json`，通过
-官方 `appendSystemPrompt({state})` 按 `state.sessionId` 读取完整冻结 Bootstrap。工厂注册完成后写入带
-随机 nonce/当前 PID 的 readiness；Core 在 initialize 后校验，缺失则关闭 Host 且不发 prompt。每次
-hook 检查绑定、摘要和预算，异常直接停止进程，避免上游捕获普通异常后继续。A/B 不共享 active Bootstrap 指针，
-cold Host 重新绑定原冻结字节。原生 System 保留并追加 B，用户 prompt 只含 P；不改项目 AGENTS.md。
+共享 Fleet 对 Command 显式采用 Native Binding 身份策略：所属范围、成员、Binding ID、canonical cwd
+一致且进程健康空闲时复用。配置摘要、安装 generation、程序指纹均不参与其复用或恢复判断；历史摘要仍可读。
+Command 的入口/指纹验证和必要刷新只在 Fleet cold spawn 执行；warm 仍保留显式禁用/删除安装准入。
+显式启动设置和 MCP 实际修改走既有 invalidation，MCP 只影响有效工具变化的成员；增减成员不影响保留
+成员，关闭 Server 的修改和无变化保存不退役。保存先释放配置/数据库锁，再等待 Fleet；安装命令 replay
+与已达到目标值的保存不重复退役。
+忙碌进程结束后退役，新 Host 保留精确旧 Session ID。
+成员环境保存也只使用本次操作的实际变更事实；仅改 JSON 排版和命令重放不退役 Host。
+外部原生配置变化不触发扫描、比较或隐式新 Session；其他 Runtime 的策略不变。
 
-配置 digest 覆盖原生认证/provider/settings、Mod 源、环境与 MCP；项目 MCP 按原生 projects 下的具名
-配置文件保守失效，不读取历史。显式模型来自 ACP 真实目录；原生配置中的默认 BYOK ID 若不在目录中，
-以 runtime-default 哨兵保留默认选择。该 ID 不伪装成 session/set_model 可选项，实际模型仍按原生 Session 记录。
-原生五种权限原值传给 session/set_mode，默认 bypass，审批响应仍由共享 ACP 原生请求路径承载。
-External MCP 合入 Host 私有 Home 的原生 `mcp.json`，session mcpServers 保持空；保留原生定义、工作目录和已解析的环境/请求头，同名采用已存在的 `native_wins_skip`，先通过官方 `mcp list`
-发现有效名称并冻结冲突结果。发现失败/格式漂移阻断投影；不把被原生遮蔽的 Assignment 标为可用。
-原生连接失败可能继续建立 Session，因此握手和配置可见性不是 MCP 调用成功证明。
+Bootstrap 的 `managed_system_prompt` 语义不变：完整冻结 B 经官方 `appendSystemPrompt({state})`
+追加到原生 System，user 只有 P。每 Host 一个 Mod，正文通过已有 ACP 的 `/rovai-bootstrap` 控制命令
+保存在 Mod 内存；初始化只校验一次 revision/局部 nonce/PID 归属并删除 ready 文件。没有 Bootstrap
+正文文件、HOME fallback、专属池/锁/缓存。原输入确认见 [revision 5](../versions/v1.72/model-context-change-command-code-acp.md)；
+其中旧物理交付描述由 v72 替代，冻结内容、选择、上下文版本和证据边界不变。
+每个 Run 发送前交付该 Run 已冻结的 B，控制成功后才发送业务输入；warm 与 cold 使用相同交付时点。
+控制失败停止准备，不使用旧正文继续执行；控制回复不形成业务终态或用量。
+成员编辑不回写正在执行的 Run；后继 Run 使用其准备的新身份，同 Run 重试仍用原冻结字节。
+不比较历史正文、不触发 Host 退役或额外补发，也不另建冻结管理器；具体时点见
+[实施记录](../versions/v1.72/command-code-native-simplification.md#成员身份与长期指令何时生效)。
+大小预算只作用于正文，不因 JSON 转义增长而拒绝有效内容。状态检查与其他 ACP 共用错误分类和脱敏，
+不将认证、协议或网络错误统一改写成 provider 配置提示。
 
-此前 1.74.1 共享 Core Host 门禁和同 PID 成员 A→B→A 控制面已过；以原生默认 sub2api/gpt-6-sol 完成
-真实生成、exact cold、文件工具、原生 allow/deny/cancel、手动及自动压缩后连续性。这不是跨模型切换证据。隔离 App 的首次/warm/
-Core 重启、CLI 公开发送、文件 +/− 与 272000 Context 窗口通过。费用与非零命令状态等未取得结构化字段的
-边界保持未知，不提升 First-Class；详见[完整 Checklist 对照](../research/runtime-monitoring/command-cline-checklist-2026-10-05.md)。
+分配 MCP 经 `session/new|load|resume.mcpServers`，原生同名配置由 CLI 自动优先。1.88 原生 stdio 使用
+Session cwd；默认／相同目录直接传 command/args，只有不同 cwd 使用现有 argv launcher，不额外扫描目录。
+env/header 按 1.88 实测在 wire 边界转义一次以保留解析值；warm 不运行额外 CLI。
+冷恢复直接携带保存的精确 Session ID 调用原生 load/resume，不做 `session/list` 前置查询。
+采用原生尽力恢复，不额外证明历史完整；1.88 静默接受缺失 ID 的可能性保留，认证/网络错误不冒充缺失。
+显式模型来自真实 ACP 目录，ID（含 provider 前缀及碰撞别名）原样传递；不使用 `acp --model`。
 
-未完成项：1.74.1/1.79.1 ACP 模型目录不包含自定义 BYOK，`session/set_model` 和
-`session/set_config_option` 拒绝这些 ID；1.79.1 `acp --model` 接受参数但未用于会话，不能绕过此缺口。
-已测 BYOK 的 MCP 发现成功但实际调用未通过；费用、部分命令状态等原生缺失字段仍未知。
-[模型选择调查](../research/command-code-runtime/model-selection-2026-10-09.md)与
-[兼容性清单](../runtime-compatibility.md)分别保存原生失败和验收范围。
+同一 Mod 在 `onSessionStart` 从当前 active tools 中移除 `ask_user_question`，官方过滤器负责隐藏
+schema 与拒绝调用，不追加 fallback 或原生问卷界面。Skills 发现复用共享代码的 user/project
+`.commandcode/skills`、`.agents/skills` 来源；原生同名选择由 CLI 拥有，不生成投影副本。
+
+Migration 185 的闭集 identity 与既有历史保持。2026-10-25 按 User 要求开放 macOS Apple Silicon、Intel 与
+Windows x64，Linux x64 随独立目标机验收后开放；四行均采用既有 Preview 准入，可发现、配置、检查和执行；最低版本仍为 1.88.0 稳定版。
+Cline 的暂缓公开不变。Preview 不代表完整平台资格验收通过；不绑定虚构证据，
+不显示常驻实验标签。Linux 取舍见 [V1.72-D61](../versions/v1.72/decisions.md#v1-72-d61)，macOS/Windows 取舍见 [V1.72-D60](../versions/v1.72/decisions.md#v1-72-d60)。旧 1.74.1/1.79.1 BYOK
+目录缺口属于历史证据；1.88 的原生证据与尚未覆盖范围见[实施记录](../versions/v1.72/command-code-native-simplification.md)。
+官方 1.88 Windows 原生 ACP 的 MCP executable 含空格路径／复杂 argv 限制在不经过 Rovai 时同样可复现；
+普通 `node` 与简单参数可用。拒绝写权限会阻止文件修改，原生可能直接结束该轮而不发公开最终回复，
+此时 Core 如实报告缺失最终输出。上述边界不通过修改上游包、复制原生配置或新建进程机制掩盖。
 
 ## Cline 实施边界
 
@@ -134,21 +158,23 @@ continuation、Built-in Tool、Approval、cancel、terminal、process cleanup �
 
 ## 本机启动设置
 
-Runtime Startup Settings 只保存本机程序路径。环境覆盖属于当前 Host 的具体队员实例和 Runtime，
-由 Core 私有存储管理；Host 环境与队员环境同名覆盖、不同名追加，删除队员条目恢复继承。
+Runtime Startup Settings 保存本机程序路径及按 Runtime 隔离的通用环境变量。环境由 Core 私有加密存储管理，
+新 CLI 按 Host、可选的 Runtime 通用配置、队员覆盖合并，同名后者优先、不同名追加；删除队员条目恢复下层值。
+队员可选择是否继承通用配置，新队员默认继承，升级前非空队员配置保持独立。
 已启动进程不受保存影响，旧 Agents 环境不再参与启动/检查，独立只读归档由诊断提供人工迁移参考。
 
-新建 CLI 时合并当时的 Host＋队员环境，领取 Run 不读取；健康 Warm 复用不读取或解密最新配置。
+新建 CLI 时合并当时的 Host＋通用＋队员环境，领取 Run 不读取；健康 Warm 复用不读取或解密最新配置。
 活着的 CLI 及其工具子进程保持启动环境，重建/冷恢复使用当前配置。环境不进入会话或 Run 历史，
 旧快照缺失或损坏不阻断执行；真实队员配置错误只失败对应任务，数据库整体错误仍上报。
 进程只在同一 Camp、同一队员的当前会话内复用，继续遵循各 Adapter 的工作目录、恢复与停止策略。
 值不进入成员资料、公开命令、工具、事件或诊断导出；Owner 管理面使用遮蔽读取及显式查看。
 程序绝对路径仍属于安装发现，不由队员 PATH 偷换。详细字段、CAS、凭据保护、CLI 资格与迁移见
-[Runtime Launch v59](../contracts/runtime-launch-and-verification-v59.md)。
+[Runtime Launch v69](../contracts/runtime-launch-and-verification-v69.md)。
+正式检查与模型目录使用 Host＋通用配置；保存使相关缓存和旧检查失效，不主动替换 Warm。
 
 ### Claude Code 与 Codex 原生配置
 
-原生连接编辑已按 User 要求退出。启动设置只拥有程序路径，队员环境由独立私有入口拥有，不再读取到表单或编辑
+原生连接编辑已按 User 要求退出。启动设置拥有路径及通用变量，队员环境由独立私有入口拥有；不读取到表单或编辑
 原生地址、Key、连接方式和模型列表，不再观察账号或生成原生目录。移除入口不修改任何已有原生配置，
 原生 CLI 继续读取其文件、环境、认证与模型设置。
 
@@ -188,11 +214,20 @@ OpenCode 保持一个产品与 Adapter。显式路径或现有发现顺序确定
 V1/V2 未知且无法确定必需配置时报告初始化错误；握手冲突在正文前停止，不修补冻结身份或重发。
 Host 的程序指纹与 Native Session 的协议／存储来源分别判断，普通补丁更新不自动丢弃会话。
 权限保留一般 allow/ask/deny 与 Shell、Skill 放行例外，V2 用原生有序规则覆盖 build/plan，
-其他自定义／子 agent 仍有原生规则。细节与测试边界见
+全局和这两个 Agent 的规则末尾统一拒绝 `question`，由原生过滤模型工具集合；V1 不变。
+其他自定义／子 agent 仍有原生规则。问卷策略只进入 V2 Host compatibility，不改变会话绑定。
+细节与测试边界见
 [OpenCode V1/V2 实施记录](../versions/v1.72/opencode-v1-v2-implementation.md)。
 
-启动与 rescan 只解析入口、检查平台与执行条件、保存同次稳定的 fingerprint/file identity；
-不执行 `--version` 或协议深检。发现安装即可保存配置并尝试运行，版本未知不影响普通运行准入。
+启动、rescan 与主动单项检查共用 Core 的基础 PATH 采集策略：macOS/Linux 使用有界交互式登录 shell，
+Windows 沿用 Registry／PATH 规则；只采集 PATH，失败仍走既有回退。主动检查即使旧入口存在也刷新，
+同次候选解析与检查进程使用该次搜索环境及 Runtime 通用配置。刷新保留已保存的路径和变量，输入比较、
+代次及并发保护沿用原机制。额外 shell 变量通过用户通用／队员配置传递，不增加版本管理器适配。
+精确范围见 [Runtime Launch v74](../contracts/runtime-launch-and-verification-v74.md)。
+
+启动只静态解析入口、检查平台与执行条件、保存同次稳定的 fingerprint/file identity，不运行 Runtime。
+手动 rescan 保留未知或变化程序的有界版本补读，不执行认证或协议深检；单项检查只检查选中的 Runtime。
+发现安装即可保存配置并尝试运行，版本未知不影响普通运行准入。
 安装记录不伪造 Ready、认证或能力；旧健康证据只供主动诊断和模型 Picker 参考，已知版本的展示复用单独判断。
 
 已知程序版本复用现有快照保存，独立于健康状态：本次静态发现未读取版本或版本读取失败时，Core
@@ -242,11 +277,15 @@ Camp Fast service 拥有可空偏好、保存绑定代次与 Run 冻结。活跃
 模型目录只服务 Picker 和主动诊断，沿用既有 60 秒/24 小时缓存及身份失效规则，不新增缓存或 LKG。
 打开 Picker 才按需使用既有有界 Check Manager 刷新；页面打开、Runtime 切换及默认模型任务均不触发目录刷新。
 历史目录可用于展示，不能证明当前 executable 支持某个模型，也不能形成运行授权。
-刷新只写明确取得的目录证据；失败保留原诊断记录，Superseded 不提交错误身份的结果。
+刷新只写明确取得的目录证据；失败保留有效缓存及原诊断记录，不推进目录成功时间；Superseded 不提交错误身份的结果。
+共享 Adapter 层合并重复模型 ID 和选项，逐条忽略无法表示的目录数据，保留其余有效条目。没有默认项或
+当前模型不在候选列表中不否定原生 Session 可用性；单个 Provider／模型的补充异常不丢弃整个目录。
 
 Core 原子保存显式模型和选项的精确意图及静态权限配置；过期、缺失目录或历史失败不阻止保存。
-真实 Host 负责原生握手和选项传递，不静默替换或忽略。Claude Code 将已有模型 ID 与可传递的显式选项交给
-原生 CLI 判定；不能仅因枚举缺失或目录不包含该 ID 而拒绝正文。其他 Adapter 的原生模型设置协议保持原合同。
+真实 Host 负责原生握手和选项传递，不静默替换或忽略。全部 Adapter 将明确模型 ID 与显式选项交给
+原生 Runtime 判定；不能因目录缺失、未枚举 ID／参数／值或 setter 未回显目录拒绝执行。
+冻结和模型切换保留用户显式选项，不从目录补入默认值或自动删除覆盖值。原生错误继续沿用现有错误路径，
+不新增日志。界面读取失败显示“尚未核对”，保留当前选择及有效缓存。规则见 [Runtime Launch v74](../contracts/runtime-launch-and-verification-v74.md)。
 默认模型不依赖目录，内部 sentinel 只用于审计和冻结，不向原生 Runtime 发送。
 
 成员配置只拥有模型策略，不拥有某次 Run 的实际模型。使用 `runtime_default` 时，Core 只能从当前
@@ -276,7 +315,7 @@ Claude、ACP、Codex 模型／初始化及 Codex 原生配置查询，不删除�
 但保存的队员配置保留。原生成功目录在刷新失败时继续按已有 stale/expired 边界读取，失败不能更新成功时间。
 `model.catalog.initialize` 保留为既有持久化能力名，专用查询或兼容查询均可建立该目录证据；查询失败
 不制造 Ready，界面独立表达目录不可用。已有模型和选项可原样保存并执行；默认项由用户主动选择，
-本期不增加任意模型 ID 输入。正式会话仍完成 initialize 协议／权限握手，但不再据其目录拒绝已有配置。
+Picker 允许填写明确模型 ID。正式会话仍完成 initialize 协议／权限握手，但不再据其目录拒绝已有配置。
 显式模型 ID 原样传给 `--model`，effort 原样传给 `--effort`；不能传递的键或非字符串选项明确拒绝，
 不把未知原生枚举值静默删除。运行时默认省略模型参数。字段与错误边界见
 [Runtime Launch v49](../contracts/runtime-launch-and-verification-v49.md)。
@@ -289,10 +328,11 @@ retryable；完整 error chain、原始 stderr、私有日志、exit status、by
 公开 detail 必须先脱敏、去控制字符并有界化，不能包含 Prompt、用户消息、Tool input 或完整 Tool output。
 
 ACP matching Prompt error 至少保留安全数字 JSON-RPC error code 和有界 message。通用 ACP Host 还可以从
-精确白名单标量路径提取 Provider detail；当前只接受字符串 `error.data.error`，并在进入诊断或公开 failure
-前复用统一的路径、凭据、控制字符和长度清洗。对象、数组、其他 `error.data` 路径及完整原始对象一律忽略，
+精确白名单标量路径提取 Provider detail；接受字符串 `error.data`，或对象中的字符串 `error.data.error`，
+并在进入诊断或公开 failure 前复用统一的路径、凭据、控制字符和长度清洗。其他对象字段、非字符串值及完整原始对象一律忽略，
 不能由各 Adapter 自行扩展或把原始 `error.data` 交给 Renderer。Prompt activity 与 matching response 已证明
 输入 accepted 时，公开 failure 的 retryable 必须为 false，不能用 Provider 可重试分类覆盖 Core 的防重放门禁。
+字段与历史读取规则见 [Runtime Launch v71](../contracts/runtime-launch-and-verification-v71.md)。
 
 `runtime` 只表示 Runtime/Provider 明确报错；协议、参数和输出格式问题是 `compatibility`，executable/cwd/
 权限/附件目录问题是 `environment`，只有明确 Core 状态、持久化或配置生成证据才能是 `rovai`，否则为
@@ -573,7 +613,7 @@ Runtime-managed AgentRun 通过标准 ACP `session/set_config_option` 投递冻�
 `default`、`auto` 或 `plan` 不由 discovery、升级或 migration 静默扩权。十二种 Runtime 的 exact 默认矩阵见
 [Runtime Launch and Verification v55](../contracts/runtime-launch-and-verification-v55.md)。
 复用 Kimi Host 时从当前 AgentRun 的冻结配置设置 Session 模式，不继承原 Host 创建时的模式。
-Host＋队员环境按 [v59](../contracts/runtime-launch-and-verification-v59.md) 在进程创建时读取；保存配置不替换
+Host＋通用＋队员环境按 [v68](../contracts/runtime-launch-and-verification-v69.md) 在进程创建时读取；保存配置不替换
 当前 Host。会话重置通过既有 native binding 身份隔离，原生配置与协议兼容判断继续保留，不新增环境摘要。
 CodeBuddy 的显式模型通过 Host 启动参数 `--model` 选择，因此它参与进程兼容；Runtime-default
 不传该参数，Session/Turn 选项变化不因完整 Run 配置摘要而重启 Host。
@@ -619,6 +659,11 @@ Start Plan 的验证回调仍显式报告未应用并给出操作指引。
 图片沿用授权附件路径，由原生 Read 转为模型图片内容；Read 保持读取活动，不形成 Files Changed 或修改 Diff。原生配置变化 fence Host 与 Binding。MCP 合并遵从原生用户/项目优先级，再叠加当前 Rovai Assignment；
 warm resume 不刷新 MCP，所以集合变化不能沿用旧 Host。协议、FirstPayload、权限、Usage 与保留能力见
 [Runtime Launch v44](../contracts/runtime-launch-and-verification-v44.md)。平台资格与 Machine Ready 分开维护。
+
+托管 `session/create` 和 `session/resume` 均传入 `toolDenylist: ["AskUserQuestion"]`；
+这与仅控制无人作答时自动继续的偏好分开。问卷策略只进入 Host compatibility，
+不改原生配置或会话绑定；旧 Host 在安全获取时替换，普通权限及计划交互不扩大拦截。
+禁用证据与适用版本见 [Runtime Launch v67](../contracts/runtime-launch-and-verification-v67.md)。
 
 Windows x64 与 macOS arm64 分别以平台专属冻结证据标记 Qualified；macOS x64 同时开放为可执行 Preview，
 没有 Intel Mac 真机资格。管理页不显示测试、试运行或实验性标签，保留机器检查、错误和具体能力限制；
@@ -805,3 +850,23 @@ Usage 通过 Host 冻结的原生 data root、SQLite 精确 Session/cwd/root 身
 沿共享异步 baseline/poll 策略，短 Run 或结束尾部可能缺数；未观测保持未知，不以零补齐。
 ACP Session 累计费用仅作 Session gauge，不冒充 Run 费用。Skills 只读发现原生 `.minimax`、
 `.claude`、`.codex`、`.agents` 兼容来源，MCP 使用 ACP Session 追加投影；完整隔离和真实模型资格仍按矩阵记录。
+
+## Hermes 受管 ACP
+
+Hermes 保留 `hermes-cli` 产品闭集身份，2026-10-28 按维护者要求在 macOS arm64/x64、Windows x64、
+Linux x64 均普通开放。四行采用 `enabled`，不采用 Preview；用户界面只显示实际机器状态。
+设置、引导、成员/Skills 菜单和监控筛选复用 Core Admission，仅在已准入主机提供 Hermes；未准入主机不保留占位。
+共享准入继续限制普通发现、检查、配置和执行，不删除既有记录。
+平台状态见[准入合同](../contracts/runtime-platform-admission-v2.md#hermes-初始准入)。保留的共享 ACP 实现直接启动官方入口，
+使用用户原生 `~/.hermes` 与精确 Session resume；无私有 Home、启动器或专用 Gateway。
+Fleet 只拥有 ACP 客户端根进程，原生共享执行端不随 Run 回收。
+
+原生配置启用 `clarify` 后，官方 ACP 的选择题及开放题权限卡片进入共享问卷不支持处理，
+不创建执行审批、不代选答案；已识别的损坏问卷也不回落授权。后继输入沿原 Session 继续。
+
+模型的普通 CLI 调用通过原生逻辑 Session 定位唯一 Conversation/活动 Run，并复用现有 lease、
+Router、回复和回执。按调用时归属，不追溯旧后台程序最初属于哪轮。其他 Runtime 不改。
+FirstPayload 只保留首次及真实规则更新，不进行压缩补发。未确认的 MCP 撤销、原生工具终止和
+增强详情不声明成功；未知输入不自动重放。具体合同见
+[Hermes Managed Runtime v1](../contracts/hermes-managed-runtime-v1.md)，理由见
+[原生会话定位决定](../versions/v1.72/decisions.md#v1-72-d67)。

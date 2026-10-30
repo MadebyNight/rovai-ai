@@ -386,6 +386,10 @@ describe('Agent Current User Mention Markdown rendering', () => {
     expect(markup).not.toContain('cache()')
     for (const displayName of ['Murray✨', '小雪_[团队]', '新的昵称']) {
       for (const content of [nonLeading, repeated, [
+        { kind: 'text', text: '<div>\n' },
+        { kind: 'current_user_mention', userId: 'local_user' },
+        { kind: 'text', text: '\n</div>' }
+      ] as StructuredThreadMessageContent, [
         { kind: 'text', text: '**完成**\n\nROVAICURRENTUSER1END\n' },
         { kind: 'current_user_mention', userId: 'local_user' },
         { kind: 'text', text: ' 请确认 `@Principal`' }

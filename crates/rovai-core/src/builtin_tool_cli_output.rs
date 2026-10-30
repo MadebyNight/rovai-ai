@@ -1155,7 +1155,8 @@ mod tests {
             }
         }
         let mut quoted = legacy["camp.read"]["canonicalResult"].clone();
-        quoted["items"][0]["quotes"] = json!([{"kind":"message_excerpt","source":{"scope":"camp_messages","messageId":"quote-message","author":{"type":"user","displayName":"User"}},"text":"campId and Thread are quoted verbatim"}]);
+        quoted["items"][0]["quotes"] =
+            json!([{"kind":"message_excerpt","text":"campId and Thread are quoted verbatim"}]);
         let projected = project_envelope(
             BuiltinToolInvocationEnvelope::success(
                 "camp.read",
@@ -1165,10 +1166,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        assert_eq!(
-            projected["items"][0]["quotes"][0]["source"]["scope"],
-            "thread_messages"
-        );
+        assert!(projected["items"][0]["quotes"][0].get("source").is_none());
         assert_eq!(
             projected["items"][0]["quotes"][0]["text"],
             "campId and Thread are quoted verbatim"

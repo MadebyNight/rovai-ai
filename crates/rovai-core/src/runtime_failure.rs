@@ -294,7 +294,7 @@ fn classify_high_value_runtime_error(
             RuntimeFailureOrigin::Runtime,
             RuntimeFailurePhase::Authentication,
             "runtime_authentication_required".to_string(),
-            format!("需要登录 {runtime_name}"),
+            format!("{runtime_name} 认证未通过"),
             true,
         );
     }
@@ -421,6 +421,7 @@ fn runtime_display_name(runtime_kind: AdapterKind) -> &'static str {
         AdapterKind::CursorAgent => "Cursor Agent",
         AdapterKind::KimiCodeCli => "Kimi Code",
         AdapterKind::MinimaxCodeCli => "MiniMax Code",
+        AdapterKind::HermesCli => "Hermes Agent",
         AdapterKind::GrokBuild => "Grok Build",
         AdapterKind::DeepseekHarness => "DeepSeek Harness",
         AdapterKind::ClineCli => "Cline",

@@ -1,10 +1,136 @@
 ---
 document_type: runtime-compatibility-register
 authority: runtime-validation-evidence
-last_updated: 2026-10-19
+last_updated: 2026-10-28
 ---
 
 # Agent Runtime 兼容性清单
+
+## 2026-10-28 Hermes 普通开放全部现有平台
+
+按维护者要求，macOS arm64/x64、Windows x64、Linux x64 均采用普通 `enabled` 准入，
+发现、安装、检查、成员配置与执行均可用，不采用 Preview。Windows 连接清理只拥有捕获的客户端根进程，
+共享 Gateway 不加入其 Job；其他 Runtime 的整树 Job 保证保持。平台开放不代表已完成完整模型与能力矩阵。
+当前范围由[平台准入](contracts/runtime-platform-admission-v2.md#hermes-初始准入)与
+[连接进程所有权](contracts/managed-runtime-process-v2.md#原生共享执行端的连接进程)拥有。
+
+## 2026-10-28 Hermes 运行中插话接通
+
+官方 0.22.4 ACP slash Steer 已通过生产 Core 接入，使用既有 Native Session、Run 和 CLI 授权。
+来晚的补充由原生在同 Session 接续，Core 等所有已发出请求返回后收尾；已知 Run 结束则走普通队列。
+受控 Provider 覆盖 5 个场景；真实 `gpt-6.1-sol` 验证连续更正与文件引用、冷恢复结束竞态、CLI 归属
+及普通消息后续执行（3 个成功 Core Run、12 次主模型请求）。取消、未知不重发和明确拒绝由受控场景
+独立验证。证据见 [Core Steer 验证](research/hermes-runtime/README.md#core-steer-接通2026-10-28)。
+当前只有 macOS arm64 执行证据；不扩展为 Intel/其他平台、Desktop UI 或原生 image block 验收。
+
+## 2026-10-28 Hermes macOS 重新开放（已由全部平台普通开放取代）
+
+按 User sequence 126，macOS arm64/x64 重新开放发现、检查、安装配置、成员选择和普通执行，
+内部沿用 Preview，不显示 Preview 或资格记录未齐备提示。Windows x64 与 Linux x64 继续隐藏。
+各用户入口按 Core Admission 过滤 Hermes；原生 ACP、原生 Home、Session resume 和既有能力边界保持。
+本次沿既有平台矩阵及 Renderer owners 验证入口，不重复模型验收，也不宣称完成 Intel 实机验证。
+当前边界见[平台准入合同](contracts/runtime-platform-admission-v2.md#hermes-初始准入)。
+
+## 2026-10-27 Hermes 暂缓公开（macOS 已重新开放）
+
+按 User sequence 122，Hermes 在 macOS arm64/x64、Windows x64、Linux x64 全部撤回公开入口，
+采用既有 NotQualified 准入并从所有新使用入口隐藏，不显示待支持或实验提示。内部实现与历史证据保留；
+两轮真实模型文件生成/修改通过并不等于完成全部能力或平台验收。已知 Diff、压缩观测、逐 Run 用量、
+同轮插话和 MCP 清空确认的边界不通过额外封装掩盖。此决定取代下面同日早期开放记录。
+当前边界见 [平台准入合同](contracts/runtime-platform-admission-v2.md#hermes-初始准入)。
+
+## 2026-10-27 Hermes macOS 入口开放（已撤回）
+
+按 User sequence 113，Hermes 在 macOS arm64 与 x64 均采用 Preview，允许正常发现、检查、配置与执行；
+两架构均不绑定完整资格 evidence revision。Windows x64 与 Linux x64 仍未开放。
+现有真实 Hermes 执行证据来自下方记录的 arm64 环境，Intel 入口开放不代表完成 Intel 目标机实测。
+本次不改变官方 ACP、原生 Home、原 Session resume、CLI 归属或既有能力限制。
+同 Thread sequence 116 统一移除所有 Runtime 的 Preview 资格提示小字，内部资格与机器检查不变。
+当前边界见 [平台准入合同](contracts/runtime-platform-admission-v2.md#hermes-初始准入)。
+
+## 2026-10-26 Copilot ACP 启动参数兼容
+
+Rovai 的生产 ACP 启动与健康检查统一移除 `--no-remote`、`--no-remote-export`，
+ACP reconciliation 实验脚本同步；不按版本分支，不添加 `--sync-session` 或注入 `/remote off`。
+保留 `--acp --stdio --no-auto-update --no-color --log-level error`，权限参数仍由原有策略决定。
+
+macOS arm64 官方 npm 二进制 `@github/copilot-darwin-arm64` 的 **1.0.102 / 1.0.103**
+在独立 Home、cache、workspace 与日志目录下，使用上述生产参数均完成 ACP v1 `initialize`，
+关闭 stdin 后正常退出。未读取日常凭据、创建模型会话或调用真实 LLM。
+1.0.103 单独携带任一旧开关都会在初始化前拒绝启动；1.0.102 不接受新 `--sync-session=off`。
+
+这两个版本官方分发的 `cli-main.js` 中，ACP 分支先返回，后续交互/Prompt 远程导出初始化不执行；
+ACP `buildBootOptions` 也不传递 remote/export/sync 开关。因此本次只删除 ACP 路径的无效传参，
+不改变用户的 Copilot 配置，也不宣称所有模式均关闭历史同步。Prompt 模式的 MCP Smoke 不属于该路径。
+参数与权限的版本无关性扩展既有 `health::tests::additive_acp_launch_shapes_match_the_verified_cli_contracts`
+owner，不新增 Rust 测试函数；真实二进制验证只覆盖本次启动兼容，不扩大模型或平台资格。
+官方语义见 [CLI 命令参考](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)
+及 [ACP 启动方式](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server)。
+
+## 2026-10-25 Hermes 原生会话定位
+
+当前生产代码已替换私有 Home/专用 Gateway/Hook；用户原生 Home + 官方 ACP + Core 调用时 Run 解析。
+历史条目的旧控制入口、进程树回收与补发保证不再适用。现行边界见
+[合同](contracts/hermes-managed-runtime-v1.md)，本轮验证结果见 [实施记录](versions/v1.72/hermes-first-input-implementation.md)。
+macOS arm64 保持 Preview；不使用下面历史路径的通过结果补全本轮未验证能力。
+同日[原生 ACP 观测验证](research/hermes-runtime/README.md#原生-acp-观测验证2026-10-25)确认当前
+官方 0.22.4 未暴露实时压缩完成，usage 是可重置的驻留 Agent 累计值且失败响应缺失；这两项尚未
+端到端接通，不能用旧控制器的压缩/消费验收替代。原生会话与生产接入方式保持不变。
+
+## 2026-10-23 Hermes 显式 unknown 恢复补修
+
+Ready 目录已与 FirstPayload 对齐：首条 user 规则、signal-driven/best-effort 压缩连续性，移除旧 system
+注入与原生永久保留声明。旧 Ready 快照在发现阶段失效，显式重新检查后保留模型参数和权限能力。
+生产 Core 与官方 0.22.4 的受控验收通过旧快照升级、Core 强杀、精确检查/确认、跨重启幂等与原 Session 新任务。
+真实 Sub2API `gpt-6.1-sol` 验收通过强杀 Gateway/Core 后的 unknown 显式处理；原 Run 保持失败，
+旧输入不重放，原 Session 接受新任务，没有重复公开 Send，受管后代全部回收。
+入口为用户 CLI `hermes-inspect` / `hermes-discard --acknowledge-effects`，未新增聊天恢复按钮。
+证据与失败尝试分别记录在[脱敏恢复摘要](research/hermes-runtime/explicit-unknown-recovery-2026-10-23.json)
+和[实施验证](versions/v1.72/hermes-first-input-implementation.md#合入前补修与显式恢复)。Hermes 仍为 Preview。
+
+## 2026-10-23 Hermes 首次输入规则
+
+当前 user 层规则投递与完成通知后的下一普通输入恢复，见
+[实施验证](versions/v1.72/hermes-first-input-implementation.md)。下节系统层压缩资格属于调整前路径，
+不能转移为首条 user 规则永久保留的保证。进程、取消、文件与 usage 的既有证据仍各自保留。
+该阶段真实 Core 的 Steer/取消/Send 通过；强杀后的原生 admission 为 unknown，续轮被安全拒绝。
+该次崩溃续接仍不计通过，保留[原始脱敏记录](research/hermes-runtime/first-input-core-recovery-2026-10-23.json)；
+后续显式恢复验证独立记录于上节，不改写这次失败。
+
+## 2026-10-23 Hermes 初始接入
+
+官方 source install 0.22.4 / commit `4d04303818b61bf3aa09278af48356315515965b`，macOS arm64。
+真实 Sub2API `gpt-6.1-sol` 验证原生系统绑定、暖轮 Usage、精确冷恢复、压缩后指令、MCP 与 Skill；
+隔离 Core 验证公开 Send、文件操作和真实 patch 证据。完整结果与保留边界见
+[Hermes 验证记录](research/hermes-runtime/README.md)。平台为 Preview，不能等同其他平台或完整能力轴资格。
+同日增量：兼容策略改为 >=0.22.4；原生 272000/204000 窗口/阈值自动压缩、压缩后与冷恢复连续性通过。
+早期进程内路径的完整文件状态与 Desktop 验证已完成，Desktop 覆盖 effort 保存、错误模型原生详情、
+同一 Run 的 Steer ACK 与修正后 Send，Skills 区分用户与受信项目来源。新版本/其他平台未因最低版本策略自动取得资格。
+
+同日官方入口切换：未修改的官方 ACP＋专用 Gateway，每 Run 精确冷恢复并更新 B/CLI lease；原生阈值
+自动压缩、精确 Steer/取消、错误与 turn usage、MCP 增改撤销/同名优先/发现失败拒绝通过。文件证据现为
+原生成功结果的 reported_mutation 片段，早期完整快照资格不转移到新路径。图片 bytes 到达原生媒体缓存，
+但本次 Sub2API 模型在 auto 预解析与 native pixels 模式均未正确识别四色图，识图准确性不记通过。
+生产 Core 的强杀/重启验收也通过：受管 Gateway/终端全部回收，已接受输入不自动重放，显式下一轮精确
+恢复同一原生 Session 并使用新 CLI lease 发送，没有重复公开消息。
+
+## 2026-10-20 ZCode 与 OpenCode V2 原生问卷禁用
+
+macOS arm64、ZCode App **3.14.5** / 内核 **0.16.9** 的 create/resume `toolDenylist`，
+以及 OpenCode **2.0.26** 的全局/build/plan `question / * / deny` 已接入正式路径。
+生产 Core 各三轮新建、后继输入、重启恢复中，模型工具集合不含问卷，普通 Shell、文件和公开发送保留，
+每组维持同一原生会话。ZCode 后继输入实际重建 Host，OpenCode 后继输入复用 Host。
+这是实际内核加本地脚本化 Provider 的协议验证，不扩大平台或外部模型资格；
+旧版本及自定义 Agent 未实测，OpenCode V1 保持原状。详见
+[本轮验证记录](versions/v1.72/native-questionnaire-verification.md#zcodeopencode-v2-禁用增量2026-10-20)。
+
+## 2026-10-20 Qwen 原生问卷禁用
+
+macOS arm64、Qwen **0.25.0** 的 ACP 实测确认 `--exclude-tools=ask_user_question` 从模型工具集合
+移除问卷，普通 Shell 和原生 Session 恢复保留。正式 Core 的新建、后继原生恢复与 Core 重启恢复均通过；
+Kimi **2.1.1** 的 Skip/取消不终止原生整轮执行，Rovai 的未承接问卷失败规则保持。
+这是本地脚本化 Provider 配合真实 CLI 的协议验证，不扩大外部模型或跨平台资格。
+范围、启动 wire 和证据见[本轮增量记录](versions/v1.72/native-questionnaire-verification.md#qwen-启动禁用增量2026-10-20)。
 
 ## 2026-10-18 MiniMax Code Linux x64 准入
 
@@ -148,6 +274,19 @@ Claude 新会话的保存指引随关闭消失；旧会话恢复仍可能保留�
 完整方法、MCP/Windows 结果与未验证项见[验收记录](research/native-auto-memory/verification-2026-10-10.md)。
 固定产品策略见[当前架构边界](architecture/runtime-catalog-boundaries.md#受管执行的原生自动记忆)，不增加版本或配置读取门禁。
 
+## 2026-10-24 Command Code 1.88.0
+
+当前实现改为原生 HOME、官方 `--mod`、标准 ACP MCP 与共享 Fleet 的 Native Binding 身份策略。
+上游已支持自定义 BYOK 目录与标准显式选模，旧 1.74/1.79 的该项缺口不再代表 1.88。
+本轮真实 sub2api/gpt-6-sol 的 ACP stdio/HTTP 工具调用与随机回执闭环通过；System Bootstrap 由官方 Mod
+交付。原生同名优先、cwd、env/header 字面量及缺失恢复 ID 的实测见[简化记录](versions/v1.72/command-code-native-simplification.md)。
+用户原生配置与历史由 CLI 拥有；真实模型证据未覆盖完整 App/平台资格。
+2026-10-25 按 User seq61 开放 macOS arm64 与 x64，采用既有 Preview 准入，保留 1.88.0 稳定版下限；
+同日 Windows x64 与 Linux x64 分别经独立实测后采用 Preview；Linux 的实际范围见
+[Linux 验收](research/command-code-runtime/linux-acceptance-2026-10-25.md)。Windows 的实测和原生 MCP 路径／
+参数、拒绝后无公开最终回复等边界见[实施记录](versions/v1.72/command-code-native-simplification.md#windows-preview-开放2026-10-25)。本次开放没有新增 Intel 或子代理实测结论。
+以下带日期的旧结果作为历史证据保留。
+
 ## 2026-10-09 Cline / Command Code 暂缓公开（User 105）
 
 两者保留官方 ACP Client/Host/Fleet 接线及原生身份、配置、历史数据，但全部平台为 NotQualified，
@@ -263,9 +402,11 @@ AgentRun/App 主路径与正常 managed System Rule 已通过；compaction 与 F
 
 ## 当前 Product Runtime Catalog
 
-当前 closed `AdapterKind` 包含十八种 Runtime identity：Codex CLI、OpenCode、GitHub Copilot、
+当前 closed `AdapterKind` 包含十九种 Runtime identity：Codex CLI、OpenCode、GitHub Copilot、
 Claude Code、Antigravity、Kiro、Qoder、CodeBuddy、Qwen Code、TRAE CLI CN、Cursor Agent、Kimi Code、
-Grok Build、Pi Coding Agent、ZCode、DeepSeek Harness、Cline 与 Command Code。Cline 与 Command Code 均暂不公开，所有平台 NotQualified。identity 不代表 First-Class。
+MiniMax Code、Grok Build、Pi Coding Agent、ZCode、DeepSeek Harness、Cline 与 Command Code。Cline 暂不公开，
+所有平台 NotQualified；Command Code 在 macOS arm64/x64、Windows x64 与 Linux x64 以 Preview 开放。
+identity 或 Preview 均不代表 First-Class。
 Cursor 在三个目标平台均为 `not_qualified`；Pi、Kimi 在 macOS arm64、macOS x64 与 Windows x64 均为
 digest-bound `qualified`。Pi 三个平台分别绑定自己的 adapter-scoped evidence，不继承通用 macOS/Windows、
 Kimi 或 Grok 的平台结论。

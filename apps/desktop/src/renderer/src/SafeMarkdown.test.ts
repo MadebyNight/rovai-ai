@@ -3,6 +3,46 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { SafeMarkdown } from './SafeMarkdown'
 
+describe('SafeMarkdown default HTML sanitization', () => {
+  it('renders allowed HTML and keeps code and escaped tags literal', () => {
+    const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      children: '| 项目 | 说明 |\n| --- | --- |\n| <b>粗体</b> | 一<br>二<br/>三 |\n\n`<br>` &lt;b&gt;字面&lt;/b&gt;\\<br>\n\n```html\n<br/><script>literal</script>\n```'
+    }))
+    expect(markup).toContain('<b>粗体</b>')
+    expect(markup).toContain('<td>一<br/>二<br/>三</td>')
+    expect(markup).toContain('<code>&lt;br&gt;</code>')
+    expect(markup).toContain('&lt;b&gt;字面&lt;/b&gt;&lt;br&gt;')
+    expect(markup).toContain('&lt;br/&gt;&lt;script&gt;literal&lt;/script&gt;')
+    expect(markup).toContain('markdown-code-copy')
+    expect(markup).toContain('markdown-table-scroll')
+  })
+
+  it('cleans untrusted HTML before inserting trusted content', () => {
+    const token = 'TRUSTEDTOKEN'
+    const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      children: '<div onclick="alert(1)">\n' + token + '\n<span data-rovai-inline-content="TRUSTEDTOKEN">plain</span>\n<script>alert(1)</script><img src=x onerror=alert(1)><a href="javascript:alert(1)">link</a>\n</div>',
+      inlineContent: { [token]: createElement('button', { className: 'trusted-mention' }, '@用户') }
+    }))
+    expect(markup).toContain('<div>\n<button class="trusted-mention">@用户</button>')
+    expect(markup.match(/trusted-mention/g)).toHaveLength(1)
+    expect(markup).toContain('plain')
+    expect(markup).not.toMatch(/TRUSTEDTOKEN|onclick|onerror|javascript:|<script|<img/u)
+  })
+
+  it('uses the same default rules in message and document readers', () => {
+    for (const mode of ['message', 'document'] as const) {
+      const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
+        children: '<!-- lang:en -->\n\n<unknown>kept text</unknown>\n\n<UUID>\n\n<div>visible</div>\n\n`<UUID>`', mode
+      }))
+      expect(markup).not.toContain('lang:en')
+      expect(markup).not.toContain('<unknown>')
+      expect(markup).toContain('kept text')
+      expect(markup).toContain('<div>visible</div>')
+      expect(markup).toContain('<code>&lt;UUID&gt;</code>')
+    }
+  })
+})
+
 describe('SafeMarkdown file preview references', () => {
   it('keeps document headings at their native levels without changing the default message hierarchy', () => {
     const source = [
@@ -47,7 +87,8 @@ describe('SafeMarkdown file preview references', () => {
       mode: 'document'
     }))
 
-    expect(markup).toContain('<div class="markdown-table-scroll"><table>')
+    expect(markup).toContain('class="markdown-table-scroll" tabindex="0" role="region"')
+    expect(markup).toContain('aria-label="复制表格"')
     expect(markup).toContain('<th>项目</th>')
     expect(markup).toContain('<td>宽内容</td>')
   })
@@ -57,7 +98,8 @@ describe('SafeMarkdown file preview references', () => {
       onFileReference: () => undefined,
       children: [
         '[配置](config.toml) [代码](src/App.tsx:20) [原型](docs/prototype.html)',
-        '`config.toml` `src/App.tsx:20` `./docs/prototype.html` `/Users/name/Downloads/demo.html`'
+        '`config.toml` `src/App.tsx:20` `./docs/prototype.html` `/Users/name/Downloads/demo.html`',
+        '<div>[原样文字](hidden.md)</div>'
       ].join('\n\n')
     }))
 
@@ -71,6 +113,7 @@ describe('SafeMarkdown file preview references', () => {
     expect(markup).toContain('<code>./docs/prototype.html</code>')
     expect(markup).toContain('<code>/Users/name/Downloads/demo.html</code>')
     expect(markup).not.toContain('inline-code-file-reference')
+    expect(markup).toContain('<div>[原样文字](hidden.md)</div>')
   })
 
   it.each([
@@ -81,11 +124,16 @@ describe('SafeMarkdown file preview references', () => {
     ['inline code on both sides', '`前`[文件](docs/plan.md)`后`', true, true],
     ['text only before the link', '前[文件](docs/plan.md)，', true, false],
     ['text only after the link', '（[文件](docs/plan.md)后', false, true],
+    ['cleaned HTML before the link', '文</b>[文件](README.md)', true, false],
+    ['rendered HTML after the link', '[文件](README.md)<b>文', false, true],
     ['existing whitespace', '前 [文件](docs/plan.md) 后', false, false],
     ['punctuation', '（[文件](docs/plan.md)）。', false, false],
     ['a soft line break', '前\n[文件](docs/plan.md)\n后', false, false],
     ['paragraph boundaries', '前\n\n[文件](docs/plan.md)\n\n后', false, false],
-    ['emoji', '🙂[文件](docs/plan.md)🙂', false, false]
+    ['emoji', '🙂[文件](docs/plan.md)🙂', false, false],
+    ['HTML formatting', '<b>前</b>[文件](docs/plan.md)<i>后</i>', true, true],
+    ['removed script', '<script>hidden</script>[文件](docs/plan.md)', false, false],
+    ['HTML break', '前<br>[文件](docs/plan.md)<br/>后', false, false]
   ])('marks inline file-reference spacing for %s', (_label, source, marginInlineStart, marginInlineEnd) => {
     const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
       onFileReference: () => undefined,
@@ -97,6 +145,20 @@ describe('SafeMarkdown file preview references', () => {
     if (marginInlineStart && marginInlineEnd) {
       expect(markup.replace(/<[^>]*>/gu, '')).toBe(source.includes('A[') ? 'A文件9' : '前文件后')
     }
+  })
+
+  it.each([
+    ['文</b>[文件](README.md)', true, false],
+    ['[文件](README.md)<b>文', false, true]
+  ])('uses visible HTML text when spacing %s', (source, marginInlineStart, marginInlineEnd) => {
+    const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      onFileReference: () => undefined,
+            children: source
+    }))
+    const className = /<a class="([^"]*markdown-file-reference[^"]*)"/u.exec(markup)?.[1] ?? ''
+    expect(className.includes('has-adjacent-text-before')).toBe(marginInlineStart)
+    expect(className.includes('has-adjacent-text-after')).toBe(marginInlineEnd)
+    expect(markup).not.toContain('&lt;')
   })
 
   it('keeps spacing markers scoped to message file references', () => {
@@ -210,7 +272,7 @@ describe('SafeMarkdown trusted leading content', () => {
       inlineLeadingContent: false,
       children: '\n\n单独一段。'
     }))
-    expect(separated).toContain('<p><span class="trusted-prefix">@评审</span></p>\n<p>单独一段。</p>')
+    expect(separated).toContain('<p><span class="trusted-prefix">@评审</span></p><p>单独一段。</p>')
   })
 
   it('preserves reference definitions and does not accept a prefix marker from raw HTML', () => {
@@ -221,7 +283,17 @@ describe('SafeMarkdown trusted leading content', () => {
     expect(markup).toContain('<p><span class="trusted-prefix">@评审</span> 查看 <a class="markdown-web-reference" href="https://example.com/review"')
     expect(markup).toContain('<span class="resource-reference-label">说明</span>')
     expect(markup.match(/trusted-prefix/g)).toHaveLength(1)
-    expect(markup).not.toContain('forged')
-    expect(markup).not.toContain('data-rovai-leading-content')
+    expect(markup).toContain('<p>forged</p>')
+    expect(markup).not.toContain('<p data-rovai-leading-content')
+  })
+
+  it('keeps the prefix before text unwrapped by the sanitizer', () => {
+    const markup = renderToStaticMarkup(createElement(SafeMarkdown, {
+      leadingContent: prefix,
+      children: '<article>第一段</article>\n\n第二段'
+    }))
+    expect(markup.indexOf('@评审')).toBeLessThan(markup.indexOf('第一段'))
+    expect(markup).toContain('<p>第二段</p>')
+    expect(markup.match(/trusted-prefix/g)).toHaveLength(1)
   })
 })

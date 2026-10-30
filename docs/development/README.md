@@ -1,7 +1,7 @@
 ---
 document_type: development-index
 authority: development-routing
-last_updated: 2026-10-12
+last_updated: 2026-10-29
 ---
 
 # Rovai-ai 开发者指南
@@ -135,10 +135,20 @@ App，以受控本机 API 和时钟验证首帧画布、就绪交接与 authorit
 隔离 Electron 与 500 个合成 Run，验证视口范围、展开、隐藏／恢复、稳定终态停止轮询、
 迟到 Usage 和 Session Context 换代／失效；不启动 Core 或真实 Runtime。
 
+撤回消息重新编辑运行 `pnpm test:message-reedit-ui`：隔离 Chrome 使用正式存储模块、撤回适配器、
+ThreadWorkspace、Lexical 与 CSS，覆盖确认跨期、刷新／重启不续期、默认与显式 @、失败分离、
+历史预览和实际同源多窗口。只替换 transport，不启动 Core、日常 App 或真实 Runtime。
+`ROVAI_REEDIT_OUTPUT` 指定 HTML、截图与报告目录，默认 `docs/prototypes/withdraw-reedit-v4`；
+`ROVAI_TEST_CHROME` 指定浏览器。存储与回执边界另由 `message-reedit.test.ts` 覆盖。
+
 消息区队员占位运行 `pnpm test:run-presence-ui`：隔离 Chrome 挂载生产 ThreadWorkspace，覆盖消息顺序、
 流式单行、停止默认／悬浮色与确认、重试受理后暂缓调度期间切群／刷新、后继失败、执行台多次授权、丢失回执、草稿保留、双主题、三种桌面尺寸、200% 等效缩放及粗指针。`ROVAI_PRESENCE_UI_OUTPUT` 保留截图与报告；
-设置 `ROVAI_PRESENCE_REFERENCE_HTML` 可对照 User 确认的 v10 HTML 停止区分隔几何及排版；停止默认中性色、悬浮红色按后续 v8 修正单独验证。
+执行条验证覆盖浅灰完整单行、独立转圈、稳定中英文候选、可点击计时和整行悬浮停止色；其余界面保持生产组件。
 非默认 Chrome 路径使用 `ROVAI_TEST_CHROME`。夹具只持久化模拟服务端数据，不启动 Core 或模型；真实 SQLite 受理、重开及未领取窗口由既有 `user_continuation_preserves_source_and_claims_independent_fifo_batches` owner 覆盖。
+
+Markdown 表格复制运行 `node --test scripts/lib/markdown-table-copy.test.mjs`：隔离 Chrome 验证消息与文件预览的
+HTML／TSV、悬浮和键盘、失败重试、流式更新、宽表滚动与主题；`ROVAI_TABLE_COPY_OUTPUT` 可保留截图和报告，
+`ROVAI_TEST_CHROME` 可指定浏览器。夹具复用生产组件，不启动 Core 或 Runtime。
 
 记忆工作区运行 `pnpm test:memory-workspace-ui`：隔离 Chrome 挂载生产 MemoryLibrary、通知和导航组件，
 验证全部范围、精简布局、版本展开、通知查看/关闭、编辑草稿、失败/冲突重试、变更操作及双主题桌面/手机尺寸。
@@ -162,7 +172,7 @@ App，以受控本机 API 和时钟验证首帧画布、就绪交接与 authorit
 | 构建 Release Core、App、DMG，检查签名 | [macOS 构建与打包](packaging.md) |
 | 构建或验收 Windows x64 sidecar、NSIS、签名与升级 | [Windows x64 构建、打包与发布](packaging-windows.md) |
 | 使用隔离 `userData` 运行真实 App、截图或桌面验收 | [桌面 UI 验收](ui-acceptance.md) |
-| 为 Coding Agent 安装本地 Impeccable、更新设计上下文或维护 UI 文档分类 | [Coding Agent Impeccable 与 UI 文档工作流](coding-agent-impeccable-ui-workflow.md) |
+| 维护设计规则、页面 brief 或 Agent UI 工作流 | [Coding Agent UI 与设计文档工作流](coding-agent-impeccable-ui-workflow.md) |
 | 处理 Core、Runtime、Git、签名、测试卡住或 Rust `target/` 膨胀 | [常见问题排查](troubleshooting.md) |
 
 具体版本的页面矩阵、Schema 版本、Migration 路径和验收证据属于
@@ -201,10 +211,13 @@ App，以受控本机 API 和时钟验证首帧画布、就绪交接与 authorit
 | `out/` | Electron Vite 构建结果 |
 | `dist/` | macOS App/DMG、Windows unpacked/NSIS package、verifier 与安装验收输出 |
 
-不同 worktree 默认各自拥有这些生成目录。开发工作已完成时，应按
-[Worktree 清理流程](worktrees.md#工作收口与安全清理)删除整个 worktree；仍在开发的 worktree
-若只需处理 Rust 缓存异常，则按[常见问题排查](troubleshooting.md#target-占用异常增长或磁盘不足)
-选择性清理，不把每日 `cargo clean` 当作常规维护。
+不同 worktree 默认各自拥有这些生成目录。本地仅保留当前开发代码及活跃任务所需的构建产物。
+
+- 新版本验证通过后，清理不再使用的旧产物；任务合入或放弃后，按
+  [Worktree 清理流程](worktrees.md#工作收口与安全清理)移除对应工作区。
+- 活跃开发保留增量缓存；版本收尾或体积异常时按
+  [缓存排障流程](troubleshooting.md#target-占用异常增长或磁盘不足)清理，不在每次构建前执行 `cargo clean`。
+- 清理前停止相关进程；保留源码、Git 历史、必要验收记录和用户数据。
 
 Camp、运行、事件和审批数据位于 Electron `userData`。诊断中心和 v5 导出不再显示或输出绝对
 `userData` / SQLite 路径；需要制作数据库副本时，应从已退出的隔离验收环境或 Electron 开发日志取得精确位置，

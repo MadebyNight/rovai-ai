@@ -1,3 +1,4 @@
+import { validReferenceAtom, isReferenceAtom, projectReference } from './thread-reference'
 import type {
   ThreadComposerContinuationIntentView,
   ThreadComposerDraftView,
@@ -10,7 +11,7 @@ import type {
 const STORAGE_PREFIX = 'rovai.camp-composer-draft.v1:'
 const MAX_STORED_DRAFT_BYTES = 4 * 1024 * 1024
 const MAX_SEGMENTS = 4_096
-const MAX_ATTACHMENTS = 10
+export const MAX_LOCAL_COMPOSER_ATTACHMENTS = 10
 const MAX_QUOTES = 32
 
 type DraftStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
@@ -39,6 +40,7 @@ function isComposerDocument(value: unknown): value is ComposerDocument {
     if (!object(segment)) return false
     if (segment.kind === 'text') return string(segment.text)
     if (segment.kind !== 'atom' || !object(segment.atom)) return false
+    if (segment.atom.type === 'thread_reference' || segment.atom.type === 'mission_reference') return validReferenceAtom(segment.atom)
     if (segment.atom.type === 'all_members') return true
     if (segment.atom.type === 'member') {
       return string(segment.atom.agentId, 512)
@@ -52,15 +54,13 @@ function isComposerDocument(value: unknown): value is ComposerDocument {
 
 function isQuote(value: unknown): value is MessageQuoteSnapshot {
   if (!object(value) || value.version !== 1 || !string(value.quoteId, 512)
-    || !object(value.source) || !string(value.source.campId, 512)
-    || !string(value.source.messageId, 512)
-    || (value.source.scope !== 'camp' && value.source.scope !== 'single_chat')
-    || !object(value.authorAtCapture) || !string(value.authorAtCapture.displayName, 512)
-    || (value.authorAtCapture.type !== 'user' && value.authorAtCapture.type !== 'agent')
-    || !string(value.text) || value.format !== 'plain_text'
-    || !string(value.capturedAt, 128) || !string(value.sourceContentDigest, 512)
-    || !string(value.snapshotDigest, 512)) return false
-  return value.authorAtCapture.type !== 'agent' || string(value.authorAtCapture.agentId, 512)
+    || !string(value.text) || value.format !== 'plain_text' || !string(value.capturedAt, 128)) return false
+  // Source labels are optional navigation hints, never a reason to lose saved text.
+  if (value.source !== undefined && (!object(value.source) || !string(value.source.messageId, 512)
+    || !string(value.source.campId, 512) || !['camp', 'single_chat'].includes(String(value.source.scope)))) delete value.source
+  if (value.authorAtCapture !== undefined && (!object(value.authorAtCapture) || !string(value.authorAtCapture.displayName, 512)
+    || !['user', 'agent'].includes(String(value.authorAtCapture.type)))) delete value.authorAtCapture
+  return true
 }
 
 function isAttachment(value: unknown): value is ThreadMessageAttachmentView {
@@ -74,6 +74,8 @@ function isAttachment(value: unknown): value is ThreadMessageAttachmentView {
     && (value.previewKind === 'image' || value.previewKind === 'none')
     && ['unknown', 'available', 'missing', 'unreadable', 'kind_changed'].includes(String(value.availability))
     && (value.sourcePath === undefined || string(value.sourcePath, 16_384))
+    && (value.pastedTextPreview === undefined || (typeof value.pastedTextPreview === 'string'
+      && Array.from(value.pastedTextPreview).length <= 160))
 }
 
 function isReplyIntent(value: unknown): boolean {
@@ -113,7 +115,7 @@ function isStoredDraft(value: unknown, threadId: string): value is ThreadCompose
     && value.quotes.length <= MAX_QUOTES
     && value.quotes.every(isQuote)
     && Array.isArray(value.attachments)
-    && value.attachments.length <= MAX_ATTACHMENTS
+    && value.attachments.length <= MAX_LOCAL_COMPOSER_ATTACHMENTS
     && value.attachments.every(isAttachment)
     && isReplyIntent(value.replyIntent)
     && isContinuationIntent(value.continuationIntent)
@@ -214,6 +216,7 @@ export function composerBodyForContent(
     const atom = segment.atom
     if (atom.type === 'all_members') return '@所有成员'
     if (atom.type === 'skill') return `$${atom.nameAtSend}`
+    if (isReferenceAtom(atom)) return projectReference(atom)
     return `@${members.find((member) => member.agentId === atom.agentId)?.displayName
       ?? atom.labelFallback
       ?? atom.agentId}`

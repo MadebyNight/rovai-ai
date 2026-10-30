@@ -12,8 +12,11 @@ use std::{
 
 #[cfg(unix)]
 use std::{
-    io::Read,
-    os::unix::{fs::PermissionsExt, process::CommandExt},
+    io::{self, Read},
+    os::{
+        fd::AsRawFd,
+        unix::{fs::PermissionsExt, process::CommandExt},
+    },
     process::Command,
     thread,
 };
@@ -330,14 +333,14 @@ impl RuntimeSearchEnvironment {
     }
 
     pub fn capture_initial() -> Self {
-        Self::capture(1, false)
+        Self::rescan(1)
     }
 
-    pub fn rescan(generation: u64, interactive: bool) -> Self {
-        Self::capture(generation.max(1), interactive)
+    pub fn rescan(generation: u64) -> Self {
+        Self::capture(generation.max(1))
     }
 
-    fn capture(generation: u64, interactive: bool) -> Self {
+    fn capture(generation: u64) -> Self {
         let mut diagnostic_codes = Vec::new();
         let mut entries = Vec::new();
         if let Some(inherited) = env::var_os("PATH") {
@@ -367,7 +370,7 @@ impl RuntimeSearchEnvironment {
         }
 
         let shell_start = Instant::now();
-        let (shell_status, shell_name, shell_paths) = capture_shell_path(interactive);
+        let (shell_status, shell_name, shell_paths) = capture_shell_path();
         #[cfg(unix)]
         if shell_status != ShellPathStatus::Captured {
             diagnostic_codes.push("runtime_shell_path_capture_incomplete");
@@ -406,7 +409,7 @@ impl RuntimeSearchEnvironment {
             created_at: chrono::Utc::now().to_rfc3339(),
             shell_diagnostic: ShellPathDiagnostic {
                 status: shell_status,
-                interactive,
+                interactive: cfg!(unix),
                 shell_name,
                 entry_count: shell_entry_count,
                 elapsed_millis: shell_start.elapsed().as_millis(),
@@ -470,6 +473,7 @@ impl RuntimeSearchEnvironment {
     pub fn configure_tokio_command(&self, kind: AdapterKind, command: &mut TokioCommand) {
         command.env("PATH", &self.path_value);
         if let Some(configuration) = self.startup_configurations.get(&kind) {
+            apply_common_routing(kind, configuration, command);
             command.envs(
                 configuration
                     .environment
@@ -748,7 +752,8 @@ pub fn configure_active_runtime_command(command: &mut TokioCommand) {
     }
 
     configure_runtime_path(command);
-    let _ = SCOPED_RUNTIME_ENVIRONMENT.try_with(|(_, configuration)| {
+    let _ = SCOPED_RUNTIME_ENVIRONMENT.try_with(|(kind, configuration)| {
+        apply_common_routing(*kind, configuration, command);
         command.envs(
             configuration
                 .environment
@@ -774,10 +779,30 @@ fn effective_startup_configuration(
         })
 }
 
+pub fn ensure_runtime_environment_available(kind: AdapterKind) -> Result<()> {
+    // A member's captured launch map has already resolved its inheritance. An
+    // independent member must not depend on the shared credential record.
+    if LAUNCH_ENVIRONMENT
+        .try_with(|snapshot| {
+            snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.values.is_some())
+        })
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    if let Some(configuration) = effective_startup_configuration(kind) {
+        configuration.ensure_environment_available()?;
+    }
+    Ok(())
+}
+
 /// Only native checks use the current scoped configuration. Executions use their frozen snapshot.
 pub fn custom_api_snapshot(
     kind: AdapterKind,
 ) -> anyhow::Result<Option<crate::runtime_custom_api::CustomApiSnapshot>> {
+    ensure_runtime_environment_available(kind)?;
     let Some(configuration) = effective_startup_configuration(kind) else {
         return Ok(None);
     };
@@ -878,6 +903,24 @@ pub fn capture_host_runtime_environment() -> BTreeMap<String, String> {
     values
 }
 
+fn apply_common_routing(
+    kind: AdapterKind,
+    configuration: &crate::runtime_startup::RuntimeStartupConfiguration,
+    command: &mut TokioCommand,
+) {
+    if kind == AdapterKind::ClaudeCodeCli
+        && crate::member_environment::claude_routing_override(
+            &configuration
+                .environment
+                .iter()
+                .map(|entry| (entry.name.clone(), entry.value.clone()))
+                .collect(),
+        )
+    {
+        command.env("CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST", "1");
+    }
+}
+
 pub fn configure_runtime_command(kind: AdapterKind, command: &mut TokioCommand) {
     if LAUNCH_ENVIRONMENT
         .try_with(|snapshot| {
@@ -898,6 +941,7 @@ pub fn configure_runtime_command(kind: AdapterKind, command: &mut TokioCommand) 
 
     configure_runtime_path(command);
     if let Some(configuration) = effective_startup_configuration(kind) {
+        apply_common_routing(kind, &configuration, command);
         command.envs(
             configuration
                 .environment
@@ -1040,6 +1084,15 @@ pub async fn discover_runtime_version(
     observation: &mut RuntimeDiscoveryObservation,
     search: &RuntimeSearchEnvironment,
 ) {
+    if search
+        .startup_configuration(observation.runtime_kind)
+        .ensure_environment_available()
+        .is_err()
+    {
+        observation.version_probe_succeeded = Some(false);
+        observation.diagnostic_code = Some("runtime_common_environment_unavailable".into());
+        return;
+    }
     with_runtime_configuration(
         observation.runtime_kind,
         search,
@@ -1224,6 +1277,7 @@ fn version_arguments(kind: AdapterKind) -> &'static [&'static str] {
 fn version_timeout(kind: AdapterKind) -> Duration {
     match kind {
         AdapterKind::CodebuddyCli => CODEBUDDY_VERSION_TIMEOUT,
+        AdapterKind::HermesCli => Duration::from_secs(20),
         // Pi's packaged JavaScript entrypoint may need a cold Node startup before it can
         // answer `--version`. Keep the bounded probe, but do not apply the native-binary
         // deadline to this runtime.
@@ -1299,7 +1353,7 @@ async fn bounded_version_command(
 }
 
 #[cfg(unix)]
-fn capture_shell_path(interactive: bool) -> (ShellPathStatus, Option<String>, Vec<PathBuf>) {
+fn capture_shell_path() -> (ShellPathStatus, Option<String>, Vec<PathBuf>) {
     let Some(shell) = env::var_os("SHELL").filter(|value| !value.is_empty()) else {
         return (ShellPathStatus::Unavailable, None, Vec::new());
     };
@@ -1313,18 +1367,17 @@ fn capture_shell_path(interactive: bool) -> (ShellPathStatus, Option<String>, Ve
             Vec::new(),
         );
     }
-    capture_shell_path_from(&shell_path, interactive, SHELL_PATH_TIMEOUT)
+    capture_shell_path_from(&shell_path, SHELL_PATH_TIMEOUT)
 }
 
 #[cfg(not(unix))]
-fn capture_shell_path(_interactive: bool) -> (ShellPathStatus, Option<String>, Vec<PathBuf>) {
+fn capture_shell_path() -> (ShellPathStatus, Option<String>, Vec<PathBuf>) {
     (ShellPathStatus::Unavailable, None, Vec::new())
 }
 
 #[cfg(unix)]
 fn capture_shell_path_from(
     shell_path: &Path,
-    interactive: bool,
     timeout: Duration,
 ) -> (ShellPathStatus, Option<String>, Vec<PathBuf>) {
     let shell_name = shell_path
@@ -1334,64 +1387,81 @@ fn capture_shell_path_from(
     let script = format!("printf '%s\\n%s\\n%s\\n' '{marker}' \"$PATH\" '{marker}'");
     let mut command = Command::new(shell_path);
     command
-        .arg(if interactive { "-ilc" } else { "-lc" })
+        .arg("-ilc")
         .arg(script)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .process_group(0);
+    let deadline = Instant::now() + timeout;
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(_) => return (ShellPathStatus::Failed, shell_name, Vec::new()),
     };
-    let stdout = child.stdout.take();
-    let reader = stdout.map(|stdout| {
-        thread::spawn(move || {
-            let mut output = Vec::new();
-            let result = stdout
-                .take(MAX_SHELL_PATH_BYTES + 1)
-                .read_to_end(&mut output);
-            (result, output)
-        })
-    });
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
-            Ok(None) => {
-                let pid = child.id();
-                // SAFETY: pid identifies only the child process group created immediately above.
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGKILL);
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(reader) = reader {
-                    let _ = reader.join();
-                }
-                return (ShellPathStatus::TimedOut, shell_name, Vec::new());
+    let capture = (|| {
+        let mut stdout = child.stdout.take().ok_or(ShellPathStatus::Failed)?;
+        let fd = stdout.as_raw_fd();
+        // SAFETY: stdout owns this live pipe descriptor throughout the capture.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1
+        {
+            return Err(ShellPathStatus::Failed);
+        }
+        let mut output = Vec::new();
+        let mut buffer = [0; 4096];
+        let mut stdout_closed = false;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(ShellPathStatus::TimedOut);
             }
-            Err(_) => {
-                if let Some(reader) = reader {
-                    let _ = reader.join();
-                }
-                return (ShellPathStatus::Failed, shell_name, Vec::new());
+            let status = child.try_wait().map_err(|_| ShellPathStatus::Failed)?;
+            if status.is_some_and(|status| !status.success()) {
+                return Err(ShellPathStatus::Failed);
             }
+            if !stdout_closed {
+                match stdout.read(&mut buffer) {
+                    Ok(0) => stdout_closed = true,
+                    Ok(count) => {
+                        output.extend_from_slice(&buffer[..count]);
+                        if output.len() as u64 > MAX_SHELL_PATH_BYTES {
+                            return Err(ShellPathStatus::Failed);
+                        }
+                        continue;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => return Err(ShellPathStatus::Failed),
+                }
+            }
+            // A successful shell can leave a background job holding stdout. Both the
+            // shell exit and EOF must arrive within the same capture deadline.
+            if stdout_closed && status.is_some() {
+                return Ok(output);
+            }
+            thread::sleep(
+                Duration::from_millis(20).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    })();
+    let output = match capture {
+        Ok(output) => output,
+        Err(status) => {
+            // The capture scope has already closed stdout; cleanup must not wait for
+            // inherited writers or add another blocking wait after the deadline.
+            let pid = child.id();
+            // SAFETY: pid is the process group created for this shell capture.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            let _ = child.kill();
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            return (status, shell_name, Vec::new());
         }
     };
-    let Some(reader) = reader else {
-        return (ShellPathStatus::Failed, shell_name, Vec::new());
-    };
-    let Ok((read_result, output)) = reader.join() else {
-        return (ShellPathStatus::Failed, shell_name, Vec::new());
-    };
-    if !status.is_some_and(|status| status.success()) {
-        return (ShellPathStatus::Failed, shell_name, Vec::new());
-    }
-    if read_result.is_err() || output.len() as u64 > MAX_SHELL_PATH_BYTES {
-        return (ShellPathStatus::Failed, shell_name, Vec::new());
-    }
     let text = String::from_utf8_lossy(&output);
     let mut lines = text.lines();
     let Some(start) = lines.position(|line| line == marker) else {
@@ -2095,6 +2165,7 @@ mod tests {
             AdapterKind::CodexCli,
             crate::runtime_startup::RuntimeStartupConfiguration {
                 custom_api_snapshot: None,
+                common_environment_unavailable: false,
                 program_path: Some(
                     directory
                         .join("manual/codex")
@@ -2130,16 +2201,68 @@ mod tests {
     }
 
     #[test]
-    fn shell_path_capture_times_out_and_terminates_its_process_group() {
+    fn shell_path_capture_uses_interactive_login_and_bounds_failures() {
         let directory = env::temp_dir().join(format!("rovai-shell-timeout-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
-        let shell = directory.join("slow-shell");
+        let shell = directory.join("fixture-shell");
+        let tools = directory.join("tools with spaces");
+        fs::create_dir_all(&tools).unwrap();
+        executable(
+            &shell,
+            &format!(
+                "#!/bin/sh\n[ \"$1\" = '-ilc' ] || exit 1\nprintf 'shell startup output\\n'\nexport PATH='{}'\nexec /bin/sh -c \"$2\"\n",
+                tools.display()
+            ),
+        );
+        let (status, _, paths) = capture_shell_path_from(&shell, Duration::from_secs(1));
+        assert_eq!(status, ShellPathStatus::Captured);
+        assert_eq!(paths, vec![tools]);
+
+        for script in [
+            "#!/bin/sh\nprintf 'incomplete shell output\\n'\nexit 1\n".to_owned(),
+            "#!/bin/sh\nprintf 'incomplete shell output\\n'\n".to_owned(),
+            format!(
+                "#!/bin/sh\nprintf '%s' '{}'\nexec /bin/sh -c \"$2\"\n",
+                "x".repeat(MAX_SHELL_PATH_BYTES as usize + 1)
+            ),
+        ] {
+            executable(&shell, &script);
+            let (status, _, paths) = capture_shell_path_from(&shell, Duration::from_secs(1));
+            assert_eq!(status, ShellPathStatus::Failed);
+            assert!(
+                paths.is_empty(),
+                "failed capture leaves inherited/known PATH fallback intact"
+            );
+        }
+
         executable(&shell, "#!/bin/sh\nsleep 30\n");
         let started = Instant::now();
-        let (status, _, paths) = capture_shell_path_from(&shell, false, Duration::from_millis(100));
+        let (status, _, paths) = capture_shell_path_from(&shell, Duration::from_millis(100));
         assert_eq!(status, ShellPathStatus::TimedOut);
         assert!(paths.is_empty());
         assert!(started.elapsed() < Duration::from_secs(2));
+
+        // An exited shell's background job must not prolong output or failure cleanup.
+        for (script, expected) in [
+            (
+                "#!/bin/sh\n/bin/sleep 3 &\nexec /bin/sh -c \"$2\"\n",
+                ShellPathStatus::TimedOut,
+            ),
+            (
+                "#!/bin/sh\n/bin/sleep 3 &\nexit 1\n",
+                ShellPathStatus::Failed,
+            ),
+        ] {
+            executable(&shell, script);
+            let started = Instant::now();
+            let (status, _, paths) = capture_shell_path_from(&shell, Duration::from_millis(100));
+            assert_eq!(status, expected);
+            assert!(
+                paths.is_empty(),
+                "incomplete output must use the PATH fallback"
+            );
+            assert!(started.elapsed() < Duration::from_secs(2));
+        }
         fs::remove_dir_all(directory).unwrap();
     }
 

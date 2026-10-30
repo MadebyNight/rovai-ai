@@ -52,7 +52,7 @@ const STATUS_LABELS: Record<RuntimeUserStatus, string> = {
   unconfigured: '未配置智能体',
   checking: '正在检查…',
   available: '可用',
-  authentication_required: '需要登录',
+  authentication_required: '认证未通过',
   not_installed: '未检测到',
   version_unsupported: '版本不支持',
   unavailable: '不可用',
@@ -105,7 +105,7 @@ export function runtimeAvailabilityPresentation(
     case 'authentication_required':
       return presentation(
         'authentication_required',
-        publicFailureDetail(availability, uiAttribute('请先完成该智能体的登录。'))
+        publicFailureDetail(availability, uiAttribute('请检查该智能体的登录状态或凭据配置。'))
       )
     case 'needs_attention':
       return {
@@ -146,7 +146,7 @@ export function runtimePlatformAdmissionFor(
 export function runtimePlatformAdmissionAllowsUse(
   admission: RuntimePlatformAdmission | null
 ): boolean {
-  return admission?.status === 'qualified' || admission?.status === 'preview'
+  return admission?.status === 'enabled' || admission?.status === 'qualified' || admission?.status === 'preview'
 }
 
 export function runtimeProductPresentation(
@@ -172,15 +172,7 @@ export function runtimeProductPresentation(
   if (admission.status === 'unsupported') {
     return presentation('unsupported', uiAttribute('该智能体不支持当前平台。'))
   }
-  const availabilityPresentation = runtimeAvailabilityPresentation(availability, pending)
-  if (admission.status !== 'preview') return availabilityPresentation
-  const previewDetail = uiAttribute('当前平台已开放使用，完整的平台资格验证记录尚未齐备。')
-  return {
-    ...availabilityPresentation,
-    detail: availabilityPresentation.detail
-      ? `${previewDetail}\n${availabilityPresentation.detail}`
-      : previewDetail
-  }
+  return runtimeAvailabilityPresentation(availability, pending)
 }
 
 export function memberRuntimePresentation(
@@ -227,7 +219,7 @@ export function memberRuntimePresentation(
 
   const blockerCodes = new Set(agent.runtimeReadiness.blockers.map((blocker) => blocker.code))
   if (blockerCodes.has('runtime_authentication_required')) {
-    return presentation('authentication_required', uiAttribute('请先完成该智能体的登录。'))
+    return presentation('authentication_required', uiAttribute('请检查该智能体的登录状态或凭据配置。'))
   }
 
   if (agent.runtimeReadiness.status === 'needs_attention') {

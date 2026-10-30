@@ -502,7 +502,7 @@ pub(super) fn spawn(spec: &ManagedProcessLaunchSpec) -> Result<WindowsManagedPro
     let pid = read_ready(&parent_out, process)?;
     Ok(WindowsManagedProcess {
         process: pending.0.take().unwrap(),
-        job,
+        job: Some(job),
         job_name,
         pid,
         stdin: if request.piped_stdin {
@@ -856,13 +856,13 @@ fn run_helper() -> Result<u32> {
         let status = match status {
             Some(status) => status,
             None => {
-                child.terminate_job()?;
+                child.terminate_owned_processes()?;
                 tokio::time::timeout(Duration::from_secs(5), child.wait())
                     .await
                     .context("account helper relay cleanup timed out")??
             }
         };
-        child.terminate_job()?;
+        child.terminate_owned_processes()?;
         let cleanup_deadline = Instant::now() + Duration::from_secs(5);
         while !child.tree_is_empty()? {
             anyhow::ensure!(

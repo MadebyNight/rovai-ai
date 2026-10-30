@@ -309,7 +309,7 @@ pub struct BindNativeSessionCommand {
     pub proposed_binding_id: Option<String>,
     pub adapter_installation_id: String,
     pub native_session_id: String,
-    pub binding_compatibility_digest: String,
+    pub binding_compatibility_digest: Option<String>,
 }
 
 impl sealed::Sealed for BindNativeSessionCommand {}
@@ -747,8 +747,8 @@ fn validate_frozen_runtime_columns(
         && capabilities.as_ref() == Some(&runtime.capabilities)
         && model.as_ref() == Some(&runtime.model)
         && permissions.as_ref() == Some(&runtime.permissions)
-        && binding_digest == Some(runtime.binding_compatibility_digest.as_str())
-        && host_digest == Some(runtime.host_config_digest.as_str())
+        && binding_digest == runtime.binding_compatibility_digest.as_deref()
+        && host_digest == runtime.host_config_digest.as_deref()
         && protocol_version == Some(runtime.protocol_version.as_str())
         && native_session_compatibility_key == runtime.native_session_compatibility_key.as_deref();
     if !consistent {
@@ -757,22 +757,56 @@ fn validate_frozen_runtime_columns(
     Ok(())
 }
 
+pub(crate) enum RuntimeCleanupScope<'a> {
+    Conversation(&'a str, Option<&'a str>),
+    Camp(&'a str),
+    ExecutionRoot(&'a str),
+}
+
+/// Only a precisely owned execution in this Core can make a missing cleanup
+/// acknowledgement block new work. Historical uncertainty is not ownership.
+/// Callers take the existing launch/Fleet/one-shot snapshot under the database
+/// lock; no historical records or OS process queries belong in this read path.
 pub(crate) fn runtime_cleanup_blocked_since_connection(
     connection: &Connection,
-    conversation_id: &str,
-    excluded_agent_run_id: Option<&str>,
+    active_executions: &[crate::planned_shutdown::ActiveExecutionKey],
+    scope: RuntimeCleanupScope<'_>,
 ) -> Result<Option<String>> {
+    if active_executions.is_empty() {
+        return Ok(None);
+    }
+    let executions = serde_json::to_string(
+        &active_executions
+            .iter()
+            .map(|key| (&key.agent_run_id, key.execution_epoch))
+            .collect::<Vec<_>>(),
+    )?;
+    let (conversation, camp, root, excluded) = match scope {
+        RuntimeCleanupScope::Conversation(id, excluded) => (Some(id), None, None, excluded),
+        RuntimeCleanupScope::Camp(id) => (None, Some(id), None, None),
+        RuntimeCleanupScope::ExecutionRoot(root) => (None, None, Some(root), None),
+    };
     Ok(connection.query_row(
         r#"
-        SELECT MIN(cancel_requested_at)
-        FROM agent_run
-        WHERE conversation_id = ?1
-          AND (?2 IS NULL OR id <> ?2)
-          AND cancel_requested_at IS NOT NULL
-          AND cancel_acknowledged_at IS NULL
-          AND status IN ('succeeded', 'failed', 'cancelled')
+        SELECT MIN(run.cancel_requested_at)
+        FROM json_each(?1) AS owned
+        JOIN agent_run AS run
+          ON run.id = json_extract(owned.value, '$[0]')
+         AND run.execution_epoch = json_extract(owned.value, '$[1]')
+        JOIN conversation ON conversation.id = run.conversation_id
+        LEFT JOIN camp_turn ON camp_turn.id = run.camp_turn_id
+        LEFT JOIN camp ON camp.id = COALESCE(run.camp_id, camp_turn.camp_id, conversation.camp_id)
+        WHERE run.cancel_requested_at IS NOT NULL
+          AND run.cancel_acknowledged_at IS NULL
+          AND run.status IN ('succeeded', 'failed', 'cancelled')
+          AND (?5 IS NULL OR run.id <> ?5)
+          AND ((?2 IS NOT NULL AND run.conversation_id = ?2)
+            OR (?3 IS NOT NULL AND camp.id = ?3)
+            OR (?4 IS NOT NULL AND COALESCE(
+                json_extract(run.workspace_json, '$.executionRoot'), camp.project_path
+            ) = ?4))
         "#,
-        params![conversation_id, excluded_agent_run_id],
+        params![executions, conversation, camp, root, excluded],
         |row| row.get(0),
     )?)
 }
@@ -1308,6 +1342,7 @@ impl ExecutionRuntimeService {
         &self,
         database: &Database,
         camp_id: &str,
+        active_executions: &[crate::planned_shutdown::ActiveExecutionKey],
     ) -> Result<Vec<ThreadRuntimeCleanupTarget>> {
         let mut statement = database.connection().prepare(
             r#"
@@ -1350,6 +1385,11 @@ impl ExecutionRuntimeService {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows
             .into_iter()
+            .filter(|(run_id, epoch, _)| {
+                active_executions
+                    .iter()
+                    .any(|key| key.agent_run_id == *run_id && key.execution_epoch == *epoch)
+            })
             .filter_map(|(agent_run_id, execution_epoch, adapter_kind)| {
                 Some(ThreadRuntimeCleanupTarget {
                     agent_run_id,
@@ -1365,7 +1405,7 @@ impl ExecutionRuntimeService {
         database: &Database,
         limit: i64,
     ) -> Result<Vec<AgentRunCancellationCandidate>> {
-        self.list_cancellation_candidates_page(database, limit, 0)
+        self.list_cancellation_candidates_page(database, limit, 0, None)
     }
 
     pub(crate) fn list_cancellation_candidates_page(
@@ -1373,10 +1413,24 @@ impl ExecutionRuntimeService {
         database: &Database,
         limit: i64,
         offset: i64,
+        active_executions: Option<&[crate::planned_shutdown::ActiveExecutionKey]>,
     ) -> Result<Vec<AgentRunCancellationCandidate>> {
         if !(1..=100).contains(&limit) {
             anyhow::bail!("AgentRun cancellation limit must be between 1 and 100");
         }
+        if active_executions.is_some_and(|keys| keys.is_empty()) {
+            return Ok(Vec::new());
+        }
+        let active_executions = active_executions
+            .map(|keys| {
+                serde_json::to_string(
+                    &keys
+                        .iter()
+                        .map(|key| (&key.agent_run_id, key.execution_epoch))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .transpose()?;
         let mut statement = database.connection().prepare(
             r#"
             SELECT agent_run.id, COALESCE(agent_run.camp_id, camp_turn.camp_id),
@@ -1394,12 +1448,17 @@ impl ExecutionRuntimeService {
             WHERE agent_run.cancel_requested_at IS NOT NULL
               AND agent_run.cancel_acknowledged_at IS NULL
               AND agent_run.status IN ('succeeded', 'failed', 'cancelled')
+              AND (?3 IS NULL OR EXISTS (
+                  SELECT 1 FROM json_each(?3) AS owned
+                  WHERE agent_run.id = json_extract(owned.value, '$[0]')
+                    AND agent_run.execution_epoch = json_extract(owned.value, '$[1]')
+              ))
             ORDER BY agent_run.updated_at, agent_run.id
             LIMIT ?1 OFFSET ?2
             "#,
         )?;
         Ok(statement
-            .query_map([limit, offset], |row| {
+            .query_map(params![limit, offset, active_executions], |row| {
                 Ok(AgentRunCancellationCandidate {
                     agent_run_id: row.get(0)?,
                     camp_id: row.get(1)?,
@@ -2970,11 +3029,12 @@ impl ExecutionRuntimeService {
         database: &Database,
         conversation_id: &str,
         agent_run_id: &str,
+        active_executions: &[crate::planned_shutdown::ActiveExecutionKey],
     ) -> Result<Option<String>> {
         runtime_cleanup_blocked_since_connection(
             database.connection(),
-            conversation_id,
-            Some(agent_run_id),
+            active_executions,
+            RuntimeCleanupScope::Conversation(conversation_id, Some(agent_run_id)),
         )
     }
 
@@ -3144,8 +3204,8 @@ impl ExecutionRuntimeService {
             || envelope
                 .payload
                 .binding_compatibility_digest
-                .trim()
-                .is_empty()
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
         {
             anyhow::bail!("Native Binding fields must not be empty");
         }
@@ -3180,7 +3240,8 @@ impl ExecutionRuntimeService {
                            agent_run.status, agent_run.runtime_installation_id,
                            agent_run.runtime_binding_compatibility_digest,
                            agent_run.runtime_installation_generation,
-                           agent_run.runtime_native_session_compatibility_key
+                           agent_run.runtime_native_session_compatibility_key,
+                           agent_run.runtime_adapter_kind
                     FROM conversation
                     JOIN agent_run ON agent_run.conversation_id = conversation.id
                     LEFT JOIN camp_turn ON camp_turn.id = agent_run.camp_turn_id
@@ -3220,6 +3281,7 @@ impl ExecutionRuntimeService {
                             row.get::<_, Option<String>>(12)?,
                             row.get::<_, Option<i64>>(13)?,
                             row.get::<_, Option<String>>(14)?,
+                            row.get::<_, String>(15)?,
                         ))
                     },
                 )
@@ -3240,6 +3302,7 @@ impl ExecutionRuntimeService {
                 frozen_digest,
                 frozen_installation_generation,
                 frozen_session_compatibility_key,
+                kind,
             )) = row
             else {
                 return Ok(rejected(
@@ -3257,10 +3320,13 @@ impl ExecutionRuntimeService {
                     "Conversation or AgentRun binding is stale",
                 ));
             }
+            let identity_binding = matches!(kind.as_str(), "command-code-cli" | "hermes-cli");
+            if !identity_binding && envelope.payload.binding_compatibility_digest.is_none() {
+                return Ok(rejected("runtime.binding_configuration_mismatch", "Native Binding compatibility digest missing"));
+            }
             if frozen_installation.as_deref()
                 != Some(envelope.payload.adapter_installation_id.as_str())
-                || frozen_digest.as_deref()
-                    != Some(envelope.payload.binding_compatibility_digest.as_str())
+                || (!identity_binding && frozen_digest != envelope.payload.binding_compatibility_digest)
                 || frozen_installation_generation.is_none()
             {
                 return Ok(rejected(
@@ -3270,7 +3336,7 @@ impl ExecutionRuntimeService {
             }
             if current_installation != envelope.payload.previous_adapter_installation_id
                 || current_session != envelope.payload.previous_native_session_id
-                || current_digest != envelope.payload.previous_binding_compatibility_digest
+                || (!identity_binding && current_digest != envelope.payload.previous_binding_compatibility_digest)
             {
                 return Ok(rejected(
                     "runtime.session_changed",
@@ -3282,20 +3348,15 @@ impl ExecutionRuntimeService {
             let native_session_replaced = if current_session.as_deref()
                 .is_some_and(|old| old != envelope.payload.native_session_id)
             {
-                let kind: String = transaction.query_row(
-                    "SELECT runtime_adapter_kind FROM agent_run WHERE id=?1",
-                    [&envelope.payload.agent_run_id], |row| row.get(0),
-                )?;
                 native_session_adapter_kind(transaction, &envelope.payload.conversation_id)?
                     == Some(kind.parse()?)
             } else { false };
             let binding_reused = current_binding_id.is_some()
                 && current_binding_generation >= 1
-                && current_installation.as_deref()
-                    == Some(envelope.payload.adapter_installation_id.as_str())
+                && (identity_binding || current_installation.as_deref()
+                    == Some(envelope.payload.adapter_installation_id.as_str()))
                 && current_session.as_deref() == Some(envelope.payload.native_session_id.as_str())
-                && current_digest.as_deref()
-                    == Some(envelope.payload.binding_compatibility_digest.as_str());
+                && (identity_binding || current_digest == envelope.payload.binding_compatibility_digest);
             let binding_prepared = current_binding_id.is_some()
                 && current_binding_generation >= 1
                 && envelope.payload.proposed_binding_id.as_deref() == current_binding_id.as_deref();
@@ -3383,7 +3444,7 @@ impl ExecutionRuntimeService {
                         WHERE id = ?1 AND version = ?8
                           AND native_adapter_installation_id IS ?9
                           AND native_session_id IS ?10
-                          AND native_binding_compatibility_digest IS ?11
+                          AND (?14 OR native_binding_compatibility_digest IS ?11)
                         "#,
                         params![
                             envelope.payload.conversation_id,
@@ -3399,6 +3460,7 @@ impl ExecutionRuntimeService {
                             envelope.payload.previous_binding_compatibility_digest,
                             frozen_installation_generation,
                             frozen_session_compatibility_key,
+                            identity_binding,
                         ],
                     )?
                 };
@@ -3408,9 +3470,9 @@ impl ExecutionRuntimeService {
                         "Conversation changed before Native Session binding",
                     ));
                 }
-            } else if current_installation_generation
+            } else if !identity_binding && (current_installation_generation
                 != Some(frozen_installation_generation)
-                || current_session_compatibility_key != frozen_session_compatibility_key
+                || current_session_compatibility_key != frozen_session_compatibility_key)
             {
                 let updated = transaction.execute(
                     r#"
@@ -7544,8 +7606,8 @@ mod tests {
                     values: json!({}),
                 },
                 native_session_compatibility_key: current_key.map(str::to_string),
-                binding_compatibility_digest: "binding-stable".to_string(),
-                host_config_digest: "host-current".to_string(),
+                binding_compatibility_digest: Some("binding-stable".to_string()),
+                host_config_digest: Some("host-current".to_string()),
                 config_digest: "config-current".to_string(),
             },
             workspace: AgentRunWorkspace::runtime_managed_path("/tmp".to_string()),
@@ -7555,26 +7617,32 @@ mod tests {
 
     #[test]
     fn resume_uses_cli_type_and_current_target_instead_of_configuration() {
-        for (old_key, new_key) in [
-            (None, None),
-            (None, Some("new")),
-            (Some("old"), None),
-            (Some("old"), Some("new")),
-        ] {
-            let mut execution = resume_execution(old_key, new_key, 1, 9);
-            execution.runtime.installation_id = "reinstalled-cli".into();
-            execution.runtime.binding_compatibility_digest =
-                "different-context-and-permissions".into();
-            execution.runtime.executable_fingerprint = "new-binary".into();
-            assert_eq!(
-                execution.resumable_native_session_id(),
-                Some("session-existing")
-            );
-            execution.runtime.adapter_kind = AdapterKind::ClaudeCodeCli;
-            assert_eq!(execution.resumable_native_session_id(), None);
-            execution.runtime.adapter_kind = AdapterKind::CodexCli;
-            execution.native_session_id = None;
-            assert_eq!(execution.resumable_native_session_id(), None);
+        for adapter in [AdapterKind::CodexCli, AdapterKind::HermesCli] {
+            for (old_key, new_key) in [
+                (None, None),
+                (None, Some("new")),
+                (Some("old"), None),
+                (Some("old"), Some("new")),
+            ] {
+                let mut execution = resume_execution(old_key, new_key, 1, 9);
+                execution.native_adapter_kind = Some(adapter);
+                execution.runtime.adapter_kind = adapter;
+                execution.runtime.installation_id = "reinstalled-cli".into();
+                execution.runtime.executable_path = "/new/location/selected-cli".into();
+                execution.runtime.reported_version = Some("0.23.0".into());
+                execution.runtime.binding_compatibility_digest =
+                    Some("different-context-and-permissions".into());
+                execution.runtime.executable_fingerprint = "new-binary".into();
+                assert_eq!(
+                    execution.resumable_native_session_id(),
+                    Some("session-existing")
+                );
+                execution.runtime.adapter_kind = AdapterKind::ClaudeCodeCli;
+                assert_eq!(execution.resumable_native_session_id(), None);
+                execution.runtime.adapter_kind = adapter;
+                execution.native_session_id = None;
+                assert_eq!(execution.resumable_native_session_id(), None);
+            }
         }
     }
 
@@ -7587,6 +7655,20 @@ mod tests {
         upgraded.executable_fingerprint = "sha256:runtime-v2".to_string();
         upgraded.model.model_id = "gpt-next-default".to_string();
         assert!(runtime_logical_identity_matches(&frozen, &upgraded));
+
+        // Rebinding only refreshes Runtime fields, including for old Runs that
+        // must never acquire the new snapshot layout during recovery.
+        for mut config in [json!({}), json!({"mcpSnapshotLayout": "run_v1"})] {
+            let layout = config.get("mcpSnapshotLayout").cloned();
+            replace_effective_runtime(&mut config, &upgraded).unwrap();
+            assert_eq!(config.get("mcpSnapshotLayout").cloned(), layout);
+            let digest = config
+                .as_object_mut()
+                .unwrap()
+                .remove("configDigest")
+                .unwrap();
+            assert_eq!(digest, canonical_json_digest(&config).unwrap());
+        }
 
         let mut different_installation = upgraded.clone();
         different_installation.installation_id = "adapter-other".to_string();
@@ -9204,6 +9286,9 @@ mod tests {
         );
         assert!(state.last_error_code.is_none());
         assert_eq!(state.input_delivery_status, "accepted");
+        assert_eq!(database.connection().query_row(
+            "SELECT interruption_kind FROM notification_occurrence WHERE agent_run_id=?1 AND semantic='run_stopped'",
+            [&agent_run_id], |r| r.get::<_,String>(0)).unwrap(), "app_shutdown");
         assert_eq!(
             service
                 .count_runtime_terminal_settlements(
@@ -9391,6 +9476,9 @@ mod tests {
             );
             assert_eq!(state.5, "failed");
             assert_eq!(state.6, 12);
+            assert_eq!(database.connection().query_row(
+                "SELECT interruption_kind FROM notification_occurrence WHERE agent_run_id=?1 AND semantic='turn_failed'",
+                [&agent_run_id], |r| r.get::<_,String>(0)).unwrap(), "execution_lost");
 
             // Cleanup uses cancellation bookkeeping, but runtime loss must remain
             // a failure in the public view rather than a legacy user cancellation.
@@ -9484,6 +9572,9 @@ mod tests {
             .unwrap();
         assert_eq!(replay.cycles_settled, 0);
         assert!(replay.fenced_agent_runs.is_empty());
+        assert_eq!(database.connection().query_row(
+            "SELECT count(*) FROM notification_occurrence WHERE agent_run_id=?1 AND interruption_kind='app_shutdown'",
+            [&agent_run_id], |r| r.get::<_,i64>(0)).unwrap(), 1, "startup replay must keep the first admission");
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -9669,6 +9760,17 @@ mod tests {
         assert_eq!(state.1.as_deref(), Some("runtime_terminal"));
         assert_eq!(state.2.as_deref(), Some("planned_shutdown_cancelled"));
         assert_eq!(state.3, "cancelled");
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT interruption_kind FROM notification_occurrence WHERE agent_run_id=?1",
+                    [&agent_run_id],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+            "app_shutdown"
+        );
         drop(database);
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -10283,7 +10385,7 @@ mod tests {
         assert_eq!(binding.1.as_deref(), Some("thread-first"));
         assert_eq!(
             binding.2.as_deref(),
-            Some(execution.runtime.binding_compatibility_digest.as_str())
+            execution.runtime.binding_compatibility_digest.as_deref()
         );
         let resume_status: String = database
             .connection()
@@ -10645,7 +10747,7 @@ mod tests {
         effective.installation_generation += 1;
         effective.reported_version = Some("2.0.0".to_string());
         effective.executable_fingerprint = "sha256:runtime-v2".to_string();
-        effective.host_config_digest = "sha256:host-v2".to_string();
+        effective.host_config_digest = Some("sha256:host-v2".to_string());
         effective.config_digest.clear();
         effective.config_digest =
             canonical_json_digest(&serde_json::to_value(&effective).unwrap()).unwrap();
@@ -10762,6 +10864,7 @@ mod tests {
         assert_eq!(state.5, effective.executable_fingerprint);
         assert_eq!(state.6, 1);
         let effective_config: Value = serde_json::from_str(&state.7).unwrap();
+        assert_eq!(effective_config["mcpSnapshotLayout"], "run_v1");
         assert_eq!(
             effective_config["runtime"]["executableFingerprint"],
             effective.executable_fingerprint
@@ -10983,6 +11086,9 @@ mod tests {
             repeated_with_stale_version.result.code,
             "agent_run.already_terminal"
         );
+        assert_eq!(database.connection().query_row(
+            "SELECT count(*) FROM notification_occurrence WHERE agent_run_id=?1 AND interruption_kind='user_stop'",
+            [&target_run_id], |r| r.get::<_,i64>(0)).unwrap(), 0, "manual cancel and repeat do not admit exit attention");
 
         let run_state: (
             String,

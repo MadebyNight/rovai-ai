@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ConsoleClient } from './client'
+import type { ThreadReadInvalidation } from '@contracts'
 import { RECOVERY_KEY } from './tab-recovery'
 import { newCommandId } from '../../desktop/src/shared/command-id'
 
@@ -157,6 +158,7 @@ describe('global Web connection recovery', () => {
   it('reports SSE disconnects and reconnects promptly on recovery without dispatching a command', async () => {
     const streams: ReadableStreamDefaultController<Uint8Array>[] = []
     const states: string[] = []
+    const changes: ThreadReadInvalidation[] = []
     const fetcher = vi.fn<typeof fetch>(async url => {
       if (String(url).endsWith('/login')) return Response.json(identity)
       if (String(url).endsWith('/events')) return new Response(new ReadableStream({ start(controller) { streams.push(controller) } }))
@@ -164,13 +166,17 @@ describe('global Web connection recovery', () => {
     })
     const client = new ConsoleClient(origin, fetcher)
     await client.login('test')
-    const unsubscribe = client.subscribe(() => undefined, state => states.push(state))
+    const unsubscribe = client.subscribe(change => changes.push(change), state => states.push(state))
     await vi.waitFor(() => expect(states.at(-1)).toBe('live'))
+    streams[0].enqueue(new TextEncoder().encode('event: invalidate\ndata: {"teamsChanged":true,"referencesChanged":true}\n\nevent: invalidate\ndata: {"messages":[]}\n\n'))
+    await vi.waitFor(() => expect(changes).toEqual([{ resync: false, teamsChanged: true, referencesChanged: true, messages: [] }]))
     streams[0].close()
     await vi.waitFor(() => expect(states.at(-1)).toBe('offline'))
     await client.retryPending()
     await vi.waitFor(() => expect(streams).toHaveLength(2))
     expect(states.at(-1)).toBe('live')
+    streams[1].enqueue(new TextEncoder().encode('event: resync\ndata: {}\n\n'))
+    await vi.waitFor(() => expect(changes.at(-1)?.resync).toBe(true))
     expect(fetcher.mock.calls.filter(([url]) => String(url).endsWith('/request')).map(([, init]) => rpc(init).operation)).toEqual(['app.info'])
     unsubscribe(); streams[1].close(); client.clear()
   })
@@ -245,7 +251,7 @@ describe('global Web connection recovery', () => {
     client.clear()
   })
 
-  it('keeps an unknown upload intent after refresh, unlocks the page, and reuses it when the exact file is selected', async () => {
+  it.each([undefined, { kind: 'pasted_text' as const }])('keeps an unknown upload intent after refresh and reuses it on exact-file selection (%j)', async target => {
     const saved = storage(), intents: unknown[] = []
     let completed = false
     const fetcher = vi.fn<typeof fetch>(async (url, init) => {
@@ -259,7 +265,7 @@ describe('global Web connection recovery', () => {
     })
     const first = new ConsoleClient(origin, fetcher, saved)
     await first.login('test')
-    void first.uploadFile('t', 1, new File(['original'], 'test.txt'))
+    void first.uploadFile('t', 1, new File(['original'], 'test.txt'), target)
     await vi.waitFor(() => expect(first.connectionState).toBe('offline'))
     const restored = new ConsoleClient(origin, fetcher, saved)
     await restored.restore()
@@ -268,7 +274,7 @@ describe('global Web connection recovery', () => {
     expect(restored.pendingCommandCount).toBe(1)
     expect(JSON.parse(saved.getItem(RECOVERY_KEY)!).uploads).toEqual(intents)
     completed = true
-    await restored.uploadFile('t', 99, new File(['original'], 'test.txt'))
+    await restored.uploadFile('t', 99, new File(['original'], 'test.txt'), target)
     expect(intents).toHaveLength(2)
     expect(intents[1]).toEqual(intents[0])
     expect(restored.pendingCommandCount).toBe(0)

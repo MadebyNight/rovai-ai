@@ -32,9 +32,14 @@ describe('local Thread Composer drafts', () => {
   it('settles only the accepted matching public submission and preserves later edits and other Threads', () => {
     const storage = new MemoryStorage()
     const original: ThreadComposerDraftView = { ...emptyLocalThreadComposerDraft('thread-a', 4), body: '已发送',
-      content: { version: 2, segments: [{ kind: 'text', text: '已发送' }] } }
+      content: { version: 2, segments: [{ kind: 'text', text: '已发送' }, { kind: 'atom', atom: { type: 'thread_reference', threadId: 'rvcamp_01k87hrb9yfay8vvr14d2pf2db', labelFallback: '旧标题' } }, { kind: 'atom', atom: { type: 'mission_reference', missionId: 'rvm_019abcde123470008000000000000001', labelFallback: '登录\n使命' } }] },
+      attachments: [{ id: '11111111-1111-4111-8111-111111111111', sourcePath: '/paste.txt', displayName: '粘贴内容-1.txt',
+        kind: 'file', mediaType: 'text/plain', byteSize: 20_000, fileCount: 1, previewKind: 'none',
+        availability: 'available', pastedTextPreview: '正文开头' }] }
     const submitted = { commandId: 'original', threadId: original.threadId, content: original.content,
-      sourceAttachments: [], quotes: [], replyToThreadMessageId: null }
+      sourceAttachments: [{ id: original.attachments[0].id, sourcePath: '/paste.txt', displayName: '粘贴内容-1.txt',
+        kind: 'file', mediaType: 'text/plain', observedByteSize: 20_000, pastedTextPreview: '正文开头' }],
+      quotes: [], replyToThreadMessageId: null }
     const accepted = { commandResult: { status: 'applied', payload: { threadMessageId: 'message-a' } } }
     const other = { ...original, threadId: 'thread-b' }
     saveLocalThreadComposerDraft(other, storage)
@@ -50,7 +55,7 @@ describe('local Thread Composer drafts', () => {
         { ...original, content: { version: 2, segments: [{ kind: 'text', text: '后来修改' }] } },
         { ...original, replyIntent: { replyToThreadMessageId: 'new-reply', targetState: 'available', author: null, excerpt: null, recipientSelectionRequired: false } },
         { ...original, attachments: [{ id: '11111111-1111-4111-8111-111111111111', sourcePath: '/new', displayName: 'new', kind: 'file', mediaType: null, byteSize: 1, fileCount: 1, previewKind: 'none', availability: 'available' }] },
-        { ...original, quotes: [{ version: 1, quoteId: 'new', source: { scope: 'camp', campId: original.threadId, messageId: 'source' }, authorAtCapture: { type: 'user', displayName: 'User' }, text: '新增引用', format: 'plain_text', capturedAt: '2026-10-17', sourceContentDigest: 'source', snapshotDigest: 'snapshot' }] }
+        { ...original, quotes: [{ version: 1, quoteId: 'new', source: { scope: 'camp', campId: original.threadId, messageId: 'source' }, authorAtCapture: { type: 'user', displayName: 'User' }, text: '新增引用', format: 'plain_text', capturedAt: '2026-10-17' }] }
       ]
       for (const edited of edits) {
         saveLocalThreadComposerDraft(edited, storage)
@@ -103,8 +108,6 @@ describe('local Thread Composer drafts', () => {
         text: '先检查这一段',
         format: 'plain_text',
         capturedAt: '2026-09-19T08:00:00Z',
-        sourceContentDigest: 'sha256:source',
-        snapshotDigest: 'sha256:snapshot'
       }],
       replyIntent: {
         replyToThreadMessageId: 'message-old', targetState: 'available',
@@ -122,6 +125,11 @@ describe('local Thread Composer drafts', () => {
 
     expect(loadLocalThreadComposerDraft('camp-a', storage)).toEqual(campA)
     expect(loadLocalThreadComposerDraft('camp-b', storage)).toEqual(campB)
+
+    // A reopened browser restores the saved selection even without any source metadata.
+    const withoutSource = { ...campA, quotes: campA.quotes.map(({ source, authorAtCapture, ...quote }) => quote) }
+    saveLocalThreadComposerDraft(withoutSource, storage)
+    expect(loadLocalThreadComposerDraft('camp-a', storage)).toEqual(withoutSource)
 
     clearLocalThreadComposerDraft('camp-a', storage)
     expect(loadLocalThreadComposerDraft('camp-a', storage)).toBeNull()

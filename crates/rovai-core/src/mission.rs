@@ -213,6 +213,8 @@ impl MissionRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateMissionCommand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<crate::teams::TeamSelection>,
     pub title: String,
     #[serde(default)]
     pub description: String,
@@ -370,8 +372,19 @@ impl DomainCommand for LinkMissionPrCommand {
 #[derive(Default)]
 pub struct MissionService {
     gateway: DomainCommandGateway,
+    active_executions: Vec<crate::planned_shutdown::ActiveExecutionKey>,
 }
 impl MissionService {
+    /// Request-local ownership snapshot, captured under the database lock.
+    pub fn with_active_executions(
+        active_executions: Vec<crate::planned_shutdown::ActiveExecutionKey>,
+    ) -> Self {
+        Self {
+            active_executions,
+            ..Self::default()
+        }
+    }
+
     pub fn link_pr(
         &self,
         database: &mut Database,
@@ -390,7 +403,7 @@ impl MissionService {
         );
         self.gateway.execute(database,envelope,|tx|{
             if !matches!(envelope.actor,ActorRef::User{..}) {return Ok(reject("mission.user_required"));}
-            if load_record(tx,&input.mission_id)?.is_none() {return Ok(reject("mission.not_found"));}
+            if load_record(tx,&input.mission_id,&self.active_executions)?.is_none() {return Ok(reject("mission.not_found"));}
             let changed=if input.remove {tx.execute("DELETE FROM mission_pr WHERE mission_id=?1 AND url=?2",params![input.mission_id,url.as_str()])?} else {
                 tx.execute("INSERT INTO mission_pr(id,mission_id,url,title,created_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(mission_id,url) DO UPDATE SET title=excluded.title WHERE title<>excluded.title",params![Uuid::new_v4().to_string(),input.mission_id,url.as_str(),input.title.trim(),chrono::Utc::now().to_rfc3339()])?
             };
@@ -405,7 +418,7 @@ impl MissionService {
     ) -> Result<CommandExecution> {
         self.gateway.execute(database,envelope,|tx| {
             if !matches!(envelope.actor,ActorRef::User{..}) { return Ok(reject("mission.user_required")); }
-            let Some(mission)=load_record(tx,&envelope.payload.mission_id)? else { return Ok(reject("mission.not_found")); };
+            let Some(mission)=load_record(tx,&envelope.payload.mission_id,&self.active_executions)? else { return Ok(reject("mission.not_found")); };
             let start_available=mission_start_available(
                 tx,
                 &mission.info.mission_id,
@@ -446,18 +459,17 @@ impl MissionService {
             if let Some(rejection) = validate_description_members(tx, &content, None)? { return Ok(rejection); }
             let description = mission_description::render(tx, &content)?;
             validate_content(None, Some(&description))?;
-            let mut members = input.member_agent_ids.clone();
-            for id in mission_description::member_ids(&content) { if !members.contains(&id) { members.push(id); } }
             let mission_id = format!("rvm_{}", Uuid::now_v7().simple());
             tx.execute("INSERT INTO mission_number_sequence DEFAULT VALUES", [])?;
             let number = tx.last_insert_rowid();
             let camp_id = ThreadId::new();
             let created = create_camp_in_tx(tx, &envelope.actor, envelope.execution_epoch, &CreateThreadCommand {
+                team: input.team.clone(),
                 name: Some(input.title.trim().chars().take(80).collect()),
                 project_binding_kind: input.project_binding_kind, project_path: input.project_path.clone(),
-                member_agent_ids: members, default_lead_agent_id: input.default_lead_agent_id.clone(),
+                member_agent_ids: input.member_agent_ids.clone(), default_lead_agent_id: input.default_lead_agent_id.clone(),
                 collaboration_mode: ThreadCollaborationMode::Peer, activation_state: ThreadActivationState::Active,
-            }, &camp_id)?;
+            }, &camp_id, &mission_description::member_ids(&content))?;
             if created.status == CommandResultStatus::Rejected { return Ok(created); }
             let now = chrono::Utc::now().to_rfc3339();
             tx.execute("INSERT INTO mission(id,number,camp_id,title,description,status,tags_json,source_attachments_json,details_version,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'not_started',?6,?7,1,?8,?8)",
@@ -503,7 +515,7 @@ impl MissionService {
             .transpose()?;
         let tags = input.tags.as_deref().map(normalize_tags).transpose()?;
         self.gateway.execute(database, envelope, |tx| {
-            let Some(current) = load_record(tx, &input.mission_id)? else { return Ok(reject("mission.not_found")); };
+            let Some(current) = load_record(tx, &input.mission_id, &self.active_executions)? else { return Ok(reject("mission.not_found")); };
             if !can_edit(tx, envelope, &current)? || ((tags.is_some() || input.source_attachment_update.is_some() || content.is_some()) && !matches!(envelope.actor, ActorRef::User { .. })) {
                 return Ok(reject("mission.forbidden"));
             }
@@ -584,7 +596,7 @@ impl MissionService {
     ) -> Result<CommandExecution> {
         self.gateway.execute(database, envelope, |tx| {
             let input = &envelope.payload;
-            let Some(current) = load_record(tx, &input.mission_id)? else { return Ok(reject("mission.not_found")); };
+            let Some(current) = load_record(tx, &input.mission_id, &self.active_executions)? else { return Ok(reject("mission.not_found")); };
             if !can_edit(tx, envelope, &current)? { return Ok(reject("mission.forbidden")); }
             if let Some(source) = &input.source_message_id {
                 let sql = format!("WITH {} SELECT EXISTS(SELECT 1 FROM camp_message m JOIN public_camp_message_publication p ON p.message_id=m.id WHERE m.id=?1 AND m.camp_id=?2 AND m.tombstoned_at IS NULL)", crate::camp_message_publication::public_camp_message_publication_cte());
@@ -606,7 +618,7 @@ impl MissionService {
     }
 
     pub fn get(&self, database: &Database, mission_id: &str) -> Result<Option<MissionRecord>> {
-        load_record(database.connection(), mission_id)
+        load_record(database.connection(), mission_id, &self.active_executions)
     }
 
     pub fn list_for_agent(
@@ -722,7 +734,7 @@ impl MissionService {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         ids.iter()
             .map(|id| {
-                load_record(database.connection(), id)?
+                load_record(database.connection(), id, &self.active_executions)?
                     .context("Mission disappeared during locked read")
             })
             .collect()
@@ -933,11 +945,15 @@ pub(crate) fn mission_for_camp(
             r.get::<_, String>(0)
         })
         .optional()?;
-    id.map(|id| load_record(connection, &id)?.context("Mission association missing"))
+    id.map(|id| load_record(connection, &id, &[])?.context("Mission association missing"))
         .transpose()
 }
 
-fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord>> {
+fn load_record(
+    connection: &Connection,
+    id: &str,
+    active_executions: &[crate::planned_shutdown::ActiveExecutionKey],
+) -> Result<Option<MissionRecord>> {
     let row = connection.query_row("SELECT m.id,m.number,m.camp_id,m.title,m.description,m.status,m.source_message_id,m.tags_json,m.source_attachments_json,m.details_version,m.created_at,m.updated_at,c.project_path,c.project_binding_kind,c.default_lead_agent_id FROM mission m JOIN camp c ON c.id=m.camp_id WHERE m.id=?1 AND c.deletion_operation_id IS NULL", [id], |r| Ok((
         r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,Option<String>>(6)?,r.get::<_,String>(7)?,r.get::<_,String>(8)?,r.get::<_,i64>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,String>(12)?,r.get::<_,String>(13)?,r.get::<_,Option<String>>(14)?))).optional()?;
     let Some((
@@ -980,7 +996,12 @@ fn load_record(connection: &Connection, id: &str) -> Result<Option<MissionRecord
     let has_unread = connection.query_row(&unread_sql, [&camp_id], |r| r.get(0))?;
     let start_available = mission_start_available(connection, &mission_id, &camp_id)?;
     let (workspace_ever_created, workspace_resources_present, cleanup_available, workspace_cleanup) =
-        crate::mission_workspace::cleanup_projection(connection, &mission_id, &camp_id)?;
+        crate::mission_workspace::cleanup_projection(
+            connection,
+            &mission_id,
+            &camp_id,
+            active_executions,
+        )?;
     Ok(Some(MissionRecord {
         description_content,
         has_unread,
@@ -1202,6 +1223,7 @@ mod tests {
             .create(
                 &mut db,
                 &command(CreateMissionCommand {
+                    team: None,
                     title: "References".into(),
                     description: "literal @Alice".into(),
                     description_content: None,
@@ -1353,6 +1375,126 @@ mod tests {
                 .code,
             "mission.member_unavailable"
         );
+
+        // The Mission owner covers Team resolution together with description
+        // invitations. Bootstrap formatting/late-join semantics remain owned by
+        // the existing Thread/context tests.
+        let mut team_draft = crate::teams::SaveTeamCommand {
+            team_id: None,
+            expected_version: None,
+            name: "Implementation and review".into(),
+            member_agent_ids: vec!["agent_1".into(), "agent_2".into()],
+            default_lead_agent_id: "agent_2".into(),
+            guidance: "Implement, review, report.".into(),
+        };
+        let saved = crate::teams::save(&mut db, &command(team_draft.clone())).unwrap();
+        let team_id = saved.result.payload["team"]["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut team_create = command(CreateMissionCommand {
+            team: Some(crate::teams::TeamSelection {
+                team_id: team_id.clone(),
+                expected_version: 1,
+            }),
+            title: "Team Mission".into(),
+            description: String::new(),
+            description_content: Some(vec![
+                MemberMention {
+                    agent_id: "agent_3".into(),
+                },
+                MemberMention {
+                    agent_id: "agent_1".into(),
+                },
+                MemberMention {
+                    agent_id: "agent_3".into(),
+                },
+            ]),
+            project_path: "/tmp".into(),
+            project_binding_kind: ProjectBindingKind::Directory,
+            // A Team is authoritative even if a client sends a stale projection.
+            member_agent_ids: vec!["missing".into()],
+            default_lead_agent_id: "missing".into(),
+            tags: vec![],
+            source_attachments: vec![],
+        });
+        let before_counts: (i64, i64, i64) = db.connection().query_row(
+            "SELECT (SELECT COUNT(*) FROM mission), (SELECT COUNT(*) FROM camp), (SELECT COUNT(*) FROM thread_team_bootstrap)", [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        db.connection().execute_batch("CREATE TEMP TRIGGER reject_mission BEFORE INSERT ON mission BEGIN SELECT RAISE(ABORT,'fixture mission failure'); END;").unwrap();
+        assert!(service.create(&mut db, &team_create).is_err());
+        let failed_counts = db.connection().query_row(
+            "SELECT (SELECT COUNT(*) FROM mission), (SELECT COUNT(*) FROM camp), (SELECT COUNT(*) FROM thread_team_bootstrap)", [],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?)),
+        ).unwrap();
+        assert_eq!(failed_counts, before_counts);
+        db.connection()
+            .execute_batch("DROP TRIGGER reject_mission")
+            .unwrap();
+        let created = service.create(&mut db, &team_create).unwrap();
+        let record = service
+            .get(&db, created.result.payload["missionId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.member_agent_ids.len(), 3);
+        for id in ["agent_1", "agent_2", "agent_3"] {
+            assert!(record.member_agent_ids.contains(&id.to_string()));
+        }
+        assert_eq!(record.default_lead_agent_id.as_deref(), Some("agent_2"));
+        assert_eq!(
+            crate::teams::thread_guidance(db.connection(), &record.camp_id)
+                .unwrap()
+                .as_deref(),
+            Some("Implement, review, report.")
+        );
+        assert_eq!(
+            db.connection()
+                .query_row("SELECT COUNT(*) FROM agent_run", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        team_draft.team_id = Some(team_id.clone());
+        team_draft.expected_version = Some(1);
+        team_draft.guidance.clear();
+        crate::teams::save(&mut db, &command(team_draft)).unwrap();
+        assert!(service.create(&mut db, &team_create).unwrap().replayed);
+        team_create.command_id = Uuid::new_v4().to_string();
+        assert_eq!(
+            service.create(&mut db, &team_create).unwrap().result.code,
+            "team.conflict"
+        );
+        team_create.command_id = Uuid::new_v4().to_string();
+        team_create.payload.team.as_mut().unwrap().expected_version = 2;
+        let empty = service.create(&mut db, &team_create).unwrap();
+        let empty_record = service
+            .get(&db, empty.result.payload["missionId"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(
+            crate::teams::thread_guidance(db.connection(), &empty_record.camp_id)
+                .unwrap()
+                .is_none()
+        );
+        crate::teams::delete(
+            &mut db,
+            &command(crate::teams::DeleteTeamCommand {
+                team_id,
+                expected_version: 2,
+            }),
+        )
+        .unwrap();
+        team_create.command_id = Uuid::new_v4().to_string();
+        assert_eq!(
+            service.create(&mut db, &team_create).unwrap().result.code,
+            "team.unavailable"
+        );
+        assert_eq!(
+            crate::teams::thread_guidance(db.connection(), &record.camp_id)
+                .unwrap()
+                .as_deref(),
+            Some("Implement, review, report.")
+        );
     }
 
     #[test]
@@ -1362,6 +1504,7 @@ mod tests {
         std::fs::create_dir_all(&directory).unwrap();
         let service = MissionService::default();
         let create = command(CreateMissionCommand {
+            team: None,
             description_content: None,
             title: "使命".repeat(65),
             description: "original".into(),
@@ -1504,6 +1647,7 @@ mod tests {
             .create(
                 &mut db,
                 &command(CreateMissionCommand {
+                    team: None,
                     description_content: None,
                     title: "普通消息执行使命".into(),
                     description: String::new(),
@@ -2077,6 +2221,7 @@ mod tests {
             .create(
                 &mut db,
                 &command(CreateMissionCommand {
+                    team: None,
                     description_content: None,
                     title: "cleanup projection".into(),
                     description: String::new(),
@@ -2154,10 +2299,57 @@ mod tests {
                 .cleanup_available
         );
 
+        // A completed prior-generation Run may retain its missing ACK. The
+        // same exact Run/epoch still blocks cleanup when this Core owns it.
+        db.connection().execute(
+            "UPDATE agent_run SET cancel_requested_at='old-stop',cancel_reason_code='user_requested',cancel_acknowledged_at=NULL WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",
+            [&camp_id],
+        ).unwrap();
+        let current = db.connection().query_row(
+            "SELECT r.id,r.execution_epoch FROM agent_run r JOIN conversation c ON c.id=r.conversation_id WHERE c.camp_id=?1",
+            [&camp_id], |row| Ok(crate::planned_shutdown::ActiveExecutionKey::new(row.get::<_, String>(0)?, row.get(1)?)),
+        ).unwrap();
+        assert!(
+            service
+                .get(&db, &mission_id)
+                .unwrap()
+                .unwrap()
+                .cleanup_available
+        );
+        assert!(
+            !MissionService::with_active_executions(vec![current.clone()])
+                .get(&db, &mission_id)
+                .unwrap()
+                .unwrap()
+                .cleanup_available
+        );
+        assert!(
+            MissionService::with_active_executions(vec![
+                crate::planned_shutdown::ActiveExecutionKey::new(
+                    &current.agent_run_id,
+                    current.execution_epoch + 1
+                )
+            ])
+            .get(&db, &mission_id)
+            .unwrap()
+            .unwrap()
+            .cleanup_available
+        );
+        assert!(
+            db.connection()
+                .query_row(
+                    "SELECT cancel_acknowledged_at IS NULL FROM agent_run WHERE id=?1",
+                    [&current.agent_run_id],
+                    |row| row.get::<_, bool>(0)
+                )
+                .unwrap()
+        );
+
         let other = service
             .create(
                 &mut db,
                 &command(CreateMissionCommand {
+                    team: None,
                     description_content: None,
                     title: "same execution root".into(),
                     description: String::new(),
@@ -2207,6 +2399,30 @@ mod tests {
                 [other_camp_id],
             )
             .unwrap();
+        db.connection().execute(
+            "UPDATE agent_run SET cancel_requested_at='old-stop',cancel_reason_code='user_requested',cancel_acknowledged_at=NULL WHERE conversation_id IN (SELECT id FROM conversation WHERE camp_id=?1)",
+            [other_camp_id],
+        ).unwrap();
+        let other_current = db.connection().query_row(
+            "SELECT r.id,r.execution_epoch FROM agent_run r JOIN conversation c ON c.id=r.conversation_id WHERE c.camp_id=?1",
+            [other_camp_id], |row| Ok(crate::planned_shutdown::ActiveExecutionKey::new(row.get::<_, String>(0)?, row.get(1)?)),
+        ).unwrap();
+        assert!(
+            service
+                .get(&db, &mission_id)
+                .unwrap()
+                .unwrap()
+                .cleanup_available
+        );
+        assert!(
+            !MissionService::with_active_executions(vec![other_current])
+                .get(&db, &mission_id)
+                .unwrap()
+                .unwrap()
+                .cleanup_available,
+            "current cleanup in a shared execution directory remains an occupancy"
+        );
+
         db.connection().execute(
             "UPDATE mission_workspace SET state='ready',cleanup_worktree_removed=0,cleanup_branch_removed=0,diagnostic='mission.workspace_dirty' WHERE mission_id=?1",
             [&mission_id],
@@ -2294,6 +2510,7 @@ mod tests {
             .create(
                 &mut db,
                 &command(CreateMissionCommand {
+                    team: None,
                     description_content: None,
                     title: "带附件的使命".into(),
                     description: "附件应随使命定义保存，并在开始时交付。".into(),
@@ -2416,6 +2633,7 @@ mod tests {
             .create(
                 &mut database,
                 &command(CreateMissionCommand {
+                    team: None,
                     description_content: None,
                     title: "非 Git 交付".into(),
                     description: String::new(),
@@ -2439,6 +2657,7 @@ mod tests {
             kind: crate::local_attachment_source::LocalAttachmentKind::File,
             media_type: Some("text/html".into()),
             observed_byte_size: Some(19_823),
+            pasted_text_preview: None,
         };
         let message_id = Uuid::new_v4().to_string();
         let created_at = "2026-09-20T07:38:20Z";
@@ -2504,6 +2723,7 @@ mod tests {
                 .create(
                     &mut database,
                     &command(CreateMissionCommand {
+                        team: None,
                         description_content: None,
                         title: title.into(),
                         description: format!("{title} details"),
@@ -2556,6 +2776,7 @@ mod tests {
             .create(
                 &mut database,
                 &command(CreateMissionCommand {
+                    team: None,
                     description_content: None,
                     title: "Epsilon".into(),
                     description: "Created between keyset pages".into(),

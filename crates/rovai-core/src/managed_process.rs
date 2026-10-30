@@ -5,6 +5,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::ExitStatus,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -61,6 +62,8 @@ pub enum ManagedProcessPurpose {
     RuntimeProbe,
     RuntimeHost,
     RuntimeOneShot,
+    /// Client connection to a native shared executor; owns only this process.
+    RuntimeConnection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +78,48 @@ pub enum ManagedStdinPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedWindowsArgvDialect {
     MicrosoftCrt,
+}
+
+/// One startup maintenance attempt, shared by all historical record directories.
+/// Diagnostics never become Runtime readiness or durable cleanup acknowledgements.
+pub(crate) struct HistoricalProcessCleanup {
+    pub cleaned: usize,
+    pub skipped: usize,
+    pub diagnostics: Vec<String>,
+    pub budget_exhausted: bool,
+    deadline: Instant,
+}
+
+impl HistoricalProcessCleanup {
+    pub(crate) fn new(budget: Duration) -> Self {
+        Self {
+            cleaned: 0,
+            skipped: 0,
+            diagnostics: Vec::new(),
+            budget_exhausted: false,
+            deadline: Instant::now() + budget,
+        }
+    }
+
+    pub(crate) fn expired(&mut self) -> bool {
+        self.budget_exhausted |= Instant::now() >= self.deadline;
+        self.budget_exhausted
+    }
+
+    pub(crate) fn record_deadline(&self) -> Instant {
+        self.deadline
+            .min(Instant::now() + Duration::from_millis(250))
+    }
+
+    pub(crate) fn skip(&mut self, stage: &str, error: impl std::fmt::Display) {
+        self.skipped += 1;
+        if self.diagnostics.len() < 16 {
+            let diagnostic = format!("{stage}: {error}").chars().take(512).collect();
+            if !self.diagnostics.contains(&diagnostic) {
+                self.diagnostics.push(diagnostic);
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -577,12 +622,67 @@ pub struct ManagedProcess {
     #[cfg(windows)]
     child: windows::WindowsManagedProcess,
     tree_termination_requested: bool,
+    owns_descendants: bool,
+}
+
+/// Keeps the actual child reachable if ownership capture fails after spawn.
+/// Callers that own temporary materials must reap this failure before cleanup.
+pub(crate) struct ManagedProcessSpawnFailure {
+    error: anyhow::Error,
+    #[cfg(unix)]
+    child: Option<tokio::process::Child>,
+}
+
+impl From<anyhow::Error> for ManagedProcessSpawnFailure {
+    fn from(error: anyhow::Error) -> Self {
+        Self {
+            error,
+            #[cfg(unix)]
+            child: None,
+        }
+    }
+}
+
+impl ManagedProcessSpawnFailure {
+    pub(crate) fn process_started(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.child.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
+    pub(crate) async fn reap(mut self) -> (anyhow::Error, bool) {
+        #[cfg(unix)]
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), child.wait()).await;
+            // Capture failed; even a reaped leader cannot prove that no child
+            // escaped. Retain caller materials, with the existing diagnostic.
+            return (
+                self.error
+                    .context("managed_process.spawn_cleanup_unconfirmed"),
+                false,
+            );
+        }
+        (self.error, true)
+    }
 }
 
 impl ManagedProcess {
     pub fn spawn(spec: ManagedProcessLaunchSpec) -> Result<Self> {
+        Self::spawn_owned(spec).map_err(|failure| failure.error)
+    }
+
+    pub(crate) fn spawn_owned(
+        spec: ManagedProcessLaunchSpec,
+    ) -> std::result::Result<Self, ManagedProcessSpawnFailure> {
         #[cfg(unix)]
         {
+            let owns_descendants = spec.purpose != ManagedProcessPurpose::RuntimeConnection;
             let mut command = command_from_spec(&spec);
             command.as_std_mut().process_group(0);
             let child = command.spawn().with_context(|| {
@@ -593,36 +693,50 @@ impl ManagedProcess {
             })?;
             let process_group_id = child.id().and_then(|pid| i32::try_from(pid).ok());
             #[cfg(any(target_os = "linux", target_os = "macos"))]
-            let owned_tree = process_tree::ProcessTree::new(
-                process_group_id.context("managed process PID unavailable")?,
-            )?;
+            let owned_tree = match process_group_id
+                .context("managed process PID unavailable")
+                .and_then(|pid| process_tree::ProcessTree::new(pid).map_err(Into::into))
+            {
+                Ok(tree) => tree,
+                Err(error) => {
+                    return Err(ManagedProcessSpawnFailure {
+                        error,
+                        child: Some(child),
+                    });
+                }
+            };
             Ok(Self {
                 child,
                 #[cfg(not(target_os = "macos"))]
-                process_group_id,
+                process_group_id: process_group_id.filter(|_| owns_descendants),
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
                 owned_tree,
                 #[cfg(any(target_os = "linux", target_os = "macos"))]
-                descendants_captured: false,
+                descendants_captured: !owns_descendants,
                 #[cfg(target_os = "macos")]
                 descendant_capture_failed: false,
                 tree_termination_requested: false,
+                owns_descendants,
             })
         }
 
         #[cfg(windows)]
         {
+            let owns_descendants = spec.purpose != ManagedProcessPurpose::RuntimeConnection;
             let child = windows::WindowsManagedProcess::spawn(&spec)?;
             Ok(Self {
                 child,
                 tree_termination_requested: false,
+                owns_descendants,
             })
         }
 
         #[cfg(not(any(unix, windows)))]
         {
             let _ = spec;
-            bail!("managed_process.spawn_failed: unsupported host platform");
+            return Err(
+                anyhow::anyhow!("managed_process.spawn_failed: unsupported host platform").into(),
+            );
         }
     }
 
@@ -637,6 +751,20 @@ impl ManagedProcess {
         }
         #[allow(unreachable_code)]
         None
+    }
+
+    /// Validate a reported Runtime PID without exposing platform handles.
+    /// Windows launchers may report a live descendant in this exact Job;
+    /// other platforms retain the managed leader's PID requirement.
+    pub fn owns_process_id(&self, pid: u32) -> bool {
+        #[cfg(windows)]
+        {
+            self.child.owns_process_id(pid)
+        }
+        #[cfg(not(windows))]
+        {
+            pid > 0 && self.id() == Some(pid)
+        }
     }
 
     #[cfg(windows)]
@@ -758,7 +886,7 @@ impl ManagedProcess {
         }
         #[cfg(windows)]
         {
-            self.child.terminate_job()?;
+            self.child.terminate_owned_processes()?;
             self.tree_termination_requested = true;
             return Ok(());
         }
@@ -769,7 +897,7 @@ impl ManagedProcess {
         ))
     }
 
-    /// A successful query of this launch's Job reports no active members.
+    /// An owned tree's Job has no active members, or a connection root has exited.
     /// Historical notifications and descendant process handles do not gate cleanup.
     #[cfg(windows)]
     pub(crate) fn tree_is_empty(&self) -> io::Result<bool> {
@@ -783,26 +911,48 @@ impl ManagedProcess {
 
     #[cfg(target_os = "macos")]
     pub(crate) fn track_descendants(&mut self, directory: &Path) -> io::Result<()> {
-        self.owned_tree.track(directory)
-    }
-
-    #[cfg(target_os = "macos")]
-    pub(crate) fn recover_descendants(directory: &Path) -> io::Result<()> {
-        process_tree::recover(directory)
-    }
-
-    #[cfg(target_os = "macos")]
-    pub(crate) fn recover_runtime_descendants(runtime_directory: &Path) -> io::Result<()> {
-        if !runtime_directory.exists() {
-            return Ok(());
+        if self.owns_descendants {
+            self.owned_tree.track(directory)
+        } else {
+            Ok(())
         }
-        for entry in std::fs::read_dir(runtime_directory)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                process_tree::recover(&entry.path().join("owned-processes"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn recover_runtime_descendants(
+        runtime_directory: &Path,
+        report: &mut HistoricalProcessCleanup,
+    ) {
+        if report.expired() {
+            return;
+        }
+        let entries = match std::fs::read_dir(runtime_directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+            Err(error) => {
+                report.skip("runtime_directory", error);
+                return;
+            }
+        };
+        for entry in entries {
+            if report.expired() {
+                break;
+            }
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => {
+                    report.skip("runtime_directory_entry", error);
+                    continue;
+                }
+            };
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => {
+                    process_tree::recover(&entry.path().join("owned-processes"), report);
+                }
+                Ok(_) => {}
+                Err(error) => report.skip("runtime_directory_type", error),
             }
         }
-        Ok(())
     }
 
     /// Preserve descendants before a native cancellation protocol can sever
@@ -810,6 +960,9 @@ impl ManagedProcess {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn capture_descendants(&mut self) -> io::Result<()> {
         self.descendants_captured = true;
+        if !self.owns_descendants {
+            return Ok(());
+        }
         let capture = self.owned_tree.capture();
         #[cfg(target_os = "macos")]
         if capture.is_err() {
@@ -825,7 +978,11 @@ impl ManagedProcess {
         if !self.descendants_captured {
             return Ok(());
         }
-        let capture = self.owned_tree.capture();
+        let capture = if self.owns_descendants {
+            self.owned_tree.capture()
+        } else {
+            Ok(())
+        };
         let signal = self.owned_tree.signal(signal);
         capture.and(signal)
     }
@@ -916,7 +1073,7 @@ impl ManagedProcess {
         }
         #[cfg(windows)]
         {
-            match self.child.terminate_job() {
+            match self.child.terminate_owned_processes() {
                 Ok(()) => {
                     self.tree_termination_requested = true;
                     return Ok(());
@@ -1387,6 +1544,41 @@ mod tests {
         );
         control.kill().await.unwrap();
         control.wait().await.unwrap();
+
+        // A native ACP client does not own its execution server, even if it
+        // starts that server itself. Exercise both capture and forced cleanup.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 120 & printf '%s\\n' \"$!\"; read -r finish"]);
+        let spec = ManagedProcessLaunchSpec::capture(
+            &command,
+            ManagedProcessPurpose::RuntimeConnection,
+            ManagedStdinPolicy::Piped,
+            ManagedWindowsArgvDialect::MicrosoftCrt,
+            "connection:test",
+        )
+        .unwrap();
+        let mut connection = ManagedProcess::spawn(spec).unwrap();
+        let mut reader = BufReader::new(connection.take_stdout().unwrap());
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(3), reader.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        let server_pid: i32 = line.trim().parse().unwrap();
+        connection.capture_descendants().unwrap();
+        connection.force_terminate_tree().unwrap();
+        tokio::time::timeout(Duration::from_secs(3), connection.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(connection.captured_tree_is_empty().unwrap());
+        assert_eq!(
+            unsafe { libc::kill(server_pid, 0) },
+            0,
+            "shared execution server must survive client cleanup"
+        );
+        // This test alone owns the simulated server.
+        assert_eq!(unsafe { libc::kill(server_pid, libc::SIGKILL) }, 0);
     }
 
     #[cfg(windows)]
@@ -1644,6 +1836,10 @@ mod tests {
             .parse::<u32>()
             .expect("grandchild handshake PID was invalid");
         assert!(windows::process_is_running_for_test(grandchild_pid).unwrap());
+        assert!(process.owns_process_id(grandchild_pid));
+        assert!(!process.owns_process_id(process.id().unwrap()));
+        assert!(!process.owns_process_id(std::process::id()));
+        assert!(!process.owns_process_id(0));
 
         process.force_terminate_tree().unwrap();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -1653,6 +1849,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(!windows::process_is_running_for_test(grandchild_pid).unwrap());
+        assert!(!process.owns_process_id(grandchild_pid));
         std::fs::remove_dir_all(directory).unwrap();
     }
 
@@ -1787,6 +1984,64 @@ mod tests {
         let _ = std::fs::remove_file(handshake);
         let _ = std::fs::remove_file(fork);
         let _ = std::fs::remove_file(late_handshake);
+
+        // The same native spawn boundary also supports a connection that owns
+        // only its root. Its simulated shared Gateway must survive both forced
+        // client cleanup and dropping the client process handle.
+        let handshake = std::env::temp_dir().join(format!(
+            "rovai-managed-connection-{}.pid",
+            uuid::Uuid::new_v4()
+        ));
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args([
+                "--exact",
+                "managed_process::tests::windows_job_child_helper",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(WINDOWS_HELPER_MODE, "child")
+            .env(WINDOWS_HELPER_FILE, &handshake)
+            .env("ROVAI_MANAGED_PROCESS_HOLD_CONNECTION", "1");
+        let spec = ManagedProcessLaunchSpec::capture(
+            &command,
+            ManagedProcessPurpose::RuntimeConnection,
+            ManagedStdinPolicy::Piped,
+            ManagedWindowsArgvDialect::MicrosoftCrt,
+            "connection:shared-gateway-test",
+        )
+        .unwrap();
+        let mut connection = ManagedProcess::spawn(spec).unwrap();
+        let server_pid = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(pid) = std::fs::read_to_string(&handshake)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+                {
+                    break pid;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("shared server did not start");
+        let server = windows::TestProcess::open(server_pid).unwrap();
+        assert!(connection.owns_process_id(connection.id().unwrap()));
+        assert!(!connection.owns_process_id(server_pid));
+        assert!(!connection.tree_is_empty().unwrap());
+        connection.force_terminate_tree().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), connection.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(connection.tree_is_empty().unwrap());
+        assert!(!connection.owns_process_id(connection.id().unwrap()));
+        assert!(server.is_running().unwrap());
+        drop(connection);
+        assert!(server.is_running().unwrap());
+        // Only this test owns the simulated server, never production cleanup.
+        server.terminate().unwrap();
+        let _ = std::fs::remove_file(handshake);
     }
 
     #[cfg(windows)]
@@ -1975,6 +2230,9 @@ mod tests {
         }
         assert!(std::path::Path::new(&handshake).is_file());
         assert!(grandchild.try_wait().unwrap().is_none());
+        if std::env::var_os("ROVAI_MANAGED_PROCESS_HOLD_CONNECTION").is_some() {
+            std::thread::sleep(Duration::from_secs(30));
+        }
     }
 
     #[cfg(windows)]

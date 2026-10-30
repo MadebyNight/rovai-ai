@@ -1,5 +1,7 @@
+import hermesLogo from './assets/runtime-logos/hermes.png'
 import minimaxLogo from './assets/runtime-logos/minimax-color.svg'
-import type { AdapterKind } from '@contracts'
+import type { AdapterKind, HostPlatformKey, RuntimePlatformAdmission } from '@contracts'
+import { runtimePlatformAdmissionAllowsUse, runtimePlatformAdmissionFor } from './runtime-status'
 import antigravityLogo from './assets/runtime-logos/antigravity-color.svg'
 import claudeCodeLogo from './assets/runtime-logos/claudecode-color.svg'
 import codeBuddyLogo from './assets/runtime-logos/codebuddy-color.svg'
@@ -31,6 +33,7 @@ const PRODUCT_RUNTIMES: AdapterKind[] = [
   'cursor-agent',
   'kimi-code-cli',
   'minimax-code-cli',
+  'hermes-cli',
   'grok-build',
   'deepseek-harness',
   'cline-cli',
@@ -42,8 +45,18 @@ const PRODUCT_RUNTIMES: AdapterKind[] = [
 
 export const VISIBLE_PRODUCT_RUNTIMES: AdapterKind[] = PRODUCT_RUNTIMES.filter(
   // Keep deferred ACP identities readable without advertising them for new use.
-  (runtimeKind) => !['cursor-agent', 'cline-cli', 'command-code-cli'].includes(runtimeKind)
+  (runtimeKind) => !['cursor-agent', 'cline-cli'].includes(runtimeKind)
 )
+
+export function visibleProductRuntimes(
+  hostPlatform: HostPlatformKey | null,
+  admissions: readonly RuntimePlatformAdmission[]
+): AdapterKind[] {
+  // Hermes remains undisclosed on hosts Core has not admitted. Keep the
+  // existing presentation of every other Runtime; do not duplicate the matrix.
+  return VISIBLE_PRODUCT_RUNTIMES.filter((kind) => kind !== 'hermes-cli' ||
+    runtimePlatformAdmissionAllowsUse(runtimePlatformAdmissionFor(hostPlatform, admissions, kind)))
+}
 
 export const PRODUCT_RUNTIME_LOGOS: Record<AdapterKind, string> = {
   'claude-code-cli': claudeCodeLogo,
@@ -59,6 +72,7 @@ export const PRODUCT_RUNTIME_LOGOS: Record<AdapterKind, string> = {
   'cursor-agent': cursorLogo,
   'kimi-code-cli': kimiLogo,
   'minimax-code-cli': minimaxLogo,
+  'hermes-cli': hermesLogo,
   'grok-build': grokLogo,
   'deepseek-harness': deepseekLogo,
   'cline-cli': clineLogo,
@@ -82,6 +96,7 @@ export function adapterLabel(kind: AdapterKind): string {
     'cursor-agent': 'Cursor Agent',
     'kimi-code-cli': 'Kimi Code',
     'minimax-code-cli': 'MiniMax Code',
+    'hermes-cli': 'Hermes Agent',
     'grok-build': 'Grok Build',
     'deepseek-harness': 'DeepSeek Harness',
     'cline-cli': 'Cline',

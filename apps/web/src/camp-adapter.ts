@@ -35,6 +35,8 @@ export function createThreadAdapter(transport: ConsoleClient, selectWorkspaceDir
     platform: browserPlatform(),
     missionAttachments: null,
     editingRecovery: browserEditingRecovery(transport.editingScope),
+    reeditScope: transport.editingScope,
+    withdrawMessage: request => transport.requestWithSource('thread.messages.withdraw', request),
     exportDiagnostics: async () => downloadJson(await transport.request('diagnostics.export'), 'rovai-diagnostics.json'),
     exportMonitoring: async filter => downloadJson({ exportedAt: new Date().toISOString(), ...await transport.request<object>('monitoring.snapshot', filter) }, 'rovai-runtime-monitoring.json'),
     revealMonitoringExport: null,
@@ -64,6 +66,17 @@ export function createThreadAdapter(transport: ConsoleClient, selectWorkspaceDir
     },
     composerAttachments: {
       prepare: (threadId, revision, file) => transport.uploadFile(threadId, revision, file),
+      preparePastedText: (threadId, file) => transport.uploadFile(threadId, 1, file, { kind: 'pasted_text' }),
+      removePastedText: async (threadId, attachmentRefId) => {
+        const result = await transport.files<unknown>('removePastedText', { threadId, attachmentRefIds: [attachmentRefId] })
+        if (result !== 'deleted' && result !== 'retained') throw new Error('生成文件清理失败。')
+        return result
+      },
+      discard: async (threadId, attachmentRefIds) => {
+        if (!attachmentRefIds?.length) return
+        const result = await transport.files<{ released?: boolean }>('discardPastedText', { threadId, attachmentRefIds })
+        if (result?.released !== true) throw new Error('附件登记清理失败。')
+      },
       restore: async (threadId, attachments) => {
         const views = await transport.files<Array<LocalAttachmentSourceView | null>>('restoreComposerAttachments', {
           threadId, attachmentRefIds: attachments.map(({ id }) => id)

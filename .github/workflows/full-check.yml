@@ -222,7 +222,17 @@ jobs:
           cargo test -p rovai-core --lib --features extended-tests
           --target x86_64-pc-windows-msvc acp::compaction_detector_tests::
 
-      - name: Exercise Windows private storage admission
+      - name: Exercise Windows database recovery and ordinary permissions
+        run: >-
+          cargo test -p rovai-core --lib --features extended-tests
+          --target x86_64-pc-windows-msvc database_admission::
+
+      - name: Exercise Windows migration and interruption recovery
+        run: >-
+          cargo test -p rovai-core --lib --features extended-tests
+          --target x86_64-pc-windows-msvc authority_migration::
+
+      - name: Exercise Windows instance exclusion
         run: >-
           cargo test -p rovai-core --lib
           --target x86_64-pc-windows-msvc
@@ -367,7 +377,8 @@ jobs:
           ROVAI_SERVER_BIN: ${{ github.workspace }}/out/server/${{ matrix.target }}/rovai-server${{ matrix.target == 'windows-x64' && '.exe' || '' }}
           ROVAI_SERVER_RELEASE_DIR: ${{ github.workspace }}/out/server/releases/${{ matrix.target }}
           ROVAI_WEB_UI: ${{ github.workspace }}/out/server/${{ matrix.target }}/web-ui
-        run: node --test scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs scripts/lib/host-web-channels.test.mjs scripts/lib/server-entry.test.mjs scripts/lib/server-install.test.mjs
+        # Each file starts isolated Host/Core processes; avoid competing cold starts on small runners.
+        run: node --test --test-concurrency=1 scripts/lib/host-lifecycle.test.mjs scripts/lib/host-web.test.mjs scripts/lib/host-web-channels.test.mjs scripts/lib/server-entry.test.mjs scripts/lib/server-install.test.mjs
       - name: Upload checksummed native archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

@@ -7,6 +7,7 @@ import { useThreadClient } from './camp-client'
 import { CurrentUserProfileEditor, CurrentUserRosterEntry } from './CurrentUserProfileEditor'
 import { readErrorMessage } from './error-message'
 import {
+  Activity,
   forwardRef,
   useCallback,
   useEffect,
@@ -44,7 +45,7 @@ import {
 } from './AppDialog'
 import { localizeExecutionEngineTerms } from './product-copy'
 import { SettingsPageHeader } from './SettingsPageHeader'
-import { RuntimeStartupSettings } from './RuntimeStartupSettings'
+import { RuntimeStartupSettings, type RuntimeStartupLeaveGuard } from './RuntimeStartupSettings'
 import { RuntimeInstallationGuide } from './RuntimeInstallationGuide'
 import { runtimeInstallGuide } from './runtime-install-guide'
 import { invalidateManagedAvatarObjectUrl } from './managed-avatar-cache'
@@ -75,6 +76,7 @@ import {
 import type { MemberWorkspaceTab } from './MemberSidebar'
 import {
   VISIBLE_PRODUCT_RUNTIMES,
+  visibleProductRuntimes,
   PRODUCT_RUNTIME_LOGOS,
   adapterLabel
 } from './runtime-products'
@@ -109,6 +111,7 @@ type MembersViewProps = {
   onReload(): Promise<void>
   onProfileCommitted?(profile: AgentProfile): void
   onOpenRuntimeSettings(): void
+  onEditCommonEnvironment?(kind: AdapterKind, member: AgentProfile): void
   onCreateWithAI?(): Promise<boolean>
 }
 
@@ -480,6 +483,7 @@ const MemberEditor = forwardRef<
     onReload,
     onProfileCommitted,
     onOpenRuntimeSettings,
+    onEditCommonEnvironment,
     onStateChange,
     onApplyRuntime,
     onCreated,
@@ -853,6 +857,7 @@ const MemberEditor = forwardRef<
                 onClear={clearRuntime}
                 onReload={onReload}
                 onOpenRuntimeSettings={onOpenRuntimeSettings}
+                onEditCommonEnvironment={onEditCommonEnvironment}
                 onApplyToOthers={onApplyRuntime}
               />
             ) : (
@@ -1105,6 +1110,7 @@ export const MemberRuntimeForm = forwardRef<
     onClear(): Promise<void>
     onReload(): Promise<void>
     onOpenRuntimeSettings(): void
+    onEditCommonEnvironment?(kind: AdapterKind, member: AgentProfile): void
     onApplyToOthers?(agent: AgentProfile): void
   }
 >(function MemberRuntimeForm(
@@ -1122,6 +1128,7 @@ export const MemberRuntimeForm = forwardRef<
     onClear,
     onReload,
     onOpenRuntimeSettings,
+    onEditCommonEnvironment,
     onApplyToOthers
   },
   ref
@@ -1148,7 +1155,7 @@ export const MemberRuntimeForm = forwardRef<
   const submittingRef = useRef(false)
   const [submitting, setSubmitting] = useState(false)
   const currentStateKey = runtimeEditorStateKey({ selectedKind, draft })
-  const environment = useMemberEnvironment(agent.agentId, selectedKind, agent.version, draft?.model, hostPlatform === 'windows-x64')
+  const environment = useMemberEnvironment(agent.agentId, selectedKind, agent.version, draft?.model, hostPlatform === 'windows-x64', active)
   const dirty = currentStateKey !== baselineStateKey || environment.dirty
   const availability =
     runtimeAvailability.find((item) => item.runtimeKind === selectedKind) ??
@@ -1203,8 +1210,8 @@ export const MemberRuntimeForm = forwardRef<
   )
   const reportedVersion = availability?.reportedVersion?.trim() || null
 
-  const resetFromAgent = useCallback((): void => {
-    environment.reset()
+  const resetFromAgent = useCallback((resetEnvironment = true): void => {
+    if (resetEnvironment) environment.reset()
     const next = runtimeEditorState(agent, installations)
     setSelectedKind(next.selectedKind)
     setDraft(next.draft)
@@ -1241,7 +1248,7 @@ export const MemberRuntimeForm = forwardRef<
     if (disposition === 'unchanged') return
     persistedRuntimeKeyRef.current = nextPersistedKey
     if (disposition === 'saved_submission') {
-      resetFromAgent()
+      resetFromAgent(false)
       return
     }
     if (disposition === 'saved_submission_with_newer_draft') {
@@ -1311,6 +1318,7 @@ export const MemberRuntimeForm = forwardRef<
         <div className="member-editor-runtime-primary">
           <MemberRuntimePicker
             id={runtimeSelectId}
+            runtimeKinds={visibleProductRuntimes(hostPlatform, runtimePlatformAdmission)}
             value={selectedKind}
             disabled={(busy !== null || submitting) || persistedRuntimeLocked}
             hostPlatform={hostPlatform}
@@ -1394,7 +1402,7 @@ export const MemberRuntimeForm = forwardRef<
           />
         )}
 
-        {selectedKind && <MemberEnvironmentEditor environment={environment} disabled={(busy !== null || submitting) || !runtimeMutationAllowed}/> }
+        {selectedKind && <MemberEnvironmentEditor environment={environment} disabled={(busy !== null || submitting) || !runtimeMutationAllowed} onEditCommon={onEditCommonEnvironment ? () => onEditCommonEnvironment(selectedKind, agent) : undefined}/> }
 
         {conflict && (
           <div className="member-runtime-conflict" role="alert">
@@ -1403,7 +1411,7 @@ export const MemberRuntimeForm = forwardRef<
             <button
               className="quiet-button"
               type="button"
-              onClick={resetFromAgent}
+              onClick={() => resetFromAgent()}
             ><UiText zh={"重新读取已保存配置"} /></button>
           </div>
         )}
@@ -1436,7 +1444,7 @@ export const MemberRuntimeForm = forwardRef<
               className="member-editor-cancel"
               type="button"
               disabled={!dirty || (busy !== null || submitting)}
-              onClick={resetFromAgent}
+              onClick={() => resetFromAgent()}
             ><UiText zh={"放弃更改"} /></button>
             <button
               className="member-editor-primary member-editor-save"
@@ -1478,14 +1486,20 @@ function persistedRuntimeKey(agent: AgentProfile): string {
 
 export function RuntimeInstallationsPanel({
   health,
+  commonEnvironmentReturn,
+  active = true,
+  onLeaveGuardChange,
   onReload
 }: {
   health: RuntimeStatus | null
   installations: AdapterInstallation[]
+  commonEnvironmentReturn?: { kind: AdapterKind; memberName: string; onBack(): void }
+  active?: boolean
+  onLeaveGuardChange?(guard: RuntimeStartupLeaveGuard | null): void
   onReload(): Promise<void>
 }): React.JSX.Element {
   const client = useThreadClient()
-  const [settingsRuntime, setSettingsRuntime] = useState<AdapterKind | null>(null)
+  const [settingsRuntime, setSettingsRuntime] = useState<AdapterKind | null>(commonEnvironmentReturn?.kind ?? null)
   const [checkingKinds, setCheckingKinds] = useState<Set<AdapterKind>>(new Set())
   const pendingChecks = useRef(new Set<AdapterKind>())
   const [rescanning, setRescanning] = useState(false)
@@ -1541,11 +1555,12 @@ export function RuntimeInstallationsPanel({
     }
   }
 
-  if (settingsRuntime) return <RuntimeStartupSettings key={settingsRuntime} runtimeKind={settingsRuntime} health={health}
-    onBack={() => setSettingsRuntime(null)} />
+  if (settingsRuntime) return <RuntimeStartupSettings key={settingsRuntime} runtimeKind={settingsRuntime} health={health} active={active} onLeaveGuardChange={onLeaveGuardChange}
+    backLabel={commonEnvironmentReturn ? uiAttribute('返回 {0} 的队员配置', commonEnvironmentReturn.memberName) : undefined}
+    onBack={() => { if (commonEnvironmentReturn) commonEnvironmentReturn.onBack(); else setSettingsRuntime(null); void onReload() }} />
 
   return (
-    <>
+    <Activity mode={active ? 'visible' : 'hidden'}>
       <SettingsPageHeader
         eyebrow="Settings / Agents"
         title={uiAttribute("智能体")}
@@ -1575,7 +1590,7 @@ export function RuntimeInstallationsPanel({
         </div>
 
         <div className="runtime-product-list">
-          {VISIBLE_PRODUCT_RUNTIMES.map((runtimeKind) => {
+          {visibleProductRuntimes(health?.hostPlatform ?? null, health?.runtimePlatformAdmission ?? []).map((runtimeKind) => {
             const item = availability.find(
               (candidate) => candidate.runtimeKind === runtimeKind
             )
@@ -1648,7 +1663,7 @@ export function RuntimeInstallationsPanel({
           </div>
         )}
       </section>
-    </>
+    </Activity>
   )
 }
 

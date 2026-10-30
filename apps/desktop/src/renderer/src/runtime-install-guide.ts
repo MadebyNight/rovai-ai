@@ -41,6 +41,8 @@ const GUIDES: Partial<Record<AdapterKind, RuntimeInstallGuide>> = {
     alternatives: [brew('brew install anomalyco/tap/opencode'), npm('npm install -g opencode-ai')]
   },
   'copilot-cli': { docs: 'https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli' },
+  'command-code-cli': { docs: 'https://commandcode.ai/docs' },
+  'hermes-cli': { docs: 'https://hermes-agent.nousresearch.com/docs/user-guide/features/acp/' },
   'kiro-cli': { docs: 'https://kiro.dev/docs/cli/' },
   'qoder-cli': { docs: 'https://docs.qoder.com/cli/quick-start' },
   'codebuddy-cli': { docs: 'https://www.codebuddy.ai/docs/cli/quickstart' },

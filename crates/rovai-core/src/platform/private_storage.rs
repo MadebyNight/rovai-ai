@@ -114,9 +114,131 @@ fn prepare_windows_bootstrap_layout(root: &Path) -> Result<WindowsBootstrapLayou
         layout.logs.as_path(),
         layout.crash_dumps.as_path(),
     ] {
-        prepare_private_directory(directory)?;
+        prepare_data_directory(directory)?;
     }
     Ok(layout)
+}
+
+/// Ordinary application data: preserve existing permissions and let actual I/O
+/// decide availability. Credential/private-storage callers retain their policy.
+pub(crate) fn prepare_data_directory(path: &Path) -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        windows::prepare_data_directory(path)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(path)?;
+        anyhow::ensure!(path.is_dir(), "data path is not a directory");
+        Ok(path.canonicalize()?)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        prepare_private_directory(path)
+    }
+}
+
+pub(crate) fn open_data_read_write_file(path: &Path) -> Result<File> {
+    #[cfg(windows)]
+    {
+        windows::open_data_file(path, false)
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)?;
+        anyhow::ensure!(file.metadata()?.is_file(), "data file is not regular");
+        Ok(file)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        open_private_read_write_file(path)
+    }
+}
+
+pub(crate) fn create_data_new_file(path: &Path) -> Result<File> {
+    #[cfg(windows)]
+    {
+        windows::open_data_file(path, true)
+    }
+    #[cfg(not(windows))]
+    {
+        create_private_new_file(path)
+    }
+}
+
+pub(crate) fn open_data_append_file(path: &Path) -> Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.append(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    anyhow::ensure!(file.metadata()?.is_file(), "log path is not regular");
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        anyhow::ensure!(
+            file.metadata()?.file_attributes()
+                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+                == 0,
+            "log path is a reparse point"
+        );
+    }
+    Ok(file)
+}
+
+// The legacy Server token retains its file-level private DACL. Only its parent
+// follows the ordinary Core data-root policy; this is not a generic relaxation.
+#[cfg(windows)]
+pub(crate) fn open_server_token_read_file(path: &Path) -> Result<File> {
+    windows::open_server_token_read_file(path)
+}
+
+pub(crate) fn open_data_read_file(path: &Path) -> Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    anyhow::ensure!(metadata.is_file(), "data file is not regular");
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        anyhow::ensure!(
+            metadata.file_attributes()
+                & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
+                == 0,
+            "data file is a reparse point"
+        );
+    }
+    Ok(file)
 }
 
 /// Creates or admits a private directory and returns its canonical path.
@@ -156,26 +278,6 @@ pub(crate) fn repair_private_file(path: &Path) -> Result<()> {
     windows::repair_private_object(path, false)
 }
 
-/// Migrates only a known managed child of an already admitted private parent.
-/// Existing objects must carry the parent's exact inherited user/SYSTEM ACL;
-/// this is not admission or repair of arbitrary existing directories.
-#[cfg(windows)]
-pub(crate) fn prepare_legacy_managed_private_directory(path: &Path) -> Result<PathBuf> {
-    admit_private_directory(path.parent().context("managed directory has no parent")?)?;
-    if std::fs::symlink_metadata(path)
-        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
-    {
-        return prepare_private_directory(path);
-    }
-    windows::repair_inherited_private_object(path, true)?;
-    admit_private_directory(path)
-}
-
-#[cfg(windows)]
-pub(crate) fn repair_legacy_managed_private_file(path: &Path) -> Result<()> {
-    windows::repair_inherited_private_object(path, false)
-}
-
 #[cfg(windows)]
 pub(crate) fn commit_private_directory_temporary(source: &Path, destination: &Path) -> Result<()> {
     windows::commit_private_directory_temporary(source, destination)
@@ -190,14 +292,6 @@ pub(crate) fn open_private_read_write_file(path: &Path) -> Result<File> {
     open_private_read_write_file_platform(path, false)
 }
 
-/// Append-only diagnostics retain the same private-file admission. Multiple
-/// entry processes cannot overwrite each other's startup/refusal records.
-pub(crate) fn open_private_append_file(path: &Path) -> Result<File> {
-    open_private_read_write_file_platform(path, true)
-}
-
-/// Opens an existing private regular file without ever creating a replacement.
-#[cfg(any(unix, windows))]
 pub fn open_private_read_file(path: &Path) -> Result<File> {
     open_private_read_file_platform(path)
 }
@@ -324,6 +418,31 @@ pub fn atomic_write_private_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
+/// Writes an ordinary Windows file with inherited permissions. No ACL admission
+/// or repair is needed, but publication retains the private writer's atomic,
+/// write-through commit so a failed update leaves the previous record intact.
+#[cfg(windows)]
+pub(crate) fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().context("file path has no parent")?;
+    let temporary = parent.join(format!(".{}.tmp", Uuid::new_v4()));
+    // Acquire our own new file before arranging cleanup: a create failure must
+    // never delete an existing object that happened to use the temporary name.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| -> Result<()> {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        commit_private_temporary(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Publishes a fully written private sibling to its final name.
 ///
 /// Callers must create, validate, flush, and close `source` before invoking
@@ -357,18 +476,17 @@ pub(crate) fn publish_private_new_temporary_file(source: &Path, destination: &Pa
 
 #[cfg(windows)]
 fn prepare_windows_data_root_platform(layout: &WindowsDataRootLayout) -> Result<()> {
-    let default_root = dirs::data_local_dir().map(|root| root.join("Rovai AI"));
-    windows::prepare_configured_data_root(&layout.root, default_root.as_deref())?;
-    prepare_private_directory(&layout.core)?;
+    prepare_data_directory(&layout.root)?;
+    prepare_data_directory(&layout.core)?;
     let electron = layout
         .electron_user_data
         .parent()
         .expect("Windows Electron User Data always has an Electron parent");
-    prepare_private_directory(electron)?;
-    prepare_private_directory(&layout.electron_user_data)?;
-    prepare_private_directory(&layout.electron_session_data)?;
-    prepare_private_directory(&layout.logs)?;
-    prepare_private_directory(&layout.crash_dumps)?;
+    prepare_data_directory(electron)?;
+    prepare_data_directory(&layout.electron_user_data)?;
+    prepare_data_directory(&layout.electron_session_data)?;
+    prepare_data_directory(&layout.logs)?;
+    prepare_data_directory(&layout.crash_dumps)?;
     Ok(())
 }
 
@@ -505,13 +623,104 @@ mod windows {
     const IDENTITY_UNAVAILABLE: &str = "windows_storage.identity_unavailable";
     const REPARSE_ROOT_REJECTED: &str = "windows_storage.reparse_root_rejected";
     const PRIVATE_ACL_INVALID: &str = "windows_storage.private_acl_invalid";
-    const PRIVATE_ACL_PERMISSION_DENIED: &str = "windows_storage.private_acl_permission_denied";
-    const PRIVATE_ACL_REPAIR_FAILED: &str = "windows_storage.private_acl_repair_failed";
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct FileIdentity {
         volume_serial_number: u64,
         file_id: [u8; 16],
+    }
+
+    pub(super) fn prepare_data_directory(path: &Path) -> Result<PathBuf> {
+        validate_native_absolute_path(path)?;
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let parent = path.parent().context("data directory has no parent")?;
+                prepare_data_directory(parent)?;
+                // Keep a protected user/SYSTEM DACL for newly created objects.
+                // Existing directories never need READ_CONTROL or WRITE_DAC.
+                if let Err(error) = create_private_directory_native(path) {
+                    if std::fs::symlink_metadata(path).is_err() {
+                        return Err(error);
+                    }
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+        let handle = open_data_path(path, ExpectedObjectKind::Directory)?;
+        admit_volume(path)?;
+        let identity = file_identity(&handle)?;
+        let canonical = path.canonicalize()?;
+        let reopened = open_data_path(&canonical, ExpectedObjectKind::Directory)?;
+        anyhow::ensure!(
+            file_identity(&reopened)? == identity,
+            "data directory identity changed"
+        );
+        Ok(canonical)
+    }
+
+    pub(super) fn open_data_file(path: &Path, create_new: bool) -> Result<File> {
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        validate_native_absolute_path(path)?;
+        prepare_data_directory(path.parent().context("data file has no parent")?)?;
+        let descriptor = PrivateSecurityDescriptor::new(PrivateObjectKind::File)?;
+        let attributes = descriptor.attributes();
+        let wide = wide_path(path)?;
+        let mut raw = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                &attributes,
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                null_mut(),
+            )
+        };
+        if raw == INVALID_HANDLE_VALUE {
+            let error = io::Error::last_os_error();
+            if !create_new
+                && matches!(
+                    error.raw_os_error().map(|v| v as u32),
+                    Some(ERROR_FILE_EXISTS | ERROR_ALREADY_EXISTS)
+                )
+            {
+                raw = unsafe {
+                    CreateFileW(
+                        wide.as_ptr(),
+                        GENERIC_READ | GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        null(),
+                        OPEN_EXISTING,
+                        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+                        null_mut(),
+                    )
+                };
+            } else {
+                return Err(error.into());
+            }
+        }
+        if raw == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error().into());
+        }
+        let handle = owned_handle(raw)?;
+        clear_handle_inheritance(&handle)?;
+        inspect_handle(&handle, ExpectedObjectKind::File)?;
+        Ok(File::from(handle))
+    }
+
+    pub(super) fn open_server_token_read_file(path: &Path) -> Result<File> {
+        validate_native_absolute_path(path)?;
+        prepare_data_directory(path.parent().context("server token has no parent")?)?;
+        let handle =
+            open_existing_private_file(path, windows_sys::Win32::Foundation::GENERIC_READ)?;
+        inspect_handle(&handle, ExpectedObjectKind::File)?;
+        verify_private_acl(&handle, PrivateObjectKind::File, "Server token")?;
+        Ok(File::from(handle))
+    }
+
+    fn open_data_path(path: &Path, kind: ExpectedObjectKind) -> Result<OwnedHandle> {
+        open_path_with_access(path, kind, FILE_READ_ATTRIBUTES)
     }
 
     pub(super) fn prepare_private_directory(path: &Path) -> Result<PathBuf> {
@@ -529,138 +738,6 @@ mod windows {
         }
 
         admit_private_directory(path)
-    }
-
-    pub(super) fn prepare_configured_data_root(
-        path: &Path,
-        default_root: Option<&Path>,
-    ) -> Result<PathBuf> {
-        if default_root.is_none_or(|default| same_windows_path(path, default)) {
-            return prepare_private_directory(path);
-        }
-
-        let metadata = match std::fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return prepare_private_directory(path);
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to inspect configured Windows data root {}",
-                        path.display()
-                    )
-                });
-            }
-        };
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return prepare_private_directory(path);
-        }
-
-        if !private_directory_permissions_need_repair(path)? {
-            return admit_private_directory(path);
-        }
-        if !contains_only_development_instance_lock(path)? {
-            return prepare_private_directory(path);
-        }
-
-        repair_configured_data_root_acl(path)?;
-        admit_private_directory(path)
-    }
-
-    fn same_windows_path(left: &Path, right: &Path) -> bool {
-        let left = std::fs::canonicalize(left).unwrap_or_else(|_| left.to_path_buf());
-        let right = std::fs::canonicalize(right).unwrap_or_else(|_| right.to_path_buf());
-        left.to_string_lossy()
-            .replace('/', "\\")
-            .eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
-    }
-
-    fn contains_only_development_instance_lock(path: &Path) -> Result<bool> {
-        let mut entries = std::fs::read_dir(path)?;
-        let Some(entry) = entries.next() else {
-            return Ok(true);
-        };
-        let entry = entry?;
-        if entry.file_name() != ".development-instance.lock" {
-            return Ok(false);
-        }
-        let metadata = std::fs::symlink_metadata(entry.path())?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Ok(false);
-        }
-        Ok(entries.next().is_none())
-    }
-
-    fn repair_configured_data_root_acl(path: &Path) -> Result<()> {
-        validate_native_absolute_path(path)?;
-        admit_volume(path)?;
-        let handle = open_path_for_acl_repair(path, ExpectedObjectKind::Directory)
-            .map_err(|error| configured_root_acl_repair_error(path, error))?;
-        let identity = file_identity(&handle)?;
-        let policy = PrivateSecurityDescriptor::new(PrivateObjectKind::Directory)
-            .map_err(|error| configured_root_acl_repair_error(path, error))?;
-        if !policy
-            .file_permissions_need_repair(handle.as_raw_handle() as HANDLE)
-            .map_err(|error| configured_root_acl_repair_error(path, error))?
-        {
-            return verify_private_acl(
-                &handle,
-                PrivateObjectKind::Directory,
-                "configured data root",
-            )
-            .map_err(|error| configured_root_acl_repair_error(path, error));
-        }
-        if !contains_only_development_instance_lock(path)? {
-            bail!(
-                "{PRIVATE_ACL_INVALID}: configured data root became nonempty; refusing to change its DACL: {}",
-                path.display()
-            );
-        }
-        policy
-            .apply_file_dacl(handle.as_raw_handle() as HANDLE)
-            .map_err(|error| configured_root_acl_repair_error(path, error))?;
-        verify_private_acl(
-            &handle,
-            PrivateObjectKind::Directory,
-            "repaired configured data root",
-        )
-        .map_err(|error| configured_root_acl_repair_error(path, error))?;
-        let reopened = open_path(path, ExpectedObjectKind::Directory)
-            .map_err(|error| configured_root_acl_repair_error(path, error))?;
-        if file_identity(&reopened)? != identity {
-            bail!(
-                "{IDENTITY_UNAVAILABLE}: configured data root identity changed during DACL repair: {}",
-                path.display()
-            );
-        }
-        Ok(())
-    }
-
-    pub(super) fn configured_root_acl_repair_error(
-        path: &Path,
-        error: anyhow::Error,
-    ) -> anyhow::Error {
-        let permission_denied = error.chain().any(|cause| {
-            cause
-                .downcast_ref::<io::Error>()
-                .and_then(io::Error::raw_os_error)
-                .is_some_and(|code| {
-                    code == windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32
-                        || code == windows_sys::Win32::Foundation::ERROR_PRIVILEGE_NOT_HELD as i32
-                })
-        });
-        blocker(
-            if permission_denied {
-                PRIVATE_ACL_PERMISSION_DENIED
-            } else {
-                PRIVATE_ACL_REPAIR_FAILED
-            },
-            format!(
-                "failed to tighten inherited DACL for configured data root {}: {error:#}",
-                path.display()
-            ),
-        )
     }
 
     pub(super) fn admit_private_directory(path: &Path) -> Result<PathBuf> {
@@ -1012,23 +1089,7 @@ mod windows {
         }
     }
 
-    pub(super) fn repair_inherited_private_object(path: &Path, directory: bool) -> Result<()> {
-        let parent = path
-            .parent()
-            .context("managed storage object has no parent")?;
-        admit_private_directory(parent)?;
-        repair_private_object_with_policy(path, directory, true)
-    }
-
     pub(super) fn repair_private_object(path: &Path, directory: bool) -> Result<()> {
-        repair_private_object_with_policy(path, directory, false)
-    }
-
-    fn repair_private_object_with_policy(
-        path: &Path,
-        directory: bool,
-        inherited_only: bool,
-    ) -> Result<()> {
         validate_native_absolute_path(path)?;
         admit_volume(path)?;
         let expected = if directory {
@@ -1046,11 +1107,6 @@ mod windows {
             .map_err(|error| blocker(PRIVATE_ACL_INVALID, format!("{error:#}")))?;
         if !policy.file_permissions_need_repair(handle.as_raw_handle() as HANDLE)? {
             return Ok(());
-        }
-        if inherited_only {
-            policy
-                .verify_inherited_file_handle(handle.as_raw_handle() as HANDLE)
-                .map_err(|error| blocker(PRIVATE_ACL_INVALID, format!("{error:#}")))?;
         }
         policy
             .apply_file_dacl(handle.as_raw_handle() as HANDLE)
@@ -1157,6 +1213,14 @@ mod windows {
     }
 
     fn open_path(path: &Path, expected: ExpectedObjectKind) -> Result<OwnedHandle> {
+        open_path_with_access(path, expected, FILE_READ_ATTRIBUTES | READ_CONTROL)
+    }
+
+    fn open_path_with_access(
+        path: &Path,
+        expected: ExpectedObjectKind,
+        access: u32,
+    ) -> Result<OwnedHandle> {
         let wide_path = wide_path(path)?;
         let flags = FILE_FLAG_OPEN_REPARSE_POINT
             | match expected {
@@ -1168,7 +1232,7 @@ mod windows {
             // the returned handle non-inheritable and OPEN_EXISTING never creates.
             CreateFileW(
                 wide_path.as_ptr(),
-                FILE_READ_ATTRIBUTES | READ_CONTROL,
+                access,
                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 null(),
                 OPEN_EXISTING,
@@ -1510,84 +1574,6 @@ mod tests {
         assert!(WindowsDataRootLayout::from_root(Path::new("relative-root")).is_err());
         let parent_path = std::env::temp_dir().join("child").join("..").join("root");
         assert!(WindowsDataRootLayout::from_root(&parent_path).is_err());
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn configured_custom_root_repairs_only_empty_or_development_lock_roots() {
-        for with_lock in [false, true] {
-            let root = std::env::temp_dir().join(format!(
-                "rovai-configured-empty-root-{}-{}",
-                Uuid::new_v4(),
-                with_lock
-            ));
-            std::fs::create_dir(&root).unwrap();
-            if with_lock {
-                std::fs::write(root.join(".development-instance.lock"), b"123\n").unwrap();
-            }
-            assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
-
-            let admitted =
-                windows::prepare_configured_data_root(&root, Some(Path::new("C:\\Rovai AI")))
-                    .unwrap();
-            assert_eq!(admitted, std::fs::canonicalize(&root).unwrap());
-            assert!(!windows::private_directory_permissions_need_repair(&root).unwrap());
-            windows::admit_private_directory(&root).unwrap();
-            if with_lock {
-                assert!(root.join(".development-instance.lock").is_file());
-            }
-            std::fs::remove_dir_all(root).unwrap();
-        }
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn configured_custom_root_with_data_is_not_repaired() {
-        let root =
-            std::env::temp_dir().join(format!("rovai-configured-nonempty-root-{}", Uuid::new_v4()));
-        std::fs::create_dir(&root).unwrap();
-        std::fs::write(root.join(".development-instance.lock"), b"123\n").unwrap();
-        std::fs::write(root.join("existing-data"), b"keep").unwrap();
-
-        let error = windows::prepare_configured_data_root(&root, Some(Path::new("C:\\Rovai AI")))
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("windows_storage.private_acl_invalid"));
-        assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
-        assert_eq!(std::fs::read(root.join("existing-data")).unwrap(), b"keep");
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn system_default_root_does_not_use_custom_root_acl_repair() {
-        let root = std::env::temp_dir().join(format!("rovai-default-data-root-{}", Uuid::new_v4()));
-        std::fs::create_dir(&root).unwrap();
-        std::fs::write(root.join(".development-instance.lock"), b"123\n").unwrap();
-        assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
-
-        assert!(windows::prepare_configured_data_root(&root, Some(&root)).is_err());
-        assert!(windows::private_directory_permissions_need_repair(&root).unwrap());
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn custom_root_acl_repair_reports_permission_denial_separately() {
-        let root = Path::new(r"C:\custom-root");
-        let denied = windows::configured_root_acl_repair_error(
-            root,
-            std::io::Error::from_raw_os_error(
-                windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as i32,
-            )
-            .into(),
-        );
-        assert!(format!("{denied:#}").contains("windows_storage.private_acl_permission_denied"));
-
-        let failed = windows::configured_root_acl_repair_error(
-            root,
-            anyhow::anyhow!("synthetic repair failure"),
-        );
-        assert!(format!("{failed:#}").contains("windows_storage.private_acl_repair_failed"));
     }
 
     #[test]

@@ -33,8 +33,13 @@ runtime compatibility / execution ownership identity
 接口返回 `ManagedProcess`，其可观察能力限于 stdio、PID/OS identity、wait、graceful request、bounded tree
 termination 与 reap result。调用方不接触 Job/process-group handle，也不自行 attach、break away 或枚举后代。
 
-默认 `shared` / `git_worktree` 的 Managed Process 直接启动捕获的 application 与结构化 argv，不配置 User Automation protected tree。
-显式 `windows_account` 使用下述账户 bootstrap；它是 Windows 账户身份边界，不是文件白名单或零落盘承诺。Runtime 原生权限与沙箱仍由对应 Runtime 控制。
+Runtime 上报 PID 的归属核验也由此边界拥有。Windows 整树所有权只以本次受管 Job handle 查询仍存活的成员，
+兼容 command shim 与原生子进程的不同 PID；未知、无权查询、已退出或其他 Job 的进程均不通过。
+其他平台继续核对受管根 PID。调用方不通过全局进程枚举、名称或仅有父 PID 关系替代这一证据。
+
+默认 `shared` / `git_worktree` 的 Managed Process 直接启动捕获的 application 与结构化 argv，不配置 User Automation protected tree，
+不增加 Rovai 自有文件访问沙箱。显式 `windows_account` 使用下述账户 bootstrap；它是 Windows 账户身份边界，不是文件白名单或零落盘承诺。
+Runtime 原生权限与沙箱仍由对应 Runtime 控制。
 
 capture 先验证 application 是已存在的绝对文件，再冻结工作目录与显式环境。普通 capture 不按 PATH 或 cwd 解析 bare/
 relative application；调用方必须先完成自身已有的 Runtime discovery 与 entrypoint qualification。argv 始终保持结构化
@@ -214,8 +219,13 @@ Native shell 可创建独立进程组，回收不能只依赖 `killpg`。Darwin 
 每个 Host 在现有 Runtime 私有目录保存 mode 0600 的原子 ownership ledger，父目录 mode 0700；记录
 boot session、Core owner 和已观测祖先，不保存 argv、Prompt、凭据或工具输出。运行时采集与显式清理复用
 同一 ledger。确认整棵已捕获树不再运行才移除记录；读写、身份或信号失败保留未确认状态。
-Core 在开放 readiness 前处理前代 ledger；仅同次系统启动且原 owner 已消失时回收，失败则关闭启动准入。
-旧 boot 的记录只清除文件，不向可能复用 PID 的新进程发信号。
+Core ready 后从唯一启动位置在阻塞工作线程尝试一轮前代 ledger 与 Fleet owner record 清理；不持有数据库锁，
+不在 RPC 请求循环等待进程退出，不进入 Adapter 初始化、功能重试或当前任务 Stop。全部目录共用三秒预算，
+单条最多 250ms，诊断最多 16 条、每条 512 字符；单条异常继续下一条，总预算耗尽结束本轮。
+仅原 owner 已消失或旧 Fleet generation 的记录进入回收；当前 Core 的 owner/generation 始终排除。
+旧 boot 的记录只清除文件，不向可能复用 PID 的新进程发信号。PID 复用按原生命周期已消失处理，不触碰新进程。
+损坏、格式不支持、权限异常、身份未知和文件 I/O 失败保留未清理状态及有限诊断，不产生 authority_recovery_failed，
+不降级 Runtime，也不补写业务 cleanup ACK。历史清理是否完成不决定工作区是否可用；当前执行的 Stop/退出仍按实际结果确认。
 
 这是既有 Unix 回收的补强，不是 Windows Job/cgroup：未观测且已消失的中间祖先、跨 UID 后代、Core 停止后
 直到再次启动前的空窗不受此记录保证。macOS 使用 XNU libproc 的固定结构与 PID-version signal 接口，
@@ -293,3 +303,15 @@ pipe handle。Main 被强制终止后，Core 必须在 deadline 内通过 stdin 
 - [Windows Job Completion Notifications](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_associate_completion_port)
 - [Windows Object Lifecycle](https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/life-cycle-of-an-object)
 - [TerminateProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess)
+
+
+## 原生共享执行端的连接进程
+
+`RuntimeConnection` 仅拥有本次启动的客户端根进程。Hermes 正式 ACP 与 ACP 探测使用此 purpose，
+不收集 descendant ledger、不向进程组或后代发送清理信号；原生共享 Gateway 可继续运行。
+即使客户端首次启动 Gateway，后者也不变为 Run 私有资源。其他 purpose 的树所有权不变。
+Windows 的此 purpose 不分配 Rovai Job；仍使用相同的入口身份校验和仅 stdio 的 handle 继承列表。
+PID 归属只核对本次捕获的存活根进程 handle；强制清理通过该 handle 调用 `TerminateProcess`，
+`tree_is_empty()` 在此模式只证明根进程退出。退出竞态不转为按 PID 重查或全局扫杀。
+其他 purpose 保留创建时原子加入 kill-on-close Job、完整后代归属与清理保证。
+根进程退出只证明连接结束，原生执行未知仍按任务合同处理。用户授权取消通过官方协议进行。

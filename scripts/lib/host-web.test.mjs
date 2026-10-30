@@ -8,6 +8,7 @@ import { launchHost, within } from './host-test-client.mjs'
 import { createServer } from 'node:net'
 import { request as httpRequest } from 'node:http'
 import test from 'node:test'
+import { exercisePastedText, verifyPastedTextRestart } from './host-web-pasted-text.mjs'
 import { DatabaseSync } from 'node:sqlite'
 import { setTimeout as pause } from 'node:timers/promises'
 import { coreDataDirectoryArguments, removeEphemeralRuntimeCampFilesRoot } from './runtime-camp-files-root.mjs'
@@ -248,8 +249,9 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     const legacyDefaults = { newConversationDefaults: { memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId }, newConversationDefaultsRequireConfirmation: false, oneClickNewConversationEnabled: true }
     assert.equal((await call(first, defaultsMethod + 'get')).newConversationDefaults, null)
     await host.request(defaultsMethod + 'initialize', legacyDefaults)
-    assert.deepEqual(await call(first, defaultsMethod + 'get'), legacyDefaults)
-    assert.deepEqual(await call(second, defaultsMethod + 'get'), legacyDefaults)
+    const importedDefaults = { ...legacyDefaults, newConversationTeamId: null }
+    assert.deepEqual(await call(first, defaultsMethod + 'get'), importedDefaults)
+    assert.deepEqual(await call(second, defaultsMethod + 'get'), importedDefaults)
     const toggled = await call(first, defaultsMethod + 'setOneClick', { enabled: false })
     assert.equal(toggled.oneClickNewConversationEnabled, false)
     // Re-import after restart must never overwrite a choice made in Web.
@@ -260,8 +262,8 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.deepEqual(await host.request(defaultsMethod + 'get'), sharedDefaults)
     assert.deepEqual(await call(first, defaultsMethod + 'invalidate', { expectedDefaults: legacyDefaults.newConversationDefaults }), sharedDefaults)
     const invalidated = await call(first, defaultsMethod + 'invalidate', { expectedDefaults: nextTeam })
-    assert.equal(invalidated.newConversationDefaultsRequireConfirmation, true)
-    await assert.rejects(host.request(defaultsMethod + 'setOneClick', { enabled: true }))
+    assert.deepEqual(invalidated, sharedDefaults, 'a stale invalidation cannot disable an available Custom roster')
+    assert.deepEqual(await host.request(defaultsMethod + 'setOneClick', { enabled: true }), sharedDefaults)
     assert.deepEqual(await call(first, defaultsMethod + 'setDefaults', { defaults: nextTeam, enableOneClick: false }), sharedDefaults)
     for (const defaults of [{ ...nextTeam, defaultLeadAgentId: 'missing' }, { memberAgentIds: ['missing'], defaultLeadAgentId: 'missing' }, { memberAgentIds: [profiles[0].agentId, profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId }]) {
       await assert.rejects(host.request(defaultsMethod + 'setDefaults', { defaults, enableOneClick: false }))
@@ -387,6 +389,8 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       assert.equal('sourcePath' in missingUpload, false)
     } finally { await rename(`${bound.sourcePath}-temporarily-missing`, bound.sourcePath) }
 
+    const pasteState = await exercisePastedText({ host, origin, session: first, otherSession: second, threadId, otherThreadId: directoryCamp.payload.threadId, dataDir, spools })
+
     // Actual HTTP ingress and the shared private page API use the verified
     // editor, never the client-provided conversation or command identity alone.
     const privateOpen = session => call(session, 'singleChat.open', { commandId: crypto.randomUUID(), command: { threadId, agentId: profiles[0].agentId } })
@@ -470,11 +474,61 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       assert.equal(avatarResponse.headers.get('content-type'), 'image/png')
       assert.deepEqual(Buffer.from(await avatarResponse.arrayBuffer()), expected)
     }
+    const commandLogo = (await readdir(assetDirectory)).find(name => /^command-code-[\w-]+\.ico$/.test(name))
+    assert.ok(commandLogo, 'production Web package includes the Command Code icon')
+    const logoResponse = await fetch(`${origin}/assets/${commandLogo}`, { redirect: 'error' })
+    assert.equal(logoResponse.status, 200)
+    assert.equal(logoResponse.headers.get('content-type'), 'image/vnd.microsoft.icon')
+    assert.deepEqual(Buffer.from(await logoResponse.arrayBuffer()), await readAssetFile(join(repository, 'apps/desktop/src/renderer/src/assets/runtime-logos/command-code.ico')))
     const controller = new AbortController(); controllers.push(controller)
     const stream = await fetch(`${origin}/api/v1/events`, { headers: { Authorization: `Bearer ${first.token}` }, signal: controller.signal })
     assert.equal(stream.status, 200)
     const reader = stream.body.getReader()
     assert.match(new TextDecoder().decode((await within(reader.read())).value), /event: resync/)
+    const eventPreference = await call(first, 'notifications.preference.get')
+    await call(first, 'notifications.preference.update', { commandId: crypto.randomUUID(), command: {
+      expectedVersion: eventPreference.version, headsUpEnabled: !eventPreference.headsUpEnabled,
+      ...Object.fromEntries(['approvalHeadsUpEnabled', 'userMentionHeadsUpEnabled', 'turnCompletedHeadsUpEnabled',
+        'turnIncompleteHeadsUpEnabled', 'singleChatHeadsUpEnabled', 'missionNeedsYouHeadsUpEnabled',
+        'missionStatusHeadsUpEnabled', 'taskStatusHeadsUpEnabled', 'missionStatuses', 'taskStatuses'].map(key => [key, eventPreference[key]]))
+    } })
+    await within((async () => {
+      let frames = ''
+      while (!frames.includes('"notificationsChanged":true')) {
+        const next = await reader.read()
+        assert.equal(next.done, false, 'notification invalidation must arrive on the existing stream')
+        frames += new TextDecoder().decode(next.value)
+      }
+      assert.ok(!frames.includes('"teamsChanged":true'), 'unrelated notification events do not invalidate Teams')
+      assert.ok(!frames.includes('"referencesChanged":true'), 'unrelated events do not refresh references')
+    })())
+    const savedTeam = await call(first, 'teams.save', { commandId: crypto.randomUUID(), command: {
+      teamId: null, expectedVersion: null, name: 'Web SSE Team', guidance: '',
+      memberAgentIds: [profiles[0].agentId], defaultLeadAgentId: profiles[0].agentId
+    } })
+    assert.equal(savedTeam.status, 'applied', JSON.stringify(savedTeam))
+    await within((async () => {
+      let frames = ''
+      while (!frames.includes('"teamsChanged":true')) {
+        const next = await reader.read()
+        assert.equal(next.done, false, 'Team invalidation must arrive on the existing stream')
+        frames += new TextDecoder().decode(next.value)
+      }
+      assert.ok(!frames.includes('Web SSE Team'), 'SSE exposes invalidation, not private Team contents')
+    })())
+    const referenceSource = (await call(first, 'camps.open', { threadId, traceId: crypto.randomUUID() })).thread
+    assert.equal((await call(first, 'camps.rename', { commandId: crypto.randomUUID(), command: {
+      threadId, expectedVersion: referenceSource.version, title: 'Reference source renamed'
+    } })).status, 'applied')
+    await within((async () => {
+      let frames = ''
+      while (!frames.includes('"referencesChanged":true')) {
+        const next = await reader.read()
+        assert.equal(next.done, false, 'reference rename invalidation must arrive on the existing stream')
+        frames += new TextDecoder().decode(next.value)
+      }
+      assert.ok(!frames.includes('Reference source renamed') && !frames.includes('camps.rename'), 'SSE carries only the reference invalidation bit')
+    })())
     const otherReaders = []
     for (const session of [first, second]) {
       const controller = new AbortController(); controllers.push(controller)
@@ -837,7 +891,17 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
     assert.equal(changedPreference.status, 'applied')
     assert.deepEqual((await call(second, 'notifications.preference.get')).headsUpEnabled, !preference.headsUpEnabled)
     assert.deepEqual((await call(first, 'commands.reconcile', { operation: 'notifications.preference.update', params: preferenceParams })).result, changedPreference)
-    assert.equal((await call(first, 'notifications.inbox', { filter: 'unread', limit: 1 })).schemaVersion, 9)
+    assert.equal((await call(first, 'notifications.inbox', { filter: 'unread', limit: 1 })).schemaVersion, 11)
+    const interruptionProjection = await call(first, 'notifications.threadInterruptions', { threadIds: [fileCampId] })
+    assert.deepEqual(interruptionProjection.threads, [{ threadId: fileCampId, hasUnreadInterruption: false }])
+    const interruptionRead = { commandId: crypto.randomUUID(), command: {
+      threadId: fileCampId, observedThroughChangeSequence: interruptionProjection.throughChangeSequence
+    } }
+    const interruptionReceipt = await call(first, 'notifications.acknowledgeThreadInterruptions', interruptionRead)
+    assert.equal(interruptionReceipt.status, 'applied')
+    assert.deepEqual((await call(second, 'commands.reconcile', {
+      operation: 'notifications.acknowledgeThreadInterruptions', params: interruptionRead
+    })).result, interruptionReceipt)
     const exported = await call(first, 'diagnostics.export')
     assert.equal(exported.format, 'rovai-diagnostics-v5')
     assert.equal(JSON.stringify(exported).includes(administrator), false)
@@ -936,11 +1000,13 @@ test('Desktop and Web share one Core while listener failure, revocation and stop
       assert.equal(recoveredIdentity.clientId, beforeExit.clientId)
       assert.equal(recoveredIdentity.expiresAt, beforeExit.expiresAt)
       for (const session of [first, second, beforeStop]) assert.equal((await fetch(`${reopenedWeb.origin}/api/v1/session/renew`, { method: 'POST', headers: { Authorization: `Bearer ${session.token}` } })).status, 401, 'prior explicit revocations survive Host restart')
+      await verifyPastedTextRestart({ origin: reopenedWeb.origin, administratorToken: reopenedWeb.administratorToken, state: pasteState })
       assert.deepEqual(await reopened.request(defaultsMethod + 'get'), sharedDefaults)
       assert.deepEqual(await reopened.request(defaultsMethod + 'initialize', legacyDefaults), sharedDefaults)
       const path = join(dataDir, 'new-conversation-preferences.json')
       await writeFile(path, '{broken')
-      await assert.rejects(reopened.request(defaultsMethod + 'get'), 'corrupt preferences cannot masquerade as an empty team')
+      assert.deepEqual(await reopened.request(defaultsMethod + 'get'), sharedDefaults,
+        'once imported, the legacy file cannot replace the authoritative SQLite preferences')
     } finally { await reopened.close() }
     const disabled = launch([...coreDataDirectoryArguments(dataDir), '--skill-library-root', join(dataDir, 'skills'), '--mcp-config-path', join(dataDir, 'mcp.json')])
     try {

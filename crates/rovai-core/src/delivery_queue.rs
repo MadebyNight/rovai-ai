@@ -20,7 +20,8 @@ use crate::{
         projected_skill_links_for_claim,
     },
     db::Database,
-    runtime::{AgentRunWorkspace, runtime_cleanup_blocked_since_connection},
+    planned_shutdown::ActiveExecutionKey,
+    runtime::{AgentRunWorkspace, RuntimeCleanupScope, runtime_cleanup_blocked_since_connection},
     runtime_failure::context_payload_too_large_failure,
 };
 
@@ -262,7 +263,7 @@ pub fn has_waiting_delivery_batch_work(database: &Database) -> Result<bool> {
 /// resolved here. Mission lanes wait for their exact workspace facts, prepared
 /// asynchronously before selection; ordinary lanes need no preparation input.
 pub fn claim_waiting_delivery_batches(database: &mut Database, limit: i64) -> Result<Vec<String>> {
-    claim_waiting_delivery_batches_with_workspaces(database, limit, &Default::default())
+    claim_waiting_delivery_batches_with_workspaces(database, limit, &Default::default(), &[])
 }
 
 /// Actual Mission execution facts observed outside the claim transaction.
@@ -297,7 +298,10 @@ pub fn capture_prepared_batch_workspace(
     })
 }
 
-pub fn waiting_mission_batch_workspaces(database: &Database) -> Result<Vec<(String, String)>> {
+pub fn waiting_mission_batch_workspaces(
+    database: &Database,
+    active_executions: &[ActiveExecutionKey],
+) -> Result<Vec<(String, String)>> {
     let lanes = database.connection().prepare(
         "SELECT DISTINCT camp.id,camp.project_path,c.id,m.agent_id FROM camp
          JOIN mission ON mission.camp_id=camp.id
@@ -308,13 +312,20 @@ pub fn waiting_mission_batch_workspaces(database: &Database) -> Result<Vec<(Stri
          WHERE camp.deletion_operation_id IS NULL AND m.status='active'
            AND m.leave_requested_at IS NULL AND p.profile_status='present'
            AND NOT EXISTS (SELECT 1 FROM conversation c JOIN agent_run r ON r.conversation_id=c.id
-                WHERE c.camp_id=camp.id AND c.agent_id=m.agent_id AND r.status IN ('queued','running','waiting'))
-           AND NOT EXISTS (SELECT 1 FROM agent_run r JOIN conversation c ON c.id=r.conversation_id
-                WHERE c.camp_id=camp.id AND r.cancel_requested_at IS NOT NULL AND r.cancel_acknowledged_at IS NULL)"
+                WHERE c.camp_id=camp.id AND c.agent_id=m.agent_id AND r.status IN ('queued','running','waiting'))"
     )?.query_map([], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?, row.get::<_,String>(2)?, row.get::<_,String>(3)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let tx = database.connection().unchecked_transaction()?;
     let mut camps = std::collections::BTreeMap::new();
     for (camp_id, path, conversation, member) in lanes {
+        if runtime_cleanup_blocked_since_connection(
+            &tx,
+            active_executions,
+            RuntimeCleanupScope::Camp(&camp_id),
+        )?
+        .is_some()
+        {
+            continue;
+        }
         if resolve_frozen_runtime(&tx, &conversation, &member)?.is_ok() {
             camps.insert(camp_id, path);
         }
@@ -326,21 +337,7 @@ pub fn claim_waiting_delivery_batches_with_workspaces(
     database: &mut Database,
     limit: i64,
     prepared_workspaces: &BatchWorkspaces,
-) -> Result<Vec<String>> {
-    let chat_isolation = std::env::var("ROVAI_CHAT_ISOLATION").ok();
-    claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
-        database,
-        limit,
-        prepared_workspaces,
-        chat_isolation.as_deref(),
-    )
-}
-
-fn claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
-    database: &mut Database,
-    limit: i64,
-    prepared_workspaces: &BatchWorkspaces,
-    chat_isolation: Option<&str>,
+    active_executions: &[ActiveExecutionKey],
 ) -> Result<Vec<String>> {
     if !(1..=100).contains(&limit) {
         anyhow::bail!("Delivery claim limit must be between 1 and 100");
@@ -452,8 +449,12 @@ fn claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
         ));
 
         for (camp_id, agent_id, conversation_id, _, _) in lanes {
-            if runtime_cleanup_blocked_since_connection(&transaction, &conversation_id, None)?
-                .is_some()
+            if runtime_cleanup_blocked_since_connection(
+                &transaction,
+                active_executions,
+                RuntimeCleanupScope::Conversation(&conversation_id, None),
+            )?
+            .is_some()
             {
                 continue;
             }
@@ -479,7 +480,7 @@ fn claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
                     continue;
                 }
             }
-            let mut workspace = match prepared_workspace {
+            let workspace = match prepared_workspace {
                 Some(Ok(prepared)) => Some(prepared.workspace.clone()),
                 _ => batch_workspace_for_claim(&transaction, &camp_id, &project_path)?,
             };
@@ -488,30 +489,15 @@ fn claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
             }
             let cleanup_execution_root = workspace
                 .as_ref()
-                .map(|workspace| workspace.execution_root.clone())
-                .unwrap_or_else(|| project_path.clone());
-            let cleanup_pending_on_execution_root: bool = transaction.query_row(
-                r#"
-                SELECT EXISTS(
-                    SELECT 1
-                    FROM agent_run AS prior_run
-                    LEFT JOIN camp_turn AS prior_turn
-                      ON prior_turn.id = prior_run.camp_turn_id
-                    JOIN camp AS prior_camp
-                      ON prior_camp.id = COALESCE(prior_run.camp_id, prior_turn.camp_id)
-                    WHERE prior_run.status IN ('succeeded', 'failed', 'cancelled')
-                      AND prior_run.cancel_requested_at IS NOT NULL
-                      AND prior_run.cancel_acknowledged_at IS NULL
-                      AND COALESCE(
-                          json_extract(prior_run.workspace_json, '$.executionRoot'),
-                          prior_camp.project_path
-                      ) = ?1
-                )
-                "#,
-                [cleanup_execution_root.as_str()],
-                |row| row.get(0),
-            )?;
-            if cleanup_pending_on_execution_root {
+                .map(|workspace| workspace.execution_root.as_str())
+                .unwrap_or(project_path.as_str());
+            if runtime_cleanup_blocked_since_connection(
+                &transaction,
+                active_executions,
+                RuntimeCleanupScope::ExecutionRoot(cleanup_execution_root),
+            )?
+            .is_some()
+            {
                 continue;
             }
             let camp_public_tail: i64 = transaction.query_row(
@@ -576,23 +562,6 @@ fn claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
             };
             let effective_config =
                 build_effective_config(&transaction, &conversation_id, &agent_id, &runtime)?;
-            if !mission_exists {
-                let isolation = if let Some(source_id) =
-                    waiting[0].continuation_source_run_id.as_deref()
-                {
-                    transaction.query_row(
-                        "SELECT json_extract(workspace_json, '$.isolation') FROM agent_run WHERE id = ?1",
-                        [source_id],
-                        |row| row.get::<_, Option<String>>(0),
-                    )?
-                } else {
-                    chat_isolation.map(str::to_owned)
-                };
-                if let Some(workspace) = workspace.as_mut() {
-                    workspace
-                        .apply_chat_isolation(runtime.adapter_kind.as_str(), isolation.as_deref());
-                }
-            }
             if mission_exists && prepared_workspace.is_none() {
                 continue;
             }
@@ -636,7 +605,7 @@ fn claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
                 trigger_message_delivery_id: "",
                 effective_config: effective_config.clone(),
                 workspace: serde_json::to_value(workspace.as_ref().cloned().unwrap_or_else(
-                    || AgentRunWorkspace::runtime_managed_path(cleanup_execution_root.clone()),
+                    || AgentRunWorkspace::runtime_managed_path(cleanup_execution_root.to_string()),
                 ))?,
                 charter_delivery_mode: charter_delivery_mode_for_adapter(runtime.adapter_kind),
                 max_payload_bytes,
@@ -663,7 +632,7 @@ fn claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
                     previous_public_boundary,
                     camp_public_tail,
                     &runtime,
-                    std::path::Path::new(&cleanup_execution_root),
+                    std::path::Path::new(cleanup_execution_root),
                     &waiting,
                     &preview,
                     prepared_workspace
@@ -931,7 +900,6 @@ fn select_batch_prefix(
         let run_input = project_batch_run_input_for_claim(
             transaction,
             camp_id,
-            agent_id,
             camp_public_tail,
             &message_ids,
             &skill_links,
@@ -1119,10 +1087,10 @@ fn insert_batch_run(
             runtime
                 .map(|runtime| serde_json::to_string(&runtime.permissions))
                 .transpose()?,
-            runtime.map(|runtime| runtime.binding_compatibility_digest.as_str()),
+            runtime.and_then(|runtime| runtime.binding_compatibility_digest.as_deref()),
             runtime.map(|runtime| runtime.executable_path.as_str()),
             runtime.map(|runtime| runtime.auth_scope.as_str()),
-            runtime.map(|runtime| runtime.host_config_digest.as_str()),
+            runtime.and_then(|runtime| runtime.host_config_digest.as_deref()),
             runtime.map(|runtime| runtime.protocol_version.as_str()),
             runtime.map(|runtime| runtime.installation_generation),
             runtime.map(|runtime| runtime.search_environment_generation),
@@ -1794,9 +1762,14 @@ mod tests {
         fixture.enqueue("later-message", "排在续做后面的普通消息");
         assert_eq!(fixture.batch_run_count(), 1);
         assert!(
-            claim_waiting_delivery_batches(&mut fixture.database, 10)
-                .unwrap()
-                .is_empty()
+            claim_waiting_delivery_batches_with_workspaces(
+                &mut fixture.database,
+                10,
+                &Default::default(),
+                &[ActiveExecutionKey::new(&source, 1)],
+            )
+            .unwrap()
+            .is_empty()
         );
         let projected = crate::read_model::ReadModelService
             .camp_snapshot(&mut fixture.database, &fixture.camp_id)
@@ -2874,97 +2847,6 @@ mod tests {
     }
 
     #[test]
-    fn chat_isolation_is_preserved_across_non_mission_continuation() {
-        use crate::run_continuation::{ContinueAgentRunCommand, continue_agent_run};
-
-        let mut fixture = Fixture::new();
-        fixture.enqueue("isolated-message", "隔离开关应在 claim 时冻结");
-
-        let source_runs = claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
-            &mut fixture.database,
-            100,
-            &Default::default(),
-            Some("windows_account"),
-        )
-        .unwrap();
-        assert_eq!(source_runs.len(), 1);
-        let source_run = source_runs[0].clone();
-
-        let (adapter_kind, source_conversation, workspace_json): (String, String, String) = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT runtime_adapter_kind, conversation_id, workspace_json FROM agent_run WHERE id = ?1",
-                [&source_run],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(adapter_kind, "codex-cli");
-        assert_eq!(
-            serde_json::from_str::<Value>(&workspace_json).unwrap()["isolation"],
-            "windows_account"
-        );
-
-        fixture
-            .database
-            .connection()
-            .execute(
-                "UPDATE agent_run SET status = 'failed', ended_at = datetime('now') WHERE id = ?1",
-                [&source_run],
-            )
-            .unwrap();
-        let continuation = continue_agent_run(
-            &mut fixture.database,
-            &CommandEnvelope {
-                command_id: "continue-isolated-message".into(),
-                actor: ActorRef::User {
-                    user_id: "local_user".into(),
-                },
-                camp_id: Some(fixture.camp_id.clone()),
-                expected_versions: Vec::new(),
-                execution_epoch: None,
-                payload: ContinueAgentRunCommand {
-                    camp_id: fixture.camp_id.clone(),
-                    agent_run_id: source_run,
-                    use_new_session: false,
-                },
-            },
-        )
-        .unwrap();
-        assert_eq!(continuation.result.code, "agent_run.continuation_requested");
-
-        // A restarted host may not carry the original deployment environment; the
-        // continuation must keep the isolation frozen on its source Run.
-        let continued_runs = claim_waiting_delivery_batches_with_workspaces_and_chat_isolation(
-            &mut fixture.database,
-            100,
-            &Default::default(),
-            None,
-        )
-        .unwrap();
-        assert_eq!(continued_runs.len(), 1);
-        let (continued_conversation, continued_invocation, continued_workspace_json): (
-            String,
-            String,
-            String,
-        ) = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT conversation_id, invocation_kind, workspace_json FROM agent_run WHERE id = ?1",
-                [&continued_runs[0]],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(continued_conversation, source_conversation);
-        assert_eq!(continued_invocation, "batch");
-        assert_eq!(
-            serde_json::from_str::<Value>(&continued_workspace_json).unwrap()["isolation"],
-            "windows_account"
-        );
-    }
-
-    #[test]
     fn waiting_deliveries_create_no_run_until_fifo_batch_claim() {
         let mut fixture = Fixture::new();
         let first_delivery_id = fixture.enqueue("message-1", "第一条");
@@ -3090,6 +2972,8 @@ mod tests {
                         | crate::agent_profile::AdapterKind::Pi
                         | crate::agent_profile::AdapterKind::CodebuddyCli
                         | crate::agent_profile::AdapterKind::QwenCode
+                        | crate::agent_profile::AdapterKind::MinimaxCodeCli
+                        | crate::agent_profile::AdapterKind::HermesCli
                         | crate::agent_profile::AdapterKind::GrokBuild
                         | crate::agent_profile::AdapterKind::KiroCli
                         | crate::agent_profile::AdapterKind::ZcodeApp
@@ -3211,10 +3095,54 @@ mod tests {
             assert_eq!(pending.len(), 1);
             assert_eq!(pending[0].delivery_id, source);
             assert_eq!(pending[0].execution_epoch, 1);
+            if stage == "running" {
+                // Hermes deliberately has no configuration compatibility digest.
+                // Native Binding generation and actual Run status still fence input.
+                f.database.connection().execute("UPDATE agent_run SET runtime_adapter_kind='hermes-cli',runtime_reported_version='0.22.4',runtime_protocol_version='acp-v1',runtime_binding_compatibility_digest=NULL WHERE id=?1", [&run]).unwrap();
+                assert!(
+                    crate::steer::active_input_availability(f.database.connection(), &run, 1)
+                        .unwrap()
+                        .ready
+                );
+                assert!(
+                    !crate::steer::active_input_availability(f.database.connection(), &run, 2)
+                        .unwrap()
+                        .can_steer
+                );
+                f.database
+                    .connection()
+                    .execute(
+                        "UPDATE agent_run SET status='succeeded',ended_at=datetime('now') WHERE id=?1",
+                        [&run],
+                    )
+                    .unwrap();
+                assert!(
+                    !crate::steer::active_input_availability(f.database.connection(), &run, 1)
+                        .unwrap()
+                        .can_steer
+                );
+            }
         }
         let mut fixture = Fixture::new();
         fixture.publish_visible_without_delivery("quoted-reference", "agent", "agent_2");
         fixture.enqueue("initial-steer", "initial work");
+        // Already published weak references must survive claim even after their
+        // targets have disappeared; initial input and Steer share one projector.
+        let reference_id = crate::camp_id::ThreadId::new().to_string();
+        let reference = StructuredThreadMessageSegment::ThreadReference {
+            thread_id: reference_id.clone(),
+            title_at_send: "登录 [发布标题]".into(),
+        };
+        let initial_content = vec![
+            StructuredThreadMessageSegment::Text {
+                text: "initial work".into(),
+            },
+            reference.clone(),
+        ];
+        fixture.database.connection().execute(
+            "UPDATE camp_message SET structured_content_json=?1,content_digest=?2 WHERE id='initial-steer'",
+            params![serde_json::to_string(&initial_content).unwrap(), canonical_content_digest(&initial_content).unwrap()],
+        ).unwrap();
         let run = claim_waiting_delivery_batches(&mut fixture.database, 1)
             .unwrap()
             .remove(0);
@@ -3227,6 +3155,11 @@ mod tests {
             )
             .unwrap();
         let initial = fixture.materialize_run(&run);
+        assert!(
+            initial
+                .runtime_payload
+                .contains(&format!("rovai://thread/{reference_id}"))
+        );
         fixture.database.connection().execute("UPDATE conversation SET native_session_id='steer-session' WHERE id='delivery-queue-agent-1'", []).unwrap();
         let first = ContextService
             .prepare_input_delivery_for_context(&mut fixture.database, &run, 1, &initial)
@@ -3266,6 +3199,7 @@ mod tests {
                 skill_id: "unavailable-skill".into(),
                 name_at_send: "not-authorized".into(),
             },
+            reference,
         ];
         fixture
             .database
@@ -3286,16 +3220,15 @@ mod tests {
                 &fixture.camp_id,
                 None,
                 &QuoteSelection {
-                    message_id: "quoted-reference".into(),
-                    body_at_selection: "visible history".into(),
-                    start_scalar: 0,
-                    end_scalar: 15,
+                    message_id: Some("quoted-reference".into()),
+
                     text: "visible history".into(),
-                    current_user_display_name: None,
                 },
             )
             .unwrap();
             store_quotes(&tx, QuoteStorage::CampMessage, "steer-one", &[quote]).unwrap();
+            tx.execute("DELETE FROM camp_message WHERE id='quoted-reference'", [])
+                .unwrap();
             tx.commit().unwrap();
         }
         {
@@ -3509,6 +3442,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(projected["messages"].as_array().unwrap().len(), 1);
+        let body = projected["messages"][0]["body"].as_str().unwrap();
+        assert!(body.contains(&format!("rovai://thread/{reference_id}")));
+        assert!(body.contains("登录 \\[发布标题\\]"));
+        assert!(projected["messages"][0].get("references").is_none());
         assert_eq!(
             projected["messages"][0]["quotes"][0]["text"],
             "visible history"
@@ -3974,6 +3911,27 @@ mod tests {
             ),
             ("qwen-code", Some("0.18.4"), "acp-v1", None),
             ("minimax-code-cli", Some("0.6.12"), "acp-v1", None),
+            ("hermes-cli", Some("0.22.4"), "acp-v1", None),
+            ("hermes-cli", Some("0.23.0"), "acp-v1", None),
+            ("hermes-cli", Some("1.0.0"), "acp-v1", None),
+            (
+                "hermes-cli",
+                Some("0.22.3"),
+                "acp-v1",
+                Some(R::VersionIncompatible),
+            ),
+            (
+                "hermes-cli",
+                None,
+                "acp-v1",
+                Some(R::RuntimeIdentityUnknown),
+            ),
+            (
+                "hermes-cli",
+                Some("0.23.0"),
+                "other",
+                Some(R::ProtocolIncompatible),
+            ),
             (
                 "minimax-code-cli",
                 Some("0.6.11"),
@@ -5313,7 +5271,7 @@ mod tests {
             )
             .unwrap();
         assert!(
-            claim_waiting_delivery_batches_with_workspaces(&mut ready.database, 100, &stale)
+            claim_waiting_delivery_batches_with_workspaces(&mut ready.database, 100, &stale, &[])
                 .unwrap()
                 .is_empty()
         );
@@ -5325,11 +5283,15 @@ mod tests {
         )
         .unwrap();
         let prepared = BatchWorkspaces::from([(ready.camp_id.clone(), Ok(prepared))]);
-        let ready_run =
-            claim_waiting_delivery_batches_with_workspaces(&mut ready.database, 100, &prepared)
-                .unwrap()
-                .pop()
-                .unwrap();
+        let ready_run = claim_waiting_delivery_batches_with_workspaces(
+            &mut ready.database,
+            100,
+            &prepared,
+            &[],
+        )
+        .unwrap()
+        .pop()
+        .unwrap();
         let ready_workspace_json: Option<String> = ready
             .database
             .connection()
@@ -5382,6 +5344,63 @@ mod tests {
             );
             assert!(!context.rendered_payload.contains("rovai/mission/001"));
         }
+        ready.database.connection().execute(
+            "UPDATE agent_run SET status='failed', ended_at=datetime('now'), cancel_requested_at=datetime('now'), cancel_reason_code='accepted_input_outcome_unknown', cancel_acknowledged_at=NULL WHERE id=?1",
+            [&ready_run],
+        ).unwrap();
+        ready.enqueue("after-restart", "原使命继续执行");
+        let epoch: i64 = ready
+            .database
+            .connection()
+            .query_row(
+                "SELECT execution_epoch FROM agent_run WHERE id=?1",
+                [&ready_run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let active = [ActiveExecutionKey::new(&ready_run, epoch)];
+        assert!(
+            waiting_mission_batch_workspaces(&ready.database, &active)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            waiting_mission_batch_workspaces(&ready.database, &[])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            claim_waiting_delivery_batches_with_workspaces(
+                &mut ready.database,
+                100,
+                &prepared,
+                &active
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            claim_waiting_delivery_batches_with_workspaces(
+                &mut ready.database,
+                100,
+                &prepared,
+                &[]
+            )
+            .unwrap()
+            .len(),
+            1
+        );
+        let old_ack: Option<String> = ready
+            .database
+            .connection()
+            .query_row(
+                "SELECT cancel_acknowledged_at FROM agent_run WHERE id=?1",
+                [&ready_run],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(old_ack.is_none());
     }
 
     #[test]
@@ -5439,26 +5458,27 @@ mod tests {
     }
 
     #[test]
-    fn failed_run_without_cleanup_ack_keeps_successor_delivery_waiting() {
-        let mut fixture = Fixture::new();
-        fixture.enqueue("message-1", "先处理");
-        let first_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
-            .unwrap()
-            .pop()
-            .unwrap();
-        fixture.enqueue("message-2", "后处理");
+    fn cleanup_ack_only_blocks_the_exact_current_execution() {
+        for owned_epoch in [None, Some(0), Some(1)] {
+            let mut fixture = Fixture::new();
+            fixture.enqueue("message-1", "先处理");
+            let first_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
+                .unwrap()
+                .pop()
+                .unwrap();
+            fixture.enqueue("message-2", "后处理");
 
-        let now = chrono::Utc::now().to_rfc3339();
-        let retired_root = fixture
-            ._directory
-            .join("retired-conversation-root")
-            .to_string_lossy()
-            .into_owned();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
+            let now = chrono::Utc::now().to_rfc3339();
+            let retired_root = fixture
+                ._directory
+                .join("retired-conversation-root")
+                .to_string_lossy()
+                .into_owned();
+            fixture
+                .database
+                .connection()
+                .execute(
+                    r#"
                 UPDATE agent_run
                 SET status = 'failed', ended_at = ?2, updated_at = ?2,
                     cancel_requested_at = ?2,
@@ -5470,16 +5490,44 @@ mod tests {
                     )
                 WHERE id = ?1
                 "#,
-                params![first_run, now, retired_root],
+                    params![first_run, now, retired_root],
+                )
+                .unwrap();
+
+            let active = owned_epoch
+                .map(|epoch| ActiveExecutionKey::new(&first_run, epoch))
+                .into_iter()
+                .collect::<Vec<_>>();
+            let next = claim_waiting_delivery_batches_with_workspaces(
+                &mut fixture.database,
+                100,
+                &Default::default(),
+                &active,
             )
             .unwrap();
-
-        assert!(
-            claim_waiting_delivery_batches(&mut fixture.database, 100)
-                .unwrap()
-                .is_empty()
-        );
-        let waiting_run: Option<String> = fixture
+            let old_ack: Option<String> = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT cancel_acknowledged_at FROM agent_run WHERE id=?1",
+                    [&first_run],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(
+                old_ack.is_none(),
+                "admission must not manufacture a historical cleanup ACK"
+            );
+            if owned_epoch != Some(0) {
+                assert_eq!(
+                    next.len(),
+                    1,
+                    "historical or unrelated epoch cannot gate the original conversation"
+                );
+                continue;
+            }
+            assert!(next.is_empty());
+            let waiting_run: Option<String> = fixture
             .database
             .connection()
             .query_row(
@@ -5488,9 +5536,9 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(waiting_run.is_none());
+            assert!(waiting_run.is_none());
 
-        fixture
+            fixture
             .database
             .connection()
             .execute(
@@ -5498,69 +5546,95 @@ mod tests {
                 params![first_run, chrono::Utc::now().to_rfc3339()],
             )
             .unwrap();
-        let next = claim_waiting_delivery_batches(&mut fixture.database, 100).unwrap();
-        assert_eq!(next.len(), 1);
-        let next_anchor: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT anchor_message_id FROM agent_run WHERE id = ?1",
-                [&next[0]],
-                |row| row.get(0),
+            let next = claim_waiting_delivery_batches_with_workspaces(
+                &mut fixture.database,
+                100,
+                &Default::default(),
+                &active,
             )
             .unwrap();
-        assert_eq!(next_anchor, "message-2");
+            assert_eq!(next.len(), 1);
+            let next_anchor: String = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT anchor_message_id FROM agent_run WHERE id = ?1",
+                    [&next[0]],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(next_anchor, "message-2");
+        }
     }
 
     #[test]
-    fn pending_cleanup_on_a_shared_execution_root_blocks_another_lane() {
-        let mut fixture = Fixture::new();
-        fixture.enqueue("message-1", "先占用共享目录");
-        let first_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
-            .unwrap()
-            .pop()
-            .unwrap();
-        let shared_root: String = fixture
-            .database
-            .connection()
-            .query_row(
-                "SELECT project_path FROM camp WHERE id = ?1",
-                [&fixture.camp_id],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let now = chrono::Utc::now().to_rfc3339();
-        fixture
-            .database
-            .connection()
-            .execute(
-                r#"
+    fn only_current_owned_cleanup_blocks_a_shared_execution_root() {
+        for current in [false, true] {
+            let mut fixture = Fixture::new();
+            fixture.enqueue("message-1", "先占用共享目录");
+            let first_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
+                .unwrap()
+                .pop()
+                .unwrap();
+            let shared_root: String = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT project_path FROM camp WHERE id = ?1",
+                    [&fixture.camp_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let now = chrono::Utc::now().to_rfc3339();
+            fixture
+                .database
+                .connection()
+                .execute(
+                    r#"
                 UPDATE agent_run
                 SET status='failed', ended_at=?2, updated_at=?2,
                     cancel_requested_at=?2,
                     cancel_reason_code='runtime_terminal_unconfirmed'
                 WHERE id=?1
                 "#,
-                params![first_run, now],
-            )
-            .unwrap();
+                    params![first_run, now],
+                )
+                .unwrap();
 
-        let second_camp = fixture.add_camp_lane("shared-execution-root");
-        fixture
-            .database
-            .connection()
-            .execute(
-                "UPDATE camp SET project_path=?2 WHERE id=?1",
-                params![second_camp, shared_root],
+            let second_camp = fixture.add_camp_lane("shared-execution-root");
+            fixture
+                .database
+                .connection()
+                .execute(
+                    "UPDATE camp SET project_path=?2 WHERE id=?1",
+                    params![second_camp, shared_root],
+                )
+                .unwrap();
+            fixture.enqueue_for(&second_camp, "message-2", "不得提前领取");
+            let active = if current {
+                vec![ActiveExecutionKey::new(&first_run, 0)]
+            } else {
+                Vec::new()
+            };
+            let next = claim_waiting_delivery_batches_with_workspaces(
+                &mut fixture.database,
+                100,
+                &Default::default(),
+                &active,
             )
             .unwrap();
-        fixture.enqueue_for(&second_camp, "message-2", "不得提前领取");
-        assert!(
-            claim_waiting_delivery_batches(&mut fixture.database, 100)
-                .unwrap()
-                .is_empty()
-        );
-        let state: (String, Option<String>) = fixture
+            assert_eq!(next.len(), usize::from(!current));
+            let old_ack: Option<String> = fixture
+                .database
+                .connection()
+                .query_row(
+                    "SELECT cancel_acknowledged_at FROM agent_run WHERE id=?1",
+                    [&first_run],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(old_ack.is_none());
+            let state: (String, Option<String>) = fixture
             .database
             .connection()
             .query_row(
@@ -5569,12 +5643,18 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(state, ("waiting".to_string(), None));
+            if current {
+                assert_eq!(state, ("waiting".to_string(), None));
+            } else {
+                assert_eq!(state, ("claimed".to_string(), Some(next[0].clone())));
+            }
+        }
     }
 
     #[test]
     fn blocked_candidate_page_does_not_starve_a_later_runnable_lane() {
         let mut fixture = Fixture::new();
+        let mut active = Vec::new();
         for index in 0..16 {
             let camp_id = if index == 0 {
                 fixture.camp_id.clone()
@@ -5583,11 +5663,16 @@ mod tests {
             };
             let initial_message_id = format!("blocked-{index:02}-initial");
             fixture.enqueue_for(&camp_id, &initial_message_id, "先处理");
-            let initial_run = claim_waiting_delivery_batches(&mut fixture.database, 100)
-                .unwrap()
-                .into_iter()
-                .next()
-                .expect("new lane should be claimable before its cleanup fence is installed");
+            let initial_run = claim_waiting_delivery_batches_with_workspaces(
+                &mut fixture.database,
+                100,
+                &Default::default(),
+                &active,
+            )
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("new lane should be claimable before its cleanup fence is installed");
             let now = chrono::Utc::now().to_rfc3339();
             fixture
                 .database
@@ -5603,6 +5688,7 @@ mod tests {
                     params![initial_run, now],
                 )
                 .unwrap();
+            active.push(ActiveExecutionKey::new(&initial_run, 0));
             let waiting_message_id = format!("blocked-{index:02}-waiting");
             fixture.enqueue_for(&camp_id, &waiting_message_id, "等待清理");
             fixture.set_delivery_created_at(
@@ -5619,7 +5705,13 @@ mod tests {
         );
         fixture.set_delivery_created_at("runnable-after-blocked-page", "2026-01-01T00:01:00Z");
 
-        let claimed = claim_waiting_delivery_batches(&mut fixture.database, 16).unwrap();
+        let claimed = claim_waiting_delivery_batches_with_workspaces(
+            &mut fixture.database,
+            16,
+            &Default::default(),
+            &active,
+        )
+        .unwrap();
         assert_eq!(claimed.len(), 1);
         let anchor: String = fixture
             .database
@@ -5777,21 +5869,6 @@ mod tests {
             .unwrap();
         assert_eq!(claimed_inputs, 2);
         assert_eq!(defaulted.frozen_history_result(&run_id), (0, false));
-
-        let mut chat = Fixture::new();
-        chat.database.connection().execute("UPDATE camp SET navigation_is_chat_bot=1 WHERE id=?1",[&chat.camp_id]).unwrap();
-        chat.enqueue("chat-capacity-1", &"界".repeat(44_000));
-        chat.enqueue("chat-capacity-2", &"界".repeat(44_000));
-        let run = claim_waiting_delivery_batches(&mut chat.database,100).unwrap().pop().unwrap();
-        let count: i64 = chat.database.connection().query_row("SELECT count(*) FROM agent_run_input WHERE agent_run_id=?1",[&run],|r|r.get(0)).unwrap();
-        assert_eq!(count,1);
-        let claim: String = chat.database.connection().query_row("SELECT context_json FROM agent_run_claim_context WHERE agent_run_id=?1",[&run],|r|r.get(0)).unwrap();
-        let frozen: crate::context::ClaimedBatchContext = serde_json::from_str(&claim).unwrap();
-        assert!(frozen.payload_len().unwrap() <= 256*1024);
-        let value: serde_json::Value = serde_json::from_str(&claim).unwrap();
-        assert_eq!(value["chatReplyContext"]["inputs"].as_array().unwrap().len(),1);
-        assert_eq!(value["runInput"]["messages"][0]["body"].as_str().unwrap().len(),132_000);
-        assert_eq!(chat.database.connection().query_row("SELECT count(*) FROM camp_message_delivery WHERE status='waiting'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     }
 
     // Owns the claim -> materialize boundary: an accepted native Session is not
@@ -6028,7 +6105,6 @@ mod tests {
     #[test]
     fn oversized_first_input_keeps_context_payload_too_large_failure() {
         let mut fixture = Fixture::new();
-        fixture.database.connection().execute("UPDATE camp SET navigation_is_chat_bot=1 WHERE id=?1",[&fixture.camp_id]).unwrap();
         let body = "large input 中文😀 ".repeat(30_000);
         fixture.enqueue("oversized-first", &body);
         let run_id = claim_waiting_delivery_batches(&mut fixture.database, 1)
@@ -6251,12 +6327,9 @@ mod tests {
             &fixture.camp_id,
             None,
             &QuoteSelection {
-                message_id: "projected-1".to_string(),
-                body_at_selection: "secret".to_string(),
-                start_scalar: 0,
-                end_scalar: 6,
+                message_id: Some("projected-1".to_string()),
+
                 text: "secret".to_string(),
-                current_user_display_name: None,
             },
         )
         .unwrap();
@@ -6277,7 +6350,6 @@ mod tests {
         let projection = project_batch_run_input_for_claim(
             &transaction,
             &fixture.camp_id,
-            "agent_1",
             boundary,
             &["projected-1".to_string(), "projected-2".to_string()],
             &[CurrentInputSkillLink {
@@ -6327,7 +6399,10 @@ mod tests {
         assert_eq!(messages[1]["senderType"], "agent");
         assert_eq!(messages[1]["senderId"], "agent_2");
         assert!(messages[1]["senderName"].as_str().is_some());
-        assert_eq!(messages[1]["quotes"][0]["source"]["author"]["type"], "user");
+        assert_eq!(
+            messages[1]["quotes"][0],
+            json!({"kind":"message_excerpt","text":"secret"})
+        );
         let mut without_sender_name = projection.clone();
         without_sender_name["messages"][1]
             .as_object_mut()

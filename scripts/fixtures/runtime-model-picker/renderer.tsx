@@ -135,6 +135,7 @@ function Fixture(): React.JSX.Element {
     }
     if (kind === 'deepseek-harness' && state.dshPublished) return Promise.resolve(state.dshPublished)
     if (mode === 'failed') return Promise.reject(new Error('fixture unavailable'))
+    if (mode === 'failed-empty') return Promise.resolve({ runtimeKind: kind, cache: { ...installation.modelCatalog, observedAt: '2026-10-29T00:00:00Z' }, models: [], refreshStatus: 'failed', diagnosticCode: 'runtime_model_catalog_refresh_failed' })
     const modelsWithLowOnlyTarget = installation.snapshot!.models.map(model => model.id === 'vendor/model-1'
       ? { ...model, options: [{ ...model.options[0], values: [{ value: 'low', label: 'Low' }] }] }
       : model)
@@ -158,7 +159,7 @@ function Fixture(): React.JSX.Element {
     <section style={{ width: 'min(740px, 100%)', margin: '0 auto' }}>
       <h1>运行配置</h1>
       <button id="before" type="button">前一项</button>
-      {page === 'member' && <MemberRuntimePicker id="runtime" value={kind} disabled={disabled} isDisabled={next => !['codex-cli', 'claude-code-cli'].includes(next)} onChange={next => { if (next) state.switchKind(next) }} />}
+      {page === 'member' && <MemberRuntimePicker id="runtime" value={kind} disabled={disabled} isDisabled={next => !['codex-cli', 'claude-code-cli', 'command-code-cli'].includes(next)} onChange={next => { if (next) state.switchKind(next) }} />}
       {page === 'member'
         ? <div className="member-editor-runtime-fields"><MemberRuntimeParameters adapterKind={kind} installation={installation} draft={draft} disabled={disabled} onOpenModelCatalog={catalog} onChange={next => { state.changes++; setDraft(next) }} /></div>
         : <MemberModelParameters adapterKind={kind} installation={installation} model={draft.model} disabled={disabled} onOpenModelCatalog={catalog} onChange={model => { state.changes++; setDraft({ ...draft, model }) }} />}

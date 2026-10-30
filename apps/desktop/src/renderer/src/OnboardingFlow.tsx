@@ -1,3 +1,5 @@
+import hermesLogo from './assets/runtime-logos/hermes.png'
+import { LanguagePreferenceOptions } from './LanguagePreferenceControl'
 import minimaxLogo from './assets/runtime-logos/minimax-color.svg'
 import { useState, type KeyboardEvent } from 'react'
 import { runtimeInstallGuide } from './runtime-install-guide'
@@ -7,7 +9,7 @@ import type {
   AppearanceSnapshot,
   RuntimeStatus,
   HostPlatformKey,
-  InterfaceLanguage,
+  InterfaceLanguagePreference,
   OnboardingRuntimeSelection,
   OnboardingSnapshot,
   ProductRuntimeAvailability,
@@ -24,7 +26,7 @@ import {
 import { MemberAvatar } from './MemberAvatar'
 import { builtinMemberPresetsForLanguage, type BuiltinMemberPreset } from './member-presets'
 import { useInterfaceLanguage, useUiText , uiAttribute } from './interface-language'
-import { VISIBLE_PRODUCT_RUNTIMES } from './runtime-products'
+import { visibleProductRuntimes } from './runtime-products'
 import {
   runtimeAvailabilityPresentation,
   runtimePlatformAdmissionAllowsUse,
@@ -58,8 +60,6 @@ export type OnboardingRuntimePhase =
   | 'ready'
   | 'error'
 
-export const ONBOARDING_PRODUCT_RUNTIMES: readonly AdapterKind[] = VISIBLE_PRODUCT_RUNTIMES
-
 const RUNTIME_LOGOS: Record<AdapterKind, string> = {
   'claude-code-cli': claudeCodeLogo,
   pi: piLogo,
@@ -74,6 +74,7 @@ const RUNTIME_LOGOS: Record<AdapterKind, string> = {
   'cursor-agent': cursorLogo,
   'kimi-code-cli': kimiLogo,
   'minimax-code-cli': minimaxLogo,
+  'hermes-cli': hermesLogo,
   'grok-build': grokLogo,
   'deepseek-harness': deepseekLogo,
   'cline-cli': clineLogo,
@@ -96,6 +97,7 @@ const RUNTIME_LABELS: Record<AdapterKind, string> = {
   'cursor-agent': 'Cursor Agent',
   'kimi-code-cli': 'Kimi Code',
     'minimax-code-cli': 'MiniMax Code',
+    'hermes-cli': 'Hermes Agent',
   'grok-build': 'Grok Build',
   'deepseek-harness': 'DeepSeek Harness',
   'cline-cli': 'Cline',
@@ -153,7 +155,7 @@ export function OnboardingFlow({
   runtimePhase: OnboardingRuntimePhase
   busy: boolean
   error: string | null
-  onLanguageChange(language: InterfaceLanguage): void
+  onLanguageChange(language: InterfaceLanguagePreference): void
   onThemeChange(preference: ThemePreference): void
   onShowWelcome(): void
   onCompleteWelcome(): void
@@ -168,7 +170,7 @@ export function OnboardingFlow({
 }): React.JSX.Element {
   const language = useInterfaceLanguage()
   const t = useUiText()
-  const presets = builtinMemberPresetsForLanguage(language)
+  const presets = builtinMemberPresetsForLanguage(snapshot.provisioning?.interfaceLanguage ?? language)
   const selectedMember = presets.find(
     (preset) => preset.role === snapshot.selectedMemberRole
   ) ?? presets[0]
@@ -194,16 +196,8 @@ export function OnboardingFlow({
             </button>
           )}
           {snapshot.step === 'welcome' && (
-            <div className="onboarding-language" role="radiogroup" aria-label={t('界面语言')}>
-              {(['zh-CN', 'en'] as const).map((option) => (
-                <label key={option} className={language === option ? 'selected' : ''}>
-                  <input type="radio" name="onboarding-language" value={option}
-                    checked={language === option} disabled={busy || snapshot.provisioning !== null}
-                    onChange={() => onLanguageChange(option)} />
-                  <span>{option === 'zh-CN' ? uiAttribute("简体中文") : 'English'}</span>
-                </label>
-              ))}
-            </div>
+            <LanguagePreferenceOptions name="onboarding-language" className="onboarding-language"
+              disabled={busy || snapshot.provisioning !== null} onChange={onLanguageChange} />
           )}
           <span className="onboarding-progress" aria-label={t('第 {0} 步，共 3 步', stepNumber)}>
             {stepNumber} / 3
@@ -423,7 +417,8 @@ function RuntimeStep({
   const hasEnabledRuntime = health?.runtimePlatformAdmission.some((row) => (
     row.platform === health.hostPlatform && runtimePlatformAdmissionAllowsUse(row)
   )) ?? false
-  const runtimeChoices = ONBOARDING_PRODUCT_RUNTIMES.map((kind) => {
+  const runtimeKinds = visibleProductRuntimes(health?.hostPlatform ?? null, health?.runtimePlatformAdmission ?? [])
+  const runtimeChoices = runtimeKinds.map((kind) => {
     const item = availability.find((candidate) => candidate.runtimeKind === kind) ?? null
     const admission = runtimePlatformAdmissionFor(health?.hostPlatform ?? null, health?.runtimePlatformAdmission ?? [], kind)
     const presentation = runtimeProductPresentation(admission, item)
@@ -438,12 +433,11 @@ function RuntimeStep({
     ?? runtimeChoices.find((row) => row.selectable)?.kind
   const primaryChoices = runtimeChoices.filter((row, index) => index < 3 || row.selectable || row.experimental || row.kind === selection?.adapterKind)
   const otherChoices = runtimeChoices.filter((row) => !primaryChoices.includes(row))
-  const renderRuntimeChoice = ({ kind, presentation, experimental, selectable }: typeof runtimeChoices[number]) => (
+  const renderRuntimeChoice = ({ kind, presentation, selectable }: typeof runtimeChoices[number]) => (
     <RuntimeRow
       key={kind}
       kind={kind}
       presentation={presentation}
-      experimental={experimental}
       checked={selection?.adapterKind === kind}
       tabIndex={focusRuntime === kind ? 0 : -1}
       disabled={provisioning || !selectable}
@@ -479,6 +473,7 @@ function RuntimeStep({
             ? (
                 <RuntimeEmptyState
                   busy={busy}
+                  runtimeKinds={runtimeKinds}
                   scanFailed={phase === 'error'}
                   error={error}
                   platform={health?.hostPlatform ?? null}
@@ -571,6 +566,7 @@ function RuntimeStep({
 
 function RuntimeEmptyState({
   busy,
+  runtimeKinds,
   scanFailed,
   error,
   platform,
@@ -578,6 +574,7 @@ function RuntimeEmptyState({
   onDefer
 }: {
   busy: boolean
+  runtimeKinds: readonly AdapterKind[]
   scanFailed: boolean
   error: string | null
   platform: HostPlatformKey | null
@@ -621,7 +618,7 @@ function RuntimeEmptyState({
               {!scanFailed && <button className="quiet-button" type="button" disabled={busy} onClick={onRefresh}>{t('重新扫描')}</button>}
             </div>
             <div id="onboarding-install-links" className="onboarding-install-links" hidden={!guideOpen}>
-              {ONBOARDING_PRODUCT_RUNTIMES.map((kind) => {
+              {runtimeKinds.map((kind) => {
                 const guide = runtimeInstallGuide(kind, platform)
                 return guide && <a key={kind} href={guide.docs} target="_blank" rel="noopener noreferrer">{RUNTIME_LABELS[kind]} <span aria-hidden="true">↗</span></a>
               })}
@@ -668,7 +665,6 @@ function RuntimeScanProgress({ phase }: { phase: OnboardingRuntimePhase }): Reac
 function RuntimeRow({
   kind,
   presentation,
-  experimental,
   checked,
   tabIndex,
   disabled,
@@ -677,7 +673,6 @@ function RuntimeRow({
 }: {
   kind: AdapterKind
   presentation: RuntimeStatusPresentation
-  experimental: boolean
   checked: boolean
   tabIndex: number
   disabled: boolean
@@ -700,7 +695,7 @@ function RuntimeRow({
       <span className="onboarding-radio-check" aria-hidden="true" />
       <span className="onboarding-runtime-logo"><img src={RUNTIME_LOGOS[kind]} alt="" /></span>
       <span className="onboarding-runtime-copy"><strong>{RUNTIME_LABELS[kind]}</strong>
-        {(experimental || (presentation.status !== 'available' && presentation.status !== 'not_installed')) && <small>{t(runtimeRowDetail(presentation))}</small>}
+        {presentation.status !== 'available' && presentation.status !== 'not_installed' && <small>{t(runtimeRowDetail(presentation))}</small>}
       </span>
       <RuntimeState presentation={presentation} />
     </button>
@@ -757,7 +752,7 @@ export function onboardingHasUsableRuntime(
   installations: AdapterInstallation[]
 ): boolean {
   if (phase !== 'ready' || !health) return false
-  return ONBOARDING_PRODUCT_RUNTIMES.some((kind) => {
+  return visibleProductRuntimes(health.hostPlatform, health.runtimePlatformAdmission).some((kind) => {
     const admission = runtimePlatformAdmissionFor(
       health.hostPlatform,
       health.runtimePlatformAdmission,

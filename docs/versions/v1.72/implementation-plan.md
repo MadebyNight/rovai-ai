@@ -3,79 +3,725 @@ document_type: implementation-plan
 version: v1.72
 authority: version-implementation-and-acceptance
 status: in_progress
-last_updated: 2026-10-27
+last_updated: 2026-10-29
 ---
 
 # v1.72 实施与验收
 
-## Windows 专用账户实验接线（2026-10-27）
+## 模型目录兼容与原生执行（2026-10-29）
 
-新增 `windows_account`，仅 Claude/Codex 原生 EXE 的实际 Adapter 启动调用点选择；
-默认 `shared`、`git_worktree` 不读取账户配置且沿用原 Windows atomic spawn。
-DPAPI 仅在宿主内存解密 Windows 登录密码；可信同 EXE helper 在收到启动帧前等待，父级归 Job 后才发送帧，
-目标 Runtime 继续使用原 `JOB_LIST + HANDLE_LIST`。启动输入以 base64 内存帧传递，正常 Job 归零后删除账户侧临时副本，
-异常强杀残留不作零落盘承诺。Codex Fleet 兼容与 same-Run 快速复用均包含账户配置身份。
+现场 Copilot 1.0.105 的 ACP `session/new` 返回重复 `auto`；旧共享快照校验以重复 ID 拒绝整份目录。
+共享归一化合并模型、参数与枚举，保留可用条目；缺少默认项不否定 Ready。目录失败保留已有有效缓存及
+成功时间。明确模型与参数不再被目录过滤、补默认值或阻断，ACP/Codex/Pi/Antigravity/ZCode 复用原生
+设置路径；MiniMax 的逐模型补充和 Pi Provider 异常局部处理。前端保留覆盖值并显示“尚未核对”。
+本次不新增日志、审批、schema 或模型上下文。规则由 [Runtime Launch v74](../../contracts/runtime-launch-and-verification-v74.md) 拥有；属于可逆兼容修复，无需新增 Version Decision。
 
-测试准入、最小命令、配置及限制由[Windows 账户启动](../../development/windows-account-runtime.md)拥有。
-实施验证使用确定性自有 helper、Windows whoami 和既有 Adapter owner，不运行真实 AI CLI。
-独立复核发现并修正 OsString JSON map 键、64 KiB 输入膨胀超限、stdin relay 吞错导致上游半挂；
-原 helper owner分别覆盖这些分支，无新增重型 DB 或网络 fixture。
-完整聊天业务 E2E、跨账户 Built-in IPC 和真实目录不可见性未验收，不以原生 whoami 成功代替。
+验证归属：扩展既有 Adapter 目录矩阵、AgentProfile 保存／缓存 owner、ACP/Codex/Pi 真实协议进程 fixture、
+health 的目录／启动 owner 与 ZCode 内存协议 owner；不新增 Rust 测试函数。原“目录缺失或未枚举配置必须
+失败”、Pi 单 Provider 失败清空目录、Renderer 自动删除覆盖值的断言随旧行为退役，以原生调用／拒绝和
+保留用户意图断言替代。跨 Runtime 输入矩阵留在纯函数 owner，进程测试只证明原生协议传递。
+Renderer 复用参数单测与隔离 Electron Picker fixture；不使用日常 userData，不启动模型 Prompt。
 
-跨版本影响：更新当前 Managed Runtime Process 合同、开发指南与当前版本实施记录；无 UI、Migration、
-Runtime capability admission、模型上下文或 Native Session 格式改动。历史隔离研究报告保持原样，不把它们视作产品上线证据。
+验证结果：
 
-## 聊天 Bot 侧栏入口（2026-10-21）
+- `cargo test --workspace`：479 passed、1 个既有 ignored；`cargo fmt --all --check` 通过。
+- `cargo test -p rovai-core --features slow-tests,extended-tests --lib` 的定向 owner：Adapter 目录矩阵、保存意图与缓存、
+  Codex/ACP/Pi 原生传参、ZCode 目录外模型、Antigravity 无目录启动、ACP 健康与 MiniMax 目录检查均通过。
+  ACP 进程 owner 独立运行通过，避免并发环境 fixture 临时 PATH 对 `env python3` 的干扰。
+- `pnpm typecheck`、`MemberRuntimeParameters.test.ts`（35 passed）、`pnpm test:runtime-model-picker` 通过。
+  隔离 Electron 验证失败抛错／空失败响应保留缓存、参数不清空、手填 ID、异步读取、Day/Night 和窗口缩放；
+  复核真实生产组件截图，无布局改动。Impeccable detect 返回空问题列表。
+- `pnpm docs:test`、`pnpm docs:check`、带固定 base 的 `pnpm docs:check:ci` 通过；新增生产日志扫描为空。
+- 真实 Copilot CLI 1.0.105，经本分支构建的 `rovai-host`、全新隔离 data/Skills/MCP 查询：24 个唯一模型、
+  `auto` 一项、`claude-opus-5.5` 保留 `low/medium/high/xhigh/max`。启动配置代次变更使首次请求 deferred，
+  同一隔离实例重读 completed/fresh；第二次正常目录读取 not_required 且目录相同。查询约 3.5 秒，无 Prompt。
+  隔离 Host 已关闭，临时数据与派生 Runtime files root 已清理，日常 App 配置未改。
 
-User 明确要求原样复用 worker 会话功能，只增加聊天 Bot 会话入口。实现按既有聊天线程绑定
-归入独立 `chat-bot` 分组，复用会话工作区、菜单、置顶、未读及有界窗口刷新；不新增只读页面、
-渠道发送机制、聊天记录副本或资料目录登记。关闭聊天 Bot 不因开关变化隐藏既有历史。
+真实原生验证只覆盖 Copilot 的目录查询；其他 Runtime 用确定性协议 fixture，未声称付费模型调用或跨平台实机验收。
 
-保持 v1.72；同步 Navigation Read、聊天 Bot Contract、导航 Architecture 和侧栏 UI。
-局部导航接入不新增 Version Decision，不改变模型上下文或 Runtime 行为。原分支使用 Migration 211；与飞书工具分支合并后导航使用 Migration 212，从现存
-聊天绑定回填 `camp.navigation_is_chat_bot`，新提交同事务保存该来源并沿既有导航失效链通知；
-更换资料目录导致当前绑定替换时，旧线程仍保留分类。迁移不推断此前已经丢失绑定的历史。
+提交 `9f10e14ae` 审查补修：既有目录矩阵复现 DSH 非对象 `_meta` 在写入 `dshSource` 时 panic；
+既有 Codex 请求 owner 复现数字 `reasoning_effort` 被 `.as_str()` 静默省略。共享归一化现局部忽略异常
+元数据，保留模型及重复条目的有效元数据；DSH 补充字段保留原元数据。提交 `61f9f701c` 同时加入了
+Codex 键／类型提前报错；该拦截误拒绝系统 Fast 审计字段，已由下述可用性补修撤销，目录外值透传保持。
+当时扩展原目录与请求 owner 的输入矩阵，没有新增 Rust 测试函数。
+当时定向命令 `cargo test -p rovai-core --features slow-tests,extended-tests --lib -- agent_runtime_adapter::tests codex::tests`
+通过 50 项，1 项既有真实 Runtime 手动测试保持 ignored；修复前两个回归 owner 均失败。
 
-实现已完成。Thread snapshot/open header 同源返回 `navigationGroupKey`，冷恢复及窗口外打开不会
-将聊天资料目录误登记为普通项目。
+Fast 可用性补修按 User 最新取舍执行：移除 Codex 新增的键／类型启动拦截，字符串 `reasoning_effort`
+原样映射到 `effort`。`serviceTier` 保持费用审计用途，发送仍只消费 `camp_fast`；开启、关闭、未设置
+分别发送 `priority`、`default`、省略 `serviceTierForTurn`。所有共享目录归一化、DSH 元数据保留、缓存和
+草稿保留修复不变；不新增日志、审批或目录白名单。未知键与非字符串参数的完整映射／错误呈现待后续
+完善，本轮不作为交付门槛。
 
-验证记录（2026-10-21）：
+回归保留 DSH 异常元数据矩阵、目录外参数透传与原生 RPC 拒绝；撤销“异常输入必须提前拒绝”的断言。
+新增唯一 Core 启动 owner `codex_frozen_fast_and_model_selection_reach_native_requests`：既有 Adapter
+进程 fixture 直接调用 RPC，不能覆盖 Core 的启动前拦截，终态 owner 则只拥有退出／复用语义，因此不能
+靠辅助函数或重复终态断言证明该回归。它复用现有隔离 Core／Run fixture，经过正式 Fast 保存与冻结、
+完整配置持久化与加载、`launch_agent_run`，检查实际 `thread/start`、`turn/start` 请求；覆盖 Fast 三态
+与默认／显式模型的六种组合，不调用真实模型。最小命令：
+`cargo test -p rovai-core --features slow-tests,extended-tests --lib codex_frozen_fast_and_model_selection_reach_native_requests`。
+该 owner 修复前在默认模型 + Fast 开启时复现 `serviceTier has no native parameter mapping`，修复后
+六种组合全部通过；断言未设置时字段缺席，审计 `serviceTier` 不进入原生请求，目录外字符串完整传递。
+测试专用 task-local CLI 路径使正式 Core 启动仍使用临时夹具，不修改共享构建目录或日常 CLI，发布构建不含此入口。
+本轮复验：新增启动 owner 通过全部六种组合，Adapter/Codex 定向 50 passed / 1 个既有 ignored，
+`cargo test --workspace` 479 passed / 1 个既有 ignored；格式、文档通用门禁通过，新增生产日志语句为零。
 
-- TypeScript 类型检查、定向导航回归 262 项通过；完整 Vitest 2784 项通过、16 项跳过，
-  12 项失败均在未修改的符号链接测试夹具创建阶段报 Windows `EPERM`，未放宽权限断言。
-- Web、执行 Web、Desktop Main/Preload/Renderer 构建通过。
-- 文档治理单测 10 项、版本检查和以 `06b86471dd31f9a755ed6c5d93f88250976262bc` 为基线的
-  diff-aware 门禁通过。
-- 生产 App 启动/历史导航隔离 Electron 验收 36 场景通过；Windows 原生缩放下严格整数像素
-  断言出现亚像素误差，使用 `--force-device-scale-factor=1` 重跑原断言通过，没有修改产品样式。
-- 新增 Bot 分组与完整导航 shell 的隔离 Electron 验收通过：折叠、分页、打开、未读清除、
-  重命名、置顶/取消、复制 ID、删除补位和原有导航行为均使用生产组件；未放宽原断言。
-  日夜截图保留在本机临时验收目录 `rovai-bot-nav-final-w2ZKGm`，
-  `chat-bot-navigation-day.png` / `chat-bot-navigation-night.png`。
-- Rust 导航与迁移定向回归 7 项通过，包含 snapshot/open 来源、分页、按 ID、已读、
-  删除分组、迁移回填/回滚/重开与范围成本。性能样本为 2040 个 Camp、50000 个 event：
-  单行 342 VM steps，普通组与 Bot 组各 1101；无历史扫描。聊天 Bot 定向回归 5 项及
-  `cargo check --workspace` 通过。PR 准备时另运行 `cargo test --workspace`，出现未修改模块的
-  Command Code 权限错误（Windows 1314）、Codex 文件证据路径断言及 Mission Workspace 测试失败；
-  后续仍有多项长时间运行，人工停止本次全量执行。该项未完成且不通过，不作为功能验收通过证据。
-  两项最先出现的失败已用生成的测试二进制独立复现，未放宽断言或修改无关功能。
-- PR 准备时仅修正基线已有三处 rustfmt 换行差异（`channel_chat.rs` 两处、
-  `collaboration.rs` 一处），无行为变化；`cargo fmt --all --check` 与 `git diff --check` 通过。
+## 数据库启动减重（2026-10-29）
 
-所有界面验收使用新建临时 userData 与独立 Skill Library，不启动 Core/真实 Runtime，不访问日常数据
-或发送真实飞书消息。
+实现与验收归 [数据库启动实施记录](database-startup-simplification.md)；替代本页旧 macOS 来源标记重新准入方案。
+当前合同为 [Desktop Runtime Availability v3](../../contracts/desktop-runtime-availability-v3.md#数据库启动与有界重试)，
+不新增 Migration、不改业务格式。日常宿主保护与原有会话保留是交付边界。
 
-## MadebyNight 分支合并与迁移冲突验证（2026-10-21）
+## 手动停止保留执行条（2026-10-29）
 
-合并 `origin/rovai/chat-bot-navigation` 的 `581c8daf4` 与修复分支 `ff9b7bfc1`。工具迁移保留211，导航使用212；按完整布局识别旧导航211，原子归正收据并保留时间，随后补工具迁移。不以收据号独自判断，也不修补部分损坏布局。保留双方导航、聊天工具及复用队员权限行为。
+- Worktree：`../rovai-ai-retain-stopped-run`；
+  分支 `rovai/retain-stopped-run`，基线 `4d3aba9a550f2798245a18af403d0cbaa7bea7f8`；Governance：none。
+- 沿用现有公开 Run 投影、继续命令与样式，手动停止保留静态状态和最终耗时；停止／失败的操作只显示图标。
+  每位队员保留最新未受理继续的停止／普通失败，输入过大拒绝仍保留原输入详情且不可重试。
+- 停止条跟随最后回复／完整产物组，没有输出则留在启动锚点；保留期间省去重复中断标记。
+  `hasAcceptedContinuation`、缓存首屏门禁与新 Run 替换负责跨会话／刷新收起，不新增状态或存储。
+- 已通过类型检查、全部 Vitest（3022 passed / 2 skipped）、文档治理单测与上述基线的差分门禁。
+  presence 浏览器 owner 独立通过 38 个状态、6 个视口以及停止／继续／刷新链路；
+  [日夜截图](../../../.github/assets/run-stop-retained/README.md)使用真实组件与固定演示数据。
+- `pnpm test` 的 Node 层为 357 passed / 2 skipped / 1 failed：Product Contract Fingerprint
+  固定期望 schema 167，当前源码为 168。聚合 `test:run-presence-ui` 的 reply-details 在
+  `regroup-middle` 断言失败。两者均在未改动基线 `4d3aba9a5` 独立复现；不改写无关断言。
+- 默认 Rust workspace PR 回归 `pnpm test:rust:pr` 通过。审查补齐了停止条未知回执保持普通入口，
+  以及 Applied 回执先于权威投影时同时恢复历史中断标记的边界；对应浏览器回归覆盖同一 commandId 核对。
 
-- 正式Host隔离进程：208/209/210、工具211、导航211、双布局仅211、归正后仅212共七种来源，8项测试通过。验证原会话与聊天正文、收据时间、导航分组、重复启动及缺损拒绝。
-- Rust `slow-tests navigation_` 7项、`extended-tests channel_chat::tests` 6项通过。历史导航夹具补保留其仍存在聊天结构的收据，未放宽生产准入。
-- 完整Vitest：248个文件通过，2842项通过、16项跳过。TypeScript及Rust格式通过。
-- 隔离Electron navigation-shell验收通过，包含聊天Bot分组与原导航交互；不启动真实模型、不读取日常数据库。
-- 通用文档测试10项、docs:check与以ff9b7bfc1为基线的diff-aware门禁通过。
+## Windows Fleet 记录存储修复（2026-10-29）
 
-本次只完成源码合并与验证，不表示已重新打包或安装。
+- 基线 `6996d1042`，分支 `codex/fix-windows-fleet-storage-942`。复用当前 checkout 与本地构建缓存；
+  Windows 验证只使用临时目录和隔离 Core/Skills/MCP/Runtime Files Root，不访问日常会话数据或真实模型。
+- Issue #942 已确认 Fleet 初始化失败导致 Core 退出，但现场缺少底层 cause。此前本地已复现当前用户与
+  SYSTEM 均有 FullControl、目录缺少继承标志时的相同退出；不能将本地复现当作用户现场原因已确认。
+- Windows Fleet 直接创建目录，记录写入使用普通权限的新建临时文件、flush 和 write-through 原子替换。
+  移除仅为 Fleet 使用的旧权限迁移；其他私有存储、凭据、IPC、Job、非 Windows 行为保持。
+- 原 `windows_owner_registration_admits_only_private_or_legacy_inherited_storage` 在同一 seam 改为
+  `windows_owner_records_use_effective_file_permissions_without_rewriting_acls`，测试函数数量不变。
+  旧 ACL 模板拒绝与修权断言随对应合同退出；保留新建、继承和旧 scoped record 的 case，并加入
+  FullControl 无继承、多余 ACE、无 WRITE_DAC 但可读写、真实写入/替换失败及原记录保留。
+  实际注册、stop receipt、重建 Store 和 cleanup ACK 经过生产方法，避免只测试底层文件 helper。
+- 最小命令：`cargo test -p rovai-core --features extended-tests --lib runtime_fleet::tests::windows_owner_records_use_effective_file_permissions_without_rewriting_acls -- --exact`。
+  相关 Fleet 生命周期、私有存储/Windows 安全、默认 workspace 与文档门禁继续执行。
+- Windows 本机定向验证：上述 owner 修复前以 `private_acl_invalid` 失败，修复后通过全部权限与失败保留 case；
+  Fleet 23 项、platform 10 项、ManagedProcess 14 项通过（7 个独立 helper 入口按原规则忽略）。
+  `cargo fmt --all --check`、`pnpm docs:test`（10 项）、`pnpm docs:check` 与带基线的 `pnpm docs:check:ci` 通过。
+  完整 workspace、隔离 Core 启动对比和远端 CI 的最终回执记录在本次 PR；不将 fixture 结果宣称为真实模型验收。
+
+## macOS 来源标记启动修复（2026-10-28）
+
+- 分支 `rovai/macos-wal-provenance`，基线 `c4dedf32683179070ee90e72eb1e6a1161c8228f`。
+  工作使用独立 worktree；所有复现均为合成 SQLite、独立 Skills/MCP 与 Runtime Files Root，不复制日常会话数据。
+- 0.5.1 与 0.5.2 tag 的 admission/migration 校验没有差异。原规则只观察 main 的 provenance，漏掉 WAL/journal；
+  current authority 的 READ_WRITE open 也没有迁移路径已有的来源标记重新准入。
+- 在已有合成数据库保留 32,992 字节已提交 WAL，安装版 0.5.2 首次打开返回 `identity_changed`。
+  WAL 的对象、长度、mtime 未变，`com.apple.provenance` 从无到有、ctime 改变；数据完整性检查通过。
+  这属于 macOS 文件元数据兼容问题，不能归因于数据库损坏或本轮 schema migration。
+- 修复扩展同一 artifact 判定到 main/WAL/journal，existing open 在写入前消费旧证明、完整重新准入一次并严格
+  复核新票据。未知标记、权限/属主/mtime/长度/对象变化、另一 authority 出现及真实写入仍拒绝。
+  Windows 的 last-write/size 比较不变；没有把本机 macOS 结果当成 Windows 真机验收。
+- 沿用 `read_probe_tolerates_only_a_new_empty_wal_not_authority_changes` 扩展 artifact 与拒绝条件矩阵；
+  修复前 WAL case 明确失败。沿用 `confirmed_absence_initializes_and_reopens_a_current_authority`，
+  复用原 SQLite fixture 验证只读探测重新准入、读写打开重新准入、真实写入仍拒绝、业务行与生产连接配置保留。
+  新增 Rust 测试函数为零。最小命令为 `cargo test -p rovai-core --lib database_admission::tests::`，12 项通过。
+- 原生进程复验将安装版 Host 的来源标记复制到临时修复版 Host，使 macOS 在同一合成场景实际添加数据库标记。
+  main 与非空 WAL 均出现来源标记，二者对象、长度与 mtime 未变，修复版首次即 `ready`、无需手动 Retry；
+  关闭后只读验证业务行仍为 `preserved`、SQLite `quick_check` 为 `ok`。未带来源标记的调试 Host 也能启动，
+  但那条未触发系统标记的路径不作为本回归的充分证据。
+- 既有迁移来源标记回归通过（`cargo test -p rovai-core --features extended-tests --lib
+  authority_migration::tests::macos_provenance_added_after_ticket_is_readmitted_without_losing_business_data -- --exact`）。
+  默认 `cargo test --workspace` 的 Core 为 434 passed / 1 failed / 1 ignored；唯一失败为既有
+  `successful_leader_with_stdio_holding_descendant_finishes_bounded` 的 500ms stdout cleanup 超时。
+  未修改 main 与修复分支的同一 owner 各做三次交替对照，均为一次相同超时、两次通过，证实既有时序不稳定；
+  保留失败记录，不改写或跳过该 owner，也不将整套回归记为全绿。随后单独补完 CLI 31、Host 4、Web 11 项，全部通过。
+- `cargo check --workspace`、`cargo fmt --all --check`、`git diff --check`、`pnpm docs:test`、
+  `pnpm docs:check` 和以本节基线为 `DOCS_BASE_REF` 的 `pnpm docs:check:ci` 通过。
+  安装与正式发行是独立交付边界，以上结果不代表已经发布修复版或完成 Windows 真机验收。
+
+## MCP Run 快照与 Grok 启动清理（2026-10-26）
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-mcp-run-snapshot`；
+  分支 `rovai/mcp-run-snapshot`，基线 `db8cd6e34aa9e0348fa750020105acf8f04869fd`；Governance：none。
+- 共用 effective-config 构造入口写入 `mcpSnapshotLayout: "run_v1"` 并参与原摘要；
+  缺标记走旧布局，未知值只在该 Run 准备时拒绝。恢复、重绑定和历史记录不回填。
+- 新路径为 `runtime/mcp/<run-id>/snapshot/canonical.json`，沿用私有临时目录与目录发布；
+  新布局不扫描旧 epoch。竞争失败方读取并校验胜出文件，已有快照不覆盖；格式、摘要和冻结恢复保持。
+- 并发回归实际复现 Unix `mkdir` 到 `chmod` 之间的权限窗口；既有目录准备函数改为创建时设置
+  `0700` 并复核权限。只在目录提交竞争失败后复用胜出文件，不掩盖本次写入或同步错误。
+- Grok 的生成与清理共用新前缀常量，沿既有 Adapter 初始化门禁执行。旧插件目录不动，
+  正常 Host 生命周期与复用保留，清理失败仅影响对应可选 Runtime 子系统。
+- Contract 与外部 MCP 架构不变量同步；不新增迁移、注册器、后台服务、租约或数据库字段。
+
+验证归属：
+
+- 扩展既有 Context MCP 恢复 owner：真实创建与 Manifest 持久化、旧布局缺标记、新布局、数据库重开、
+  跨 epoch、未知布局拒绝、冻结材料丢失和隐藏 staging 回收；SQLite/文件边界不能由纯解析测试代替。
+- 扩展既有 Runtime rebind、MCP epoch 复用和 Grok 插件生命周期 owner；保留其原有权限、凭据、
+  原生配置与旧布局断言，新增 Grok Adapter 初始化接线与旧前缀保留检查。
+- 原 Pi optional-storage owner 扩展为 Pi/Grok 矩阵，并更名为
+  `private_storage_failure_is_isolated_from_core_and_peer_runtimes`：保留失败隔离，补齐健康子系统
+  不重复初始化、失败后原进程重试和恢复健康；没有新增可选服务或失败全局升级。
+- 既有 Node `optional startup failures` 进程矩阵增加 Grok 的 `external-mcp` 非目录故障；
+  用真实隔离 Core 验证 authority ready、业务 RPC 与同进程恢复，不调用真实模型。
+- 唯一新增 `concurrent_run_snapshot_publishers_reuse_one_complete_winner`，位于 `extended-tests`：
+  两个文件发布者必须读到同一完整快照；原先只存在顺序 epoch 复制 owner，不能证明并发原子发布。
+  只创建私有临时文件，不使用数据库或真实 Runtime；同时验证损坏胜出文件和错误 Run 身份拒绝。
+- 最小命令：`cargo test -p rovai-core --features slow-tests --lib mcp`、
+  `cargo test -p rovai-core --features slow-tests --lib rebind`、
+  `cargo test -p rovai-core --features slow-tests --lib private_storage_failure_is_isolated`。
+  另运行 `pnpm test:core-startup`、默认 workspace、扩展回归与通用文档门禁。
+- 上述三个定向 Rust owner 分别通过 39、5、1 项；`pnpm typecheck` 与 `pnpm test` 通过，
+  包括 Vitest 3005 passed / 2 skipped、Node 358 passed / 2 skipped。
+- `pnpm test:rust:extended` workspace 1075 passed / 8 ignored；`pnpm test:rust:pr` workspace
+  477 passed / 1 ignored。ignored 均为既有用例。
+- 真实隔离 Core 的新增 Grok 启动故障、业务 RPC 可达及同进程恢复场景通过。完整
+  `pnpm test:core-startup` 为 7 passed / 6 failed / 1 skipped；未修改基线的独立源码归档构建
+  为 6 passed / 6 failed / 1 skipped，复现相同五个叶子失败与一个父测试失败：原生 sandbox
+  Probe 未生成结果、Skill 故障夹具未降级、两个已移除的 `camp.composerDraft` RPC，以及旧 Runtime
+  environment settings 接口。没有修改、跳过或移除这些既有测试，不将整套启动验收记为通过。
+- `cargo check --workspace`、`cargo fmt --all --check`、`git diff --check`、`pnpm docs:test`、
+  `pnpm docs:check` 和以本节基线为 `DOCS_BASE_REF` 的 `pnpm docs:check:ci` 通过。
+- 初次交付状态：`ready`。提交并推送功能分支，保留该 worktree 供后续评审；按当时 User 偏好不自动创建 PR。
+  未调用真实 Grok 模型、未做 Windows/Linux 实机验收，也未合入或安装日常 App。
+- 后续 User 明确授权创建 PR、合入 main 并安装本机 App。整合主线 `71f915be4` 时只需合并新增文档章节，
+  保留双方记录；本次生产代码没有冲突。安装遵循 daily 构建、隔离验收及非终止交接流程。
+
+## 简化对话命名恢复（2026-10-27）
+
+- User 确认 HTML 交互稿并授权独立 worktree 实现、PR 到 main 并合入。
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-automation-title-simple`；
+  Branch：`rovai/automation-title-simple`；Base：`f73a70cf675142313b23f4f90c63727db24acbb5`；
+  Governance：none；Status：ready。
+- 共享编辑器恢复默认折叠入口：日期/时间两个勾选、前后分段单选与完整实时预览，复用已确认的样式。
+  保留生产总览、保存与通知行为；交互稿的主题切换工具、模拟运行提示和示例数据不进入产品。
+- Core 恢复 admission 标题生成，定时取计划时间、手动取实际时间；格式固定为 `YYYY-MM-DD` / `HH:mm`。
+  存取结构沿用 schema 165，格式枚举收敛为 `iso` / `24`；无迁移、回填或旧格式兼容逻辑。
+- Rust 不新增、删除或禁用测试函数。既有纯命名 owner 覆盖四种勾选组合、前后位置、零点/正午、Unicode、
+  closed schema；旧格式正例随生产枚举退出，改为拒绝输入断言。既有 manual snapshot/replay、once overlap
+  与 delayed schedule owners 覆盖时间来源、长标题、关闭两项、历史保留及 schedule 不变。
+  最小命令：`cargo test -p rovai-core --features extended-tests --lib automation`。
+- 生产 Electron fixture 扩展既有 owner：勾选/键盘单选、自动保存失败与重试、任务切换、五主题 action 色、
+  最小详情宽度、1040/1440/2560 窗口与 200% 缩放；独立临时 userData/Skill Library，无真实 Runtime。
+- 验证通过：`pnpm typecheck`、`pnpm test`（Vitest 257 文件 / 3007 passed / 2 skipped；Node 358 passed / 2 skipped）、
+  `pnpm test:automation-splitter`；Core automation 定向 16 passed；`cargo test --workspace`
+  478 passed / 1 ignored；跳过和忽略均为既有平台/人工用例。
+- `cargo fmt --all --check`、`git diff --check`、`pnpm docs:test`、`pnpm docs:check` 和基于本节 Base 的
+  `pnpm docs:check:ci` 通过。Day/Night、最小详情宽度与 200% 缩放截图已核对。
+  本次不安装本机 App、不发布版本。
+
+## 定时任务对话命名（2026-10-26）
+
+本功能初次实现及颜色修正分别经 PR #913、#915 合入。User 随后要求先隐藏功能，并明确
+“同时停用日期标题，恢复任务名”；以下保留该次停用与初次交付记录；当前开放状态见上方 2026-10-27 恢复记录。
+
+- 本次 worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-disable-automation-titles`；
+  分支 `rovai/disable-automation-titles`；基线 `17a7fbba9dc55dbff1ad77837033968decef5b63`；
+  Governance：none；Status：ready。User 已授权 PR 合入 main、安装本机后停止，交互稿后续再讨论。
+- Desktop/Web 的共享编辑器撤下命名入口；Core 的手动和定时 occurrence 均直接采用任务名。
+  已有 schema 165 不回退；本次没有迁移、历史数据回填或新增兼容分支。
+- 不新增、删除或禁用 Rust 测试函数：扩展既有 manual snapshot/replay、once overlap 和 delayed schedule
+  owners，验证默认配置、保留的非默认配置、80 个 Unicode scalar 名称均不加日期，重放和已有标题不变。
+  标题时间来源断言随该生产行为停用而替换；计划推进、去重、CAS 和 overlap 断言保留。
+  最小命令：`cargo test -p rovai-core --features extended-tests --lib automation`。
+- 生产 Electron fixture 改验入口隐藏，并保留保存失败、手势取消、主题、宽度与缩放验收。
+  `pnpm typecheck`、`pnpm test:automation-splitter` 已通过；使用独立临时 userData 和 Skill Library，
+  memory-only RPC，无真实 Runtime。Day 与窄屏截图已人工核对。
+- Core automation 定向回归 16 项通过，`cargo fmt --all --check`、`git diff --check`、
+  `pnpm docs:test`、`pnpm docs:check` 及基于本次基线的 `pnpm docs:check:ci` 通过。
+
+初次交付记录：
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-issue-875-automation-title`；
+  分支 `rovai/issue-875-automation-title`，基线 `db8cd6e34aa9e0348fa750020105acf8f04869fd`；Governance：none。
+- Core 持有命名配置，创建 occurrence 时按定时/手动来源生成并持久化标题；Renderer 只提供格式预览和编辑。
+  默认日期+时间后置，支持四种日期、三种时间格式，允许完整长标题；旧对话不变。
+- Migration 215 原子新增定义配置并将当前 schema 升为 165。既有定义默认开启；不补写旧 Thread/occurrence。
+  Agent automation 输入/输出保留原形状，旧命令 canonical payload/digest 与历史回执保持兼容，
+  没有 Bootstrap、Context、Manifest 或工具目录版本变化。
+- Rust 扩展既有命名纯函数 owner、manual snapshot/replay owner、once overlap/time-source owner 和 current schema
+  admission owners。新增一个 schema-only migration owner，独立验证 DDL/receipt 回滚、旧标题保留与生产重开；
+  其他 owner 无法证明升级失败语义，不启动 Runtime。最小命令：`cargo test -p rovai-core --lib automation`，
+  `cargo test -p rovai-core --features extended-tests --lib database_contract` 和 `cargo test -p rovai-core --features extended-tests --lib current_schema_contains_required_contract_objects`。
+- 前端扩展生产 Automation fixture，覆盖保存失败保留、重试、重新进入、键盘单选、五套主题、最小宽度和缩放。
+  格式矩阵使用纯函数单测；共享表单类型检查、语言目录和通用文档门禁同步验证。
+- 已通过 Core automation 16 项扩展回归（包含旧版迁移、原子性、重放与新配置），migration admission matrix、
+  当前数据库准入/结构、旧 Team schema 升级各 1 项；`cargo check --workspace` 与 Rust 格式检查通过。
+- `pnpm typecheck`、11 项定向 Vitest、生产 Electron fixture、文档单测及基于上述基线的通用文档门禁通过。
+  fixture 使用新建的临时 userData/Skill Library，memory-only RPC，无 Core/真实 Runtime；五套主题、
+  320px 详情、700px 窗口和 125% 缩放截图已人工查看。
+- 初次全量 Vitest 与 Rust workspace 编译并行时，既有 `core-client` 启动重试的 6 秒等待超时
+  （3006 passed / 1 failed / 2 skipped）；该文件及实现与基线相同，单独复测 21 项全部通过。
+  后续完整 `pnpm test` 通过：Vitest 3007 passed / 2 skipped，Node 358 passed / 2 skipped，
+  文档、Skills 和 Electron sandbox 检查全部通过。schema fingerprint owner 已同步到 165。
+- Worktree 状态：ready；User 已授权创建 PR 并合入 main，[PR #913](https://github.com/murray17/rovai-ai/pull/913)
+  待 CI 通过后合并并清理 worktree。Issue #875 保持开启至发布；issue 回复先提供署名爱丽丝的草稿。
+
+## Runtime PATH 与主动检查一致性（2026-10-26）
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-issue-891-runtime-path`；
+  分支 `rovai/issue-891-runtime-path`，基线 `db8cd6e34aa9e0348fa750020105acf8f04869fd`；Governance：none；Status：ready（未合入）。
+- Issue #891：启动复用公共采集策略，macOS/Linux 只采集交互式登录 shell PATH；主动单项检查总是先刷新。
+  旧 `interactiveShell` 字段兼容接收，策略由 Core 决定。Windows、超时、输出处理、回退和候选排序沿用原实现。
+- 环境输入比较、未变代次、发布时重读最新配置、结果围栏和检查合并保持；普通运行不逐消息重扫，
+  不增加全局检查门禁或持久环境。额外变量继续由用户的通用／队员配置承接。
+- 更新 [Runtime Launch v73](../../contracts/runtime-launch-and-verification-v73.md) 及当前 Architecture／路由；
+  v64 已接受语义保留，由 v73 替代其检查复用规则。局部可逆修复，不新增 Version Decision。
+- 扩展既有 shell capture 与 `runtime_check_environment::tests` owners，替换旧跳过刷新断言，
+  保留原并发、配置保存、文件身份与草稿隔离；Rust 测试函数净增零。
+- 定向验证通过：`runtime_check_environment::tests` 8 项、`runtime_discovery::` 12 项、
+  `member_environment::tests` 4 项，以及 `launch_version_uses_the_frozen_program_without_blocking_ordinary_execution` 1 项。
+  使用 `cargo test -p rovai-core --features slow-tests --lib runtime_check_environment::tests -- --list`
+  确认 owner 已编译，再执行同一测试二进制的各过滤器。慢速刷新夹具默认线程栈发生溢出，
+  设置 `RUST_MIN_STACK=33554432`、`--test-threads=2` 后 8 项全部通过；没有改变生产线程栈或测试断言。
+- `pnpm test:rust:pr` 默认 workspace：477 passed / 1 ignored；`cargo check --workspace`、
+  `cargo fmt --all --check`、`pnpm typecheck`、`pnpm docs:test`、`pnpm docs:check` 及以上述基线执行的
+  `DOCS_BASE_REF=<base> pnpm docs:check:ci` 均通过。
+- 完整 `pnpm test`：256 个 Vitest 文件、3005 passed / 2 skipped；末组脚本 358 passed / 2 skipped。
+  首次执行的文件预览 watcher 用例等待通知超时，单独复跑和完整复跑均通过，未修改该功能。
+- 验收只使用既有临时数据库与合成程序；未执行用户实际 asdf 安装、Dock 重启或真实模型任务，
+  也不代表 Windows/Linux 真机验收。后续复用本 worktree；依用户偏好提交并推送任务分支，不自动创建 PR。
+- 评审后补齐 shell 采集的总期限：原实现只限制主 shell 等待，退出后的 stdout reader join 可能被
+  后台进程持有的管道拖住。采集函数改为非阻塞读取，进程退出与 EOF 共用原期限；失败时关闭管道并
+  终止采集进程组，尚未回收的主进程交后台 wait，不让收尾继续阻塞调用方。保留原输出上限、标记解析及回退。
+- 在原 `shell_path_capture_uses_interactive_login_and_bounds_failures` owner 内补入 shell 退出后
+  后台进程持有 stdout 的成功／失败场景，以及缺失标记、输出超限；不增加测试函数或环境管理机制。
+  修复前新增回归在 100 ms 期限下等待约 3.5 秒后错误返回 Captured。
+- 用同一采集函数构建隔离探针，`HOME`／`ZDOTDIR` 指向本 worktree 的临时目录，`.zshrc` 运行
+  `/bin/sleep 5 &`：`5d937a757` 返回 Captured / 5463 ms；修复后返回 TimedOut / 3000 ms，空结果交给原回退。
+  探针没有启动 App、Core 或真实 Runtime，也没有修改日常 shell 配置。
+- 追加修复复跑 `pnpm test:rust:pr`：477 passed / 1 ignored；`cargo check --workspace`、
+  `cargo fmt --all --check`、`pnpm docs:test` 与 `pnpm docs:check` 通过。本次没有前端改动，未重复前端整套回归。
+  最小复验为 `cargo test -p rovai-core --lib shell_path_capture_uses_interactive_login_and_bounds_failures`。
+
+## Run 启动与停止展示（2026-10-26）
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-run-start-stop-ui`；
+  分支 `rovai/run-start-stop-ui`，基线 `e5b80b28408fcb73d82058b1d7e45730d088ba57`；Governance：none。
+- 只修改前端共享展示及组件。Run 创建与 Runtime 初始化统一“启动中…”，Delivery 默认“准备中…”，
+  执行台已有的同队员执行／清理事实沿用“排队中”，具体原因降为悬浮说明。
+- Run Card 复用启动与执行布局；停止提交时隐藏停止按钮，只在卡头显示中性文字，保留既有过程。
+  单聊移除有色提示，步骤组保留原摘要，终态不被本地停止标记覆盖。图标保留时间线。
+- 不增加 Core 读投影或业务字段，不改变调度、取消、恢复与 cleanup；不建立全局阶段引擎。
+- 验证沿用现有展示单测、真实组件浏览器测试、类型检查及通用文档门禁；本次没有 Rust 变更。
+- 已通过 `pnpm typecheck`、完整 Vitest（3005 passed / 2 skipped）、`pnpm docs:test` 与基于上述 SHA 的
+  `pnpm docs:check:ci`。`execution-state-transition` 浏览器回归通过；生产组件的 Desktop/Web 启动、
+  当前轮次内容、停止悬浮、取消终态及日夜字体检查通过，状态图标仍在时间线。
+- `test:run-presence-ui` 中独立的 reply-details 导航用例在 `scroll-after-opening` 场景等待
+  `[data-reply-message-id=reply-a]` 超时；任务分支和未改动的 `e5b80b284` 前端基线均复现，
+  作为既有回归问题记录，不修改回复定位逻辑。
+
+## 撤回消息两分钟重新编辑（2026-10-23）
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-withdraw-reedit`；
+  分支 `rovai/withdraw-reedit`，基线 `984e82281ee57c5b33ac5ec320d1e4bf52e4cf4a`；Governance：none。
+- `MessageReeditStore` 拥有逐条本机副本、pending / ready 固定有效期、容量保护和每前端实例一个清理器。
+  读取／回放按 scope 隔离；清理可回收旧 scope 的过期副本，不删除普通草稿或提前淘汰有效副本。
+- `MessageWithdrawal` 保存原命令与参数并复用已有回放；请求未知保留 pending，业务拒绝删除，
+  正常成功与列表刷新分开处理。存储失败不阻止撤回，不增加通用命令队列或重试平台。
+- 正式消息区提供蓝色无下划线入口；已有草稿先确认替换，最终回填再读有效期。只恢复正文和显式成员 @，
+  保留当前附件／引用／回复元数据；默认显示 @ 不带回。撤回与到期不主动结束 ↑↓ 历史预览。
+- [Message Reedit v1](../../contracts/message-reedit-v1.md) 固定客户端合同；Core、数据库、原撤回命令、
+  模型上下文保持原状。交互稿 v4 直接构建正式恢复模块和组件，仅使用合成 transport 与独立存储。
+- 容量为最佳努力占用限制，不预留普通草稿配额；多窗口不新增锁、跨窗口事务或全局调度服务。
+
+验证与交付状态：
+
+- `pnpm typecheck`、`pnpm build:desktop` 通过；后者包含 Web 构建。
+- `pnpm test` 通过：254 个 Vitest 文件、2934 项通过、2 项既有跳过；后续 Node 套件
+  358 项通过、2 项 Windows 专用验证跳过；包含文档与 Skill 通用门禁。
+- `pnpm test:message-reedit-ui` 通过夹具类型检查及 11 组真实组件交互：确认取消／替换、
+  回填后普通草稿与到期分离、默认／显式 @、重启不续期、弹窗跨期、两阶段存储失败、
+  撤回成功但刷新失败、拒绝与未知回执、历史浏览保留／接管、实际同源第二窗口通知和日夜主题。
+  已人工核对截图；仅使用隔离 Chrome 和合成 transport，没有启动日常 App、Core 或真实 Runtime。
+- `pnpm test:rust:pr` 默认 workspace 475 项通过、1 项既有 ignored；未修改 Rust 或测试 owner。
+- `pnpm docs:test`、`pnpm docs:check` 与以本节真实基线执行的 `pnpm docs:check:ci` 通过，无治理例外。
+- 工作树状态 `ready`；交付功能分支和由正式组件构建的 HTML v4，保留 worktree 等待后续评审。
+  按 User 既有偏好只推送分支，不自动创建 PR 或安装日常 App。
+
+### 评审后恢复边界修正（2026-10-23）
+
+- 继续使用上述 worktree / 分支；评审基线 `e356d2a121ce6a0d4ccdc33d364e9e872b1385b0`。
+  新增真实 `ConsoleClient → ThreadAdapter → MessageWithdrawal → MessageReeditStore` 组合复现：
+  原 Promise 在第 90 秒由补查完成时，旧实现错误延长到第 210 秒。另两项无副本重试在旧实现均换 ID，
+  修复前对应 3 项断言失败；不将原有重试缺口描述为新增重复撤回漏洞。
+- 沿现有命令恢复路径携带客户端 `direct / recovery` 来源；补查、Core 错误后补查和显式重放均使用
+  原 pending 剩余窗口，正常直接响应仍从确认成功开始两分钟。原请求、Core 回执与持久化格式不变。
+- 当前撤回实例仅在内存保留未知请求身份与原参数，不依赖正文副本；成功或拒绝后清理。
+  没有跨重启保证，也没有新增自动重试队列。副本过期后的显式重试不能重新创建正文副本。
+- 复用 `validateComposerDocument`，去掉嵌套 JSON 转换；按消息 key 通知订阅者，无变化 sweep 不广播。
+  点击及最终回填继续实时校验；没有引入缓存框架、持久化索引或新的性能承诺。
+- 补齐直接慢响应、三条恢复路径、迟到补查、无副本重试及清理、自动到期与不影响无关历史行的检查。
+  真实 Web 组合验证第 90 秒收到补查结果后仍于第 120 秒失效；正常直接响应则于第 210 秒失效，
+  第 125 秒迟到补查不能重建已删除副本。显式重放保持原 ID 和完整参数。
+- `pnpm test` 通过：255 个 Vitest 文件、2947 项通过、2 项既有跳过；后续 Node 358 项通过、
+  2 项 Windows 专用跳过。`pnpm typecheck`、`pnpm build:desktop` 和 11 组正式组件 UI 验证通过。
+- `pnpm test:rust:pr` 默认 workspace 475 项通过、1 项既有 ignored；通用文档门禁及以原 worktree
+  基线执行的 `pnpm docs:check:ci` 通过。没有修改 Core、Rust 测试或协议。
+- 工作树状态 `ready`；追加修正提交并推送原功能分支，保留 worktree 等待评审，尚未合入 main。
+
+## 字面 HTML 间距与遍历收尾（2026-10-22）
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-markdown-spacing`；
+  分支 `rovai/markdown-spacing`，基线 `1dde043f6cb3b074682141d328a52e3d3c7e4ad8`；Governance：none。
+- 文件引用间距显式接收 `rawHtmlPolicy`，在 `text` 下以 HTML 字面字符作为相邻边界，
+  在 `drop` 下跳过隐藏节点。共用忽略列表保留，HTML 块内的 Markdown 形状不进入文件引用解析。
+- raw→text 只替换对应子节点并保留原 children 数组；`drop` 直接返回，交由现有 `skipHtml` 删除。
+  插件顺序和可信 Mention 机制保持；未增加缓存、解析层或性能框架。
+- 扩展既有 SafeMarkdown owner：前后两个 HTML 间距 case 修复前均失败；补充显式 drop 间距、
+  HTML 块内伪文件引用和被丢弃块中的 Mention 边界。无 Rust、Core、引用投影或模型上下文变更。
+- 属于已有显示合同的局部修正，无需新增 Version Decision、schema 迁移或协议版本。
+
+验证：
+
+- 定向 129 项通过；`pnpm typecheck`、`pnpm build:desktop` 和文档通用门禁通过。
+- `pnpm test` 通过：252 个 Vitest 文件、2868 项通过、2 项既有跳过；后续 Node 套件
+  357 项通过、2 项 Windows 专用验证跳过。
+- `pnpm test:file-reference-navigation` 隔离 Electron 验收通过：两侧 HTML 场景在日间、夜间的
+  实际附加边距均为 `0px`，字面标签完整；文件打开、原生选文、键盘、阅读锚点与宽内容约束保持。
+  已核对两主题截图；没有启动 Core、真实 Runtime 或日常 App。
+- `pnpm test:message-quotes` 通过，复用已有 71 项投影对照和可信 Mention／旧引用边界。
+  本次未改 Rust 或引用协议，未重复执行 Rust workspace 套件；不声明整体性能提升幅度。
+- 已完成验证，进入 PR 与 main 合入流程；合入后清理独立 worktree。
+
+## 消息字面 HTML 与引用投影（2026-10-22）
+
+- Worktree：`/Users/murray.xue/VSCodeProjects/opensource/rovai-ai-markdown-literal-text`；
+  分支 `rovai/markdown-literal-text`，基线 `8d236422c8225e14ff649e854acaf868fc1bbb4f`；Governance：none。
+- 聊天/单聊/执行台默认 `text`；更新日志、Markdown 文件和 Skill 阅读面显式 `drop`。
+  两种策略都不执行原始 HTML。raw 节点在可信 Mention 替换前文本化，避免内部 token 外露。
+- 执行说明判空与正文策略一致；引用新捕获使用 projectionVersion=3，Core HTML inline/block 与 Renderer
+  DOM 保持 Unicode scalar/空白一致。原 v2 对照集保留，v3 继承旧例并覆盖占位符、HTML 块、注释、
+  可执行形状的字面文本、代码/转义、自动链接和结构化 Mention。
+- 扩展原 Rust 纯投影和 SQLite capture owners；没有新增、删除或停用 Rust 测试函数。
+  修复前占位符为空、原始 HTML 选文无法匹配；最小命令为 `cargo test -p rovai-core --lib message_quote::tests::`。
+  SQLite seam 同时验证 v1/v2 冻结快照保留，UI owner 验证原生选文、v3 捕获与旧定位失败边界。
+- 此变更只影响显示及新用户主动选文的内部 locator，不改模型输入格式、选择/预算、上下文证据版本或
+  既有快照字节；引用仍按已有 plain_text 合同发送用户选中的文本，不触发核心模型上下文变更。
+  复用已有投影版本与兼容机制，无需新增 Version Decision、迁移或文档路由。
+
+验证：
+
+- `pnpm typecheck`、`pnpm build:desktop`、`pnpm docs:test`、`pnpm docs:check` 和使用真实基线的
+  `pnpm docs:check:ci` 通过；没有新增治理例外。
+- `pnpm test` 通过：252 个 Vitest 文件、2864 项通过、2 项既有跳过；后续 Node 套件
+  357 项通过、2 项 Windows 专用验证跳过。全量门禁发现主干 benchmark 产品合同仍断言旧 schema 161，
+  在未修改的主干复现后，将该测试期望同步为已存在的 162；没有修改生产 schema 或迁移。
+- `pnpm test:rust:pr` 默认 workspace 回归通过：474 项通过、1 项既有 ignored；
+  `cargo fmt --all --check` 通过。扩展原有 owner，没有新增 Rust 测试函数或运行真实模型。
+- `pnpm test:message-quotes` 隔离 Electron 验收通过；Core 与 Renderer 共用的 71 项 v3 对照覆盖
+  完整占位符路径、可见字面 HTML、可信 Mention、原生选文与新引用定位；旧 v1/v2 快照保持，
+  无法精确匹配当前正文时不伪造高亮。日间和夜间截图人工核对通过。
+- 已完成验证，进入 PR 与 main 合入流程；合入后清理独立 worktree。日常 App 未安装此修复。
+
+## TRAE ACP 错误详情（2026-10-22）
+
+- 工作目录：同级 worktree `rovai-ai-trae-acp-error-detail`，分支 `rovai/trae-acp-error-detail`，
+  基线 `bdd13d20fa95178d5a8687392ab17435c2d75daa`；无需治理先行提交。
+- 只读核对同一原生 Session 的两次 `task_complete.error.message`，均包含个人配额耗尽详情；
+  Rovai 的持久 failure 与 input rejection 只保留 `ACP error -32603: Internal error`，详情在 Core 内已丢失。
+  不把这些私有 Session、Run ID、业务输入或原始日志提交到仓库。
+- 使用已安装 TRAE 0.209.1，在独立 `TRAE_HOME`、项目与临时目录中运行 ACP 探针；仅使用合成认证，
+  OS sandbox 禁止网络与日常目录写入。`session/new` 的原生错误为
+  `{code:-32603,message:"Internal error",data:"Trae CheckLogin failed before model fetch: …"}`。
+  这证明当前版本返回字符串 detail；没有重新调用真实模型，也未捕获历史配额失败的完整 ACP wire。
+- `AcpRpcError::from_response` 兼容字符串 `error.data` 与既有 `error.data.error`；复用统一脱敏、
+  去重与长度限制。共享 Prompt/RPC 路径保留详情；原生会话、输入接受判定、retryable 门禁及旧 Run 保持。
+- 扩展既有 `acp_rpc_error_keeps_only_allowlisted_bounded_fields` 的类型与清洗矩阵，
+  以及 `prompt_error_after_activity_keeps_input_accepted_while_early_rejection_does_not` 的
+  两种格式、activity 前后和 input rejection 详情；不新增、删除或停用 Rust 测试函数。
+
+验证：
+
+- 修复前新增字符串 case 失败：实际只有 `ACP error -32603: Internal error`；修复后解析 owner 通过。
+- 合成 ACP 进程 owner 的四种格式／activity 组合通过；统一 Runtime failure 的 5 项分类与清洗测试通过。
+- `pnpm typecheck`、`pnpm test` 通过：252 个 Vitest 文件、2857 项通过、2 项跳过；后续 Node 套件
+  357 项通过、2 项 Windows 专用验证跳过。
+- `pnpm docs:test`、`pnpm docs:check` 与使用真实基线的 `pnpm docs:check:ci` 通过。
+- `pnpm test:rust:pr` 默认 workspace 回归通过：474 项通过、1 项既有 ignored；
+  `cargo fmt --all --check` 与 `cargo check --workspace` 通过。未执行全量 extended/slow-tests。
+- 已完成验证，进入 PR 与 main 合入流程；合入后清理独立 worktree。日常 App 未安装此修复。
+
+## 操作提示精简（2026-10-21）
+
+- 工作目录：同级 worktree `rovai-ai-remove-action-toasts`，分支 `rovai/remove-action-toasts`，
+  基线 `9d4f17b6e`；不要求治理先行提交。
+- 移除 User 列出的操作 Toast：复制会话 ID／项目路径／附件完整路径、项目改名／移除、消息撤回、
+  结束单聊、队员邀请／移出（含生效时机与收尾）、定时任务创建／运行／开启／关闭／删除
+  （含运行已跳过与未启动），以及 Web 附件下载准备与交接成功。不新增局部提示。
+- 移除定时任务与成员面板不再使用的通知回调，清理独占翻译；保留其他错误回调、草稿、
+  异步刷新、操作忙碌状态、成员收尾区域与通知分类开关。
+- 既有侧栏／成员验收改为检查剪贴板、名册与 Dialog 收起后没有 Toast；定时任务创建验收
+  等待持久定义界面，不再依赖成功提示。不新增、删除或停用 Rust 测试。
+
+验证：
+
+- `pnpm typecheck`、验收夹具 TypeScript 检查、`pnpm build:desktop`、文档治理门禁通过。
+- `pnpm test` 通过：249 个 Vitest 文件、2832 个用例；后续 Node 套件 357 个通过、
+  2 个 Windows 专用用例按平台跳过。首次执行的文件监听用例发生等待超时，单独复查与
+  完整重跑均通过，未改动该用例。
+- `pnpm test:rust:pr` 默认 workspace 套件通过；`pnpm test:automation-splitter`
+  隔离 Electron 集成验收通过。侧栏／成员验收脚本通过语法检查，未运行完整打包验收。
+- 浏览器使用生产 Renderer 的内存夹具，验证定时任务创建、运行、关闭、开启、删除后
+  状态更新且没有操作 Toast；未启动真实 Runtime 或访问日常实例数据。
+- Impeccable 对六个改动的生产组件检查无发现；未改动布局、主题或 CSS。
+
+## 原路径附件显示名（2026-10-21）
+
+- 工作目录：同级 worktree `rovai-ai-source-attachment-display-name`，分支
+  `rovai/source-attachment-display-name`，基线 `2773f3bc3`；不要求治理先行提交。
+- Source Ref 读写与观察入口使用展示文本检查，保留通过检查的原名；不再要求显示名等于
+  `normalize_display_name` 的安全落盘名称。路径、身份、owner 授权与文件有效性规则不变。
+- Contract 升为 [v11](../../contracts/camp-attachment-v11.md)，同步当前架构和导航。
+  无字段或模型输入结构变更、数据库迁移或新增版本决定。
+- 扩展已有 Rust owner：`source_ref_json_is_closed_and_pathless_view_is_stable` 负责名称输入矩阵、
+  序列化/恢复与展示；`resolver_returns_exact_stored_paths_for_files_and_directories` 负责原路径与
+  Core/Agent 观察；`source_path_message_bypasses_managed_attachment_publication` 负责 Desktop 原始
+  显示名实际发布、持久化与 Runtime 路径。未新增、删除或禁用 Rust 测试函数。
+- 扩展已有 Desktop registry 恢复测试，确认带冒号显示名在重启恢复后保留 ID 和真实路径。
+- 渠道入站复用原有有界 MIME 探测，直接传递既有展示标签，避免将带 `file-` 前缀的实际文件名
+  当成显示名检查。原渠道原子准入 owner 增加 120 码点标签，确认安全落盘名称和 MIME 识别保持。
+
+修复前附件模块的两项新增 case 分别复现“显示名被替换”和原始 normalized 报错；修复后该模块
+5 项测试全部通过。Desktop registry 13 项、`pnpm typecheck`、`pnpm test`（Vitest 2816 项）、
+`pnpm build:desktop` 与使用真实 base 的 `pnpm docs:check:ci` 已通过。
+最终代码的默认 Rust workspace 回归通过：474 项通过、1 项既有 ignored。实际发布
+（`slow-tests`）、渠道原子准入（`extended-tests`）与旧安全文件名清洗三个定向 owner 均通过。
+规范与需求两个独立静态审查均无发现；未启动日常 App 或调用真实模型。
+
+`pnpm test:rust:extended` 的 Core 扩展套件完成：1015 项通过、8 项既有 ignored、6 项失败，
+命令以 101 退出。六项失败均为主干既有问题：
+
+- `every_acp_adapter_uses_terminal_runtime_action_output_not_command_delta`：实际 ACP 数量为 15，
+  旧断言为 14。
+- `v103_adds_trae_delivery_without_overriding_custom_skill_assignments`、
+  `v104_adds_cursor_catalog_and_delivery_without_expanding_custom_skills`、
+  `v105_adds_kimi_catalog_and_delivery_without_expanding_custom_skills` 与
+  `v107_adds_grok_catalog_and_preserves_runtime_and_skill_rows`：旧迁移夹具的 Skill `group_key`
+  CHECK 约束失败。
+- `active_inputs_preserve_initial_context_and_unsubmitted_sources`：开头的 Runtime 能力矩阵断言
+  实际为 true、预期为 false，尚未进入上下文或附件部分。
+
+独立 detached worktree 在未修改的基线 `2773f3bc3` 编译并定向运行这六项，全部复现同样失败。
+相关测试、AdapterKind 与 Steer 定义未改动。保留失败记录，扩展层不记为全绿；本次没有改写或跳过无关断言。
+
+## 单次长文本粘贴转附件（2026-10-20）
+
+复用分支 `rovai/long-text-paste-attachment` 与同级 worktree `rovai-ai-long-text-paste`，本轮合入 main 基线
+`85a57b3c7`，保留原分支历史。按 User 确认的五条范围，采用单向发送保护，不增加发送关联或清理框架。
+
+- 普通文本 paste 使用可选 Desktop 能力；10,000／10,001 按码点分流，文件／图片／合法内部结构优先。
+  原正文及选区保留，显示名避开当前 ready/preparing 项；计数准入放在既有附件串行准备队列中。
+- Main 通过本机 Host/Core 读取 Thread 输出目录，直接写 UUID `.txt`。原登记增补生成来源和单向发送标记；
+  只对最终发送快照中的生成附件先持久保存保护再转发发布，物理删除复用同一队列。已移除附件不连带保护，
+  本次无附件也不解除更早标记。未承担恢复或清理责任后释放登记，其他附件仍按原缓存规则。
+- 明确本机保存完成点，随后 Pending presence 失败不回填。未接纳先追加到原编辑器最新内容，再尝试清理已准备文件；
+  回填沿用既有保存、重试与离开保护，失败时不重读旧快照覆盖新增输入。创建阶段尚未返回登记身份时的异常残留
+  留到 Thread 删除，不另设恢复或清理任务。
+- 用户移除先成功保存新草稿，再异步删除未保护生成文件；已保护文件仅移除引用。清理失败不回滚草稿、不锁住编辑。
+  发送成功先保存后续草稿再 discard；保存失败保留文件与登记。纯附件 Pending 离开也等待已有 presence 确认。
+- 普通弹窗零消息 Active 保留；一键 Pending 沿用空草稿隐藏／离开／启动清理。启动清理补齐同 Thread 输出目录，
+  复用既有删除通知释放 Main 登记。没有目录扫描、定时任务、引用计数或新建垃圾回收器。
+
+验证 owner：Main registry 定向测试覆盖完整 UTF-8、重启恢复、Thread 隔离、外部文件、单向保护、删除与发送串行、
+登记写入失败、unlink 失败、最终附件快照范围与缓存裁剪豁免。原生产 Composer Electron 夹具覆盖阈值、选区、HTML／文件／图片／内部
+复制、快速粘贴、数量上限、延迟失败期间编辑，以及两种状态下的空正文附件发送、移除顺序和发送后清空失败。
+界面使用临时 userData 与独立 Skill Library，不连接日常 App。
+
+Rust 继续扩展既有 `application::tests::source_path_message_bypasses_managed_attachment_publication` owner：
+使用 Pending 首条纯附件发布、Thread 目录的完整 Unicode 文件，验证 Active 激活、消息 source ref、运行附件路径
+解析与逐字读取，同时保留“不走 legacy managed publication”的原断言；不新增平行 Rust fixture。最小命令为
+`cargo test -p rovai-core --lib --features slow-tests source_path_message_bypasses_managed_attachment_publication`。
+现有 Core 启动进程夹具新增目录生命周期场景，证明 root RPC、空 Pending 重启清理、带 presence 的 Pending 保留、
+零消息 Active 保留与离开时受保护 discard；领域单元测试不能证明启动器是否实际接上文件清理。
+
+验证：`pnpm typecheck`、`pnpm build:desktop`、`pnpm test` 通过；完整回归包含 247 个 Vitest 文件／2,812 项，
+后续 Node 357 项通过、2 项平台专属跳过。补充最终附件快照边界后，Main registry 的 11 项定向测试与生产
+Composer 隔离 Electron 场景再次通过，证明移除项不进入请求、无附件发送不连带删除或保护其他文件。
+`pnpm test:composer-input` 的 3 个生产输入套件与 `pnpm test:desktop-bridge` 的真实 preload/contextBridge
+验证通过；人工核对长粘贴的日夜主题截图，沿用原附件卡片和短提示。
+
+`pnpm test:rust:pr` 474 项通过、1 项既有 ignored；上述 slow Rust owner 和 Core 真实启动目录场景均通过。
+文档 10 项测试、普通及基于 `85a57b3c7` 的 diff-aware 文档门禁、Rust 格式与 diff 检查通过。
+证据覆盖真实 Core 发布与运行附件解析，不声称已经让外部模型实际读取；没有安装日常 App。
+
+保持 v1.72。当前长期规范升级为 [Composer Draft v17](../../contracts/camp-composer-draft-v17.md)，
+Architecture、UI、合同索引、文档入口与 [V1.72-D53](decisions.md#v1-72-d53) 同步。
+不改变模型上下文字段、Runtime 启动协议或其他附件入口，Runtime Activity、Runtime compatibility、Root README 无需改动。
+
+后续按 User 对固定提交 `035902a5e` 的复核，在同一分支完成局部修正：
+空附件发送在读取登记和入队前返回；最终发送清单中的相同 `sourcePath` 能保护另一 Thread 的原生成登记，
+附件 ID 匹配仍限定 Thread。Preload 在读取完整缓冲区前检查现有 25 MiB 上限，Main 最终校验保留。
+明确保存完成点不变，协调器不重复发布已接纳的同一快照，Active 的 onChange 跳过该已成功保存对象的重复写入。
+没有增加常驻任务、发送关联、去重、引用计数或新存储系统；真实文件和少量失败残留仍承担原有存储成本。
+同路径复用只限制草稿移除时的物理删除，不改变所属 Thread 删除（含空 Pending 清理）的目录寿命。
+后续验证：27 项定向测试、生产 preload/contextBridge 及隔离生产 Composer 回归通过，覆盖空发送绕过阻塞清理、
+跨 Thread 路径保护与 ID 隔离、超限时零字节读取／零 IPC、正常添加与保留正文时移除各一次快照保存。
+既有清空后的草稿重读保持原样，没有把独立重读的空快照写入算作本次接纳重复通知。
+`pnpm typecheck`、`pnpm build:desktop` 和 `pnpm test` 通过（247 个 Vitest 文件／2,816 项，
+Node 357 通过／2 项平台跳过）；文档 10 项测试、普通及基于 `035902a5e` 的 diff-aware 门禁通过。
+本轮未修改 Rust，不重复运行既有 Rust 回归；没有测量整机内存或磁盘占用，也没有更新日常 App。
+
+### 内部纯正文复制修正（2026-10-21）
+
+分支 `rovai/long-paste-text-only`，同级 worktree `rovai-ai-long-paste-text-only`，初始基线 `527582452`。
+User 实测输入框复制的纯正文也带私有 MIME，导致此前合法内部格式整体豁免了长文本阈值。
+只调整生产 Clipboard Extension 的 paste 分流：恢复后仍含 Member、All Members 或 Skill Atom 时保留
+结构化优先级；其余内部文档用自身完整正文判断 10,000 码点阈值，普通 `@名字`、`/skill` 字符不构成 Atom。
+既有文件优先级、短文本插入、选区、未启用回调的入口及异步回填保持原路径，不增加持久字段或后台机制。
+
+新增场景先在旧代码复现失败，再在隔离 Electron 的生产 Composer 中通过；使用编辑器自身 Copy 产生私有 MIME，
+验证纯正文回贴生成附件且不覆盖选区。补齐边界、Unicode／空白全文、内外文本不一致、三种 Atom 保留，
+并用内部纯文本覆盖既有延迟失败期间继续输入的回填场景。夹具隔离 userData 和 Skill Library，不启动 Core／Runtime。
+初始基线上的 `pnpm typecheck`、`pnpm build:desktop`、`pnpm test` 通过（249 个 Vitest 文件／2,832 项，
+Node 357 通过／2 项平台跳过），生产 Composer 回归通过。当前规范升级为
+[Composer Draft v18](../../contracts/camp-composer-draft-v18.md)，复制 wire format 和 v17 的附件生命周期不变。
+
+同步语言设置主线 `94a1d843c` 后再次通过 `pnpm typecheck`、`pnpm build:desktop`、`pnpm test`
+（251 个 Vitest 文件／2,847 项，Node 357 通过／2 项平台跳过）、`pnpm test:composer-input` 的 3 个生产输入套件，
+以及基于该 main SHA 的 diff-aware 文档门禁。默认 `pnpm test:rust:pr` 474 项通过、1 项既有 ignored；
+本次及合入的语言更新均未修改 Rust。日常 App 未在本轮安装或重启。
+
+## 会话执行条（2026-10-20）
+
+User 确认第七版交互稿的 01 浅灰、C 无底图标和转圈，并授权独立 worktree、PR 到 main 后合并。
+分支 `rovai/conversation-execution-bar`，基线 `923f9919b669b5d0c5fba8654f852106806deae0`，
+worktree 为同级 `rovai-ai-execution-bar`；没有治理先行要求。
+
+实现限于会话执行条及其设置导航接线：42px 浅灰完整单行、28px 常驻中性停止图标、整行悬浮浅红底，
+移除停止区竖线与 RunningText。运行时间由真实 start/end 计算，未知时省略，并与正文共用精确 Run 入口。
+连接候选采用 02／03／05，处理候选采用 02／04／05；Run ID 与阶段决定稳定选项，中英文共用选择，
+真实正文、命令与合法思考标题优先。独立圆环不受系统／应用减少动态设置影响，forced-colors 保留静态图形。
+执行台、设置控件、消息、头像、输入区和其他界面不移植交互稿样式；停止确认、来源定位、重试与执行证据路径保持原有语义。
+
+保持 v1.72；这是局部可逆的 Renderer 变化，没有协议、存储、Runtime 或 Rust 测试变更，不新增 Version Decision。
+扩展现有单元测试与生产 ThreadWorkspace 浏览器夹具，覆盖候选稳定性、中英文切换、时间事实、计时导航及动效独立性。
+删除旧可选 HTML 分隔区对照入口，以当前生产组件的几何、交互与截图验证取代。
+
+验证：`pnpm typecheck`、`pnpm test`（246 个 Vitest 文件／2,803 项；Node 357 通过、2 项平台跳过）、
+`pnpm build:desktop`、`pnpm docs:test` 与基于实际 main 基线的 `docs:check:ci` 通过。
+`pnpm test:run-presence-ui` 在独立 Chrome profile 中通过 38 个场景状态、37 项交互记录及日夜主题的 6 组桌面尺寸；
+另覆盖 200% 等效缩放、粗指针、系统／应用减少动态效果、forced-colors 组合、中英文即时切换、时间精确 Run 导航和终态收口。
+人工浏览器核对了生产组件在 1440×920 下的日夜主题、28px 无底停止、整行悬浮浅红底及既有停止确认；控制台无错误。
+夹具只替换 transport，不启动 Core 或真实 Runtime，不修改日常 App 数据。
+
+后续 User 要求完全随机：分支 `rovai/execution-copy-random` 从 `9d3a9ed67767b8351142f3b7ef9bd27758b41a22`
+创建同级 worktree `rovai-ai-execution-copy-random`。选句改为每个 Run/阶段独立、等概率随机，允许连续重复，
+不再由 Run ID 哈希决定。Renderer 仅临时保留最近 512 个阶段选项，避免计时、快照更新、重挂载和切换语言
+触发换句；完整页面重载可重新抽取。不新增持久设置，不修改样式、动效或真实进度优先级。
+既有候选测试改用受控随机样本验证三个区间、连续重复、阶段独立性和中英文一致性，避免概率性断言。
+后续验证：12 项定向单测、`pnpm typecheck`、`pnpm test`（2,803 项 Vitest，Node 357 通过／2 项平台跳过）、
+`pnpm build:desktop`、文档门禁及 `pnpm test:rust:pr`（474 通过／1 项既有忽略）均通过。
+独立 Chrome 的 `pnpm test:run-presence-ui` 继续通过 38 个场景状态、37 项交互记录和 6 组桌面尺寸。
+
+## Claude 执行结束后的失败收口（2026-10-20）
+
+User 报告 Claude 子进程已退出、Run 长期运行中且后续消息排队。当前源码核查发现：
+`execution_lease_expires_at` 只在领取时写入，没有周期续租，因此它和 `agent_run.updated_at`
+都不能单独作为执行器失联时间；Claude Adapter 已监听进程退出并限制退出后的输出收集。
+但 stdin writer、退出后输出收集和进程等待的部分普通错误返回后，已绑定的 handoff 会使
+上层提前返回，跳过 Run 失败结算。现场尚缺可追溯构建身份、Core 错误链与进程退出码，
+不能认定该报告命中此分支，也不能仅凭会话没有 error 或系统没有 crash report 排除原生错误。
+
+分支 `rovai/fix-claude-ended-run`，基线 `1da9da7ccafa8fc896ca82958029c0f48770c41f`。
+复用现有 Adapter result、Runtime loss 和 cleanup worker：内部 `ClaudeCodeRunEnded` 只标记
+已返回结果的 worker，不标记仍可能运行的 caller-abort 或结果通道意外丢失。可信原生终态继续
+走原有结算；没有可信终态且 handoff 已绑定时，按 Run/epoch 收口 unknown input。保留精确
+取消、计划关闭、旧执行隔离与后继 FIFO，不增加租约轮询、运行时长上限、重放或新的持久状态。
+这是实现对齐现有恢复合同的局部修复，不新增 Version Decision、协议、Schema 或模型上下文。
+
+回归 owner：
+
+- 既有 `claude::tests::output_failure_terminates_the_still_running_process_before_cleanup`
+  增加内部结束标记断言，验证真实协议进程的错误保留原公开原因且能传递 worker 结束证据。
+- 新增 slow owner
+  `application::tests::ended_claude_run_fails_unknown_input_before_releasing_queued_delivery`，
+  使用既有隔离 Core/SQLite fixture 验证 bound handoff 下的普通错误不夺取 owner、已结束错误
+  结算为 `accepted_input_outcome_unknown`、输入不重放、cleanup 前不领取、确认后单次领取与迟到
+  结果 fencing。Adapter owner 无法观察持久队列；domain owner 不经过 Core 的错误路由，因此需要此
+  跨模块 owner，不增加平行 Runtime/网络夹具。
+- 最小命令：
+  `cargo test -p rovai-core --lib --features slow-tests ended_claude_run_fails_unknown_input_before_releasing_queued_delivery`。
+
+47 项定向 Rust 回归通过：上述新 owner 1 项、Claude Adapter 34 项、现有 Runtime loss owner
+1 项、Planned Shutdown 11 项。`pnpm typecheck`、`pnpm test`（Vitest 2801 项及 Node suites）、
+`cargo fmt --all --check`、`cargo check --workspace`、`pnpm docs:test`、`pnpm docs:check`
+及使用上述基线的 `docs:check:ci` 均通过。
+
+首次默认 Rust 回归为 427 passed / 1 failed / 1 ignored；失败是兼容性文档摘要常量与当前文件不符。
+在未修改的基线以 `platform_evidence_revisions_bind_their_frozen_source_bytes` 单独复现同一失败。
+主线 `5c70ee814` 更新 Qwen 问卷证据后遗漏了摘要同步，本分支将该常量同步到实际文件 SHA-256，
+不改变准入集合或任何资格测试断言；作为独立修正提交。重跑 `pnpm test:rust:pr` 通过：
+workspace 共 474 passed / 0 failed / 1 ignored；保留原有手动验收跳过项。
+本次不启动真实模型、不修改故障电脑或日常实例数据。
+
+User 后续授权 PR 到 main 并合入。交付前同步主线
+`923f9919b669b5d0c5fba8654f852106806deae0`，采用其最新兼容性证据摘要；最终相对 main
+不再修改平台准入常量。仓库规范与需求一致性两路静态审查均为 0 项 findings。
+交付与最终检查状态见 [PR #834](https://github.com/murray17/rovai-ai/pull/834)。
+
+后续现场报告（2026-10-20，User 转述；未取得原始数据库和日志独立复核）：
+
+- 故障机报告 Rovai App/Host `0.4.14`、实际运行的 Claude Code `2.1.212`；故障窗口为
+  `07:33:30–07:42:07 UTC`。App/Host 版本号尚不能唯一映射构建提交；现场报告 Core/Host
+  在此窗口没有退出、重启或计划关闭迹象。
+- 数据库副本显示旧 Run 为 `running`，输入为 `accepted`，
+  `accepted_at = resolved_at = 07:33:36.916 UTC`，错误字段和取消请求/确认字段均为空。
+  `resolved_at` 在输入接受时写入，不证明模型完成或 Run 已结算；取消字段为空也不支持
+  “已进入 cleanup、只是确认迟到”的判断。
+- 现场未保留 Core stderr，Claude 的实际退出码/信号未知；当前无残留进程不能证明退出时刻
+  没有子进程持有输出管道。会话停在工具成功输出、UI XPC 连接活动均不能唯一定位退出原因。
+  结论保持为“已接受输入的 Run 未写入终态，症状与本次修复路径一致但未确认命中”，不把
+  “跳过失败分支”或“执行器失联”提升为现场已证事实。
+- 修复后的复现不能要求旧 `preserving unresolved accepted input` 日志作为成功判据：
+  已标记的结束错误会在打印该行之前结算。应保留新 Run/epoch、构建身份、
+  `last_error_code`、`last_error_details_ref` 和 `agent_run.failed` 事件的 `errorDetail`；
+  对本次路径预期为 `accepted_input_outcome_unknown`，错误链含
+  `Claude Code managed run has ended` 及底层原因，再核对清理请求、确认和后继领取。
+  这仍不能保证取得每种底层退出的实际退出码。
+- 当前基线已有精确 Stop、Core 重启恢复与 cleanup 路径；本次补的是运行期间特定错误返回后的
+  失败收口，并非新增全部回收能力。现场恢复需等待旧执行清理确认；后续复现须使用新的明确
+  输入，先核对原任务已产生的效果。日志持久化开关未包含在本补丁中。
+
+## 执行入口与空状态（2026-10-20）
+
+User 确认 HTML 交互稿后授权独立 worktree、PR 到 main 并合并。分支 `rovai/execution-entry-cleanup`，
+基线 `1da9da7ccafa8fc896ca82958029c0f48770c41f`，worktree 为同级 `rovai-ai-execution-entry`。
+
+生产变更只涉及 `ThreadDetailPopover.tsx`、`ThreadWorkspace.tsx` 和 `styles.css`：
+移除入口 Hover/Focus 名单气泡，保留可访问人数／姓名、头像、双弧与原尺寸；将原位置菜单提取为同文件控件，
+放到浮层标题栏，删除空状态中的独立“移到底部”。底部／右侧空记录保留位置控件，以便返回；
+未激活草稿在三种已保存位置下都不新增执行控件。有记录时底部／右侧布局及稳定 Drawer host 继续复用。
+
+保持 v1.72，属于局部可逆的 Renderer 调整；同步现有 UI 规范。没有新增协议、存储、Version Decision、
+Runtime 或 Rust 测试变更。验收扩展既有执行台原生输入夹具，覆盖无名单气泡、可访问姓名、
+空状态三位置往返、保存失败与重试、嵌套 Escape，以及未激活草稿；原有执行详情场景继续完整运行。
+
+验证：`pnpm typecheck`、`pnpm test`（246 个 Vitest 文件／2,801 项、Node 357 通过／2 项平台跳过）
+与真实基线的 `docs:check:ci` 通过。生产执行台原生输入夹具和状态切换夹具均通过；覆盖日夜主题、
+1040／1440／2560 宽度、200% 缩放、完整过程阅读、Drawer identity、键盘焦点及空状态。
+首次全量前端回归出现三项超时；对应 37 项单 worker 复核及完整 `pnpm test` 重跑均通过。
+
+额外检查保留两个基线问题：手机执行夹具在 844×390 横屏断言详情高度应大于 40px，原始基线与本次
+均测得 33px；`pnpm test:rust:pr` 的平台证据 owner 因 `docs/runtime-compatibility.md` 哈希不匹配失败
+（Core library 427 通过、1 失败、1 项既有忽略）。直接读取基线 Git 对象得到文档 SHA-256
+`9d3e34b827046ad071c350638c3317182e7061373eaf1a8fb31e89ea90fda6c2`，
+基线常量仍为 `596f26ee3fdf0a6812737967e0e2f97cecb34a70595cf52a58d2309cdd93c3a5`。
+本次不修改这两处既有行为或放宽断言；没有将这些检查声明为通过。
+
+## 四适配器原生问卷（2026-10-20）
+
+按 User 确认的四适配器范围在独立 worktree 实施。启动参数、接收端问卷分流、Host 兼容、
+未承接问卷终态与测试证据统一记录于[原生问卷验证](native-questionnaire-verification.md)。
+不改 MiniMax 用户配置，不扩大到 Codex 或其他适配器。
+
+后续按 User 范围仅补 Qwen `--exclude-tools=ask_user_question` 与 Host compatibility，
+保留既有问卷取消兜底；Kimi 仅核实 Skip/取消不终止原生执行，未改策略。
+增量版本、生产路径与门禁证据见同一验证记录的 [Qwen 增量](native-questionnaire-verification.md#qwen-启动禁用增量2026-10-20)。
+
+本轮按 User 授权禁用 ZCode、OpenCode V2 的问卷工具，生产改动限于原生配置和 Host compatibility。
+不增加通用交互取消、Run 终态或重放处理；保持 v1.72，不新增 Version Decision。
+基线、worktree 和验收见 [ZCode/OpenCode 增量](native-questionnaire-verification.md#zcodeopencode-v2-禁用增量2026-10-20)。
 
 ## 主动停止后的会话蓝点（2026-10-19）
 
@@ -2554,7 +3200,7 @@ User 明确要求整套已确认方案一并完成。规范见 [Runtime Launch v
 取舍见 [V1.72-D37](decisions.md#v1-72-d37)。
 
 - 当前 Conversation 的类型由既有安装/历史 Run 解析；同类 CLI 保留 exact-ID Resume 资格，历史摘要、安装代次和受控恢复记录不提前否决。
-- Adapter 在恢复调用处提供可靠结论；退役全局文本及 Claude/Antigravity/Pi 的日志猜测。Command Code 继续精确核验完整目录，Pi 区分精确目标不存在与普通 IO 错误。
+- Adapter 在恢复调用处提供可靠结论；退役全局文本及 Claude/Antigravity/Pi 的日志猜测。Command Code 后续已按原生尽力恢复删除目录预检（见本页 Command 收口）；Pi 区分精确目标不存在与普通 IO 错误。
 - 新建前保留旧目标，当前输入 dispatch/accepted/unknown、取消与 epoch 仍阻止自动降级。成功替换与提示事件在绑定事务一同提交；公开/私聊执行详情显示一句提示。
 - 新 Run 正常装配 Bootstrap，不依赖旧 Blob。Migration 195/schema 145 保留所有历史行与引用，仅解除 Binding/generation 唯一约束；同一 Run 已准备输入保持不可变。
 - 进程丢失或重启时，未知输入正常失败并保留清理/防重证据，同时保留原生目标。用户显式续做的未知执行隔离机制不变。
@@ -3328,7 +3974,8 @@ Host 验收使用独立临时 data、Skill Library 与 MCP 路径，不启动模
 
 ### 删除或合并的工作
 
-- 单项检查复用当前有效入口与搜索环境，无有效入口才补充搜索；显式重新检测捕获一次环境。
+- 本批原规则为单项检查复用有效入口与搜索环境、无有效入口才补充搜索；2026-10-26 已由
+  [Issue #891 修复](#runtime-path-与主动检查一致性2026-10-26)替代为主动单项检查总是先刷新。显式重新检测仍捕获一次环境。
   有效输入未变化时保留搜索 generation，同目标请求继续由既有 pending/active 队列合并。
 - 静态发现直接复用已有文件身份，原生稳定文件完整哈希为未变 0 次、首次或升级 1 次。
   必要校验与手动版本补读均留在各 Runtime 工作任务，形成既有 `VerifiedDiscoveredRuntimeEntry` 后短提交；
@@ -3677,9 +4324,134 @@ User 在本轮确认按实际 Send 输入路径过滤，并授权独立 worktree
 新增断言在首次验证时修正了 snapshot／operation 输出顺序假设及 macOS 临时目录 cwd 别名，未改变生产
 路径身份规则。未启动真实 Runtime、模型或 Renderer；本项不宣称真实 Session 或 UI 点击验收。
 
+## 跟随系统界面语言（2026-10-21）
 
-## 飞书回复revision3实施与未完成验收（2026-10-28）
+按 User 确认的 HTML 交互稿实施：复用设置语言行、训练营欢迎页位置和登录表单，统一三个选择。Desktop Main 和 Web 本地偏好各自解析设备语言，不将远端 Host 语言当作访问者语言。持久化 schema 6 只保存偏好，运行时快照携带解析结果、读取状态与顺序版本。
 
-已实现 [确认稿revision3](model-context-change-feishu-reply-routing.md) 的逐输入来源、完整guidance、预算/Manifest冻结与public43/迁移213/schema159；Transport44、Profile15、Bootstrap、Runtime权限和Host发送保持。完整实际命令、摘要、模型证据及FRR-01..14覆盖见 [验证报告](feishu-reply-routing-validation.md)。
+有效 schema 1–4 保留中文，schema 5 保留原语言，缺失配置默认 system。损坏记录保留且阻止无关自动写入；恢复读取后才解除保护。语言读写独立于业务服务，较早读取、事件和保存响应不能覆盖较晚选择；system 保存失败回退时按当前设备重新解析。
 
-最终定向准入、历史保留、拒收、预算与聊天owner已验证；真实模型普通交流/内部保护/桌面补充/受托转发及多输入等路径有两侧证据，旧40真实输入升级/重启保持12份输入摘要且0模型重跑。整体验收仍未通过：原通用Gate insufficient、24slot not_run，固定Judge缺失，FRR-11拒收由投递层验证、FRR-13近预算已实测，但通用模型执行仍未齐；不宣称原误拒答修复，不重开Gate或改写失败。
+训练营 schema 4 固定具体资料语言，旧检查点保留进度与命令 ID；创建和重启恢复使用冻结值。界面切换保持草稿、页面、角色和执行状态。Web 登录前选择在内存中暂存，认证后仅将用户明确选择接续到既有 owner 作用域。
+
+工作分支 `rovai/system-interface-language` 从 `010e762f0` 建立，随后合入 `527582452` 的主干更新；没有主线治理先行要求。通用门禁使用同级干净检出 `rovai-ai-language-validation`，避免工作目录中被忽略的历史 HTML 原型参与文档扫描，未修改检查器或删除原型。
+
+验证结果：
+
+- `pnpm typecheck` 与 `pnpm test` 通过：251 个 Vitest 文件、2,847 项用例；后续 Node 套件 357 项通过、2 项 Windows 专用测试按平台跳过。覆盖旧配置迁移、system 持久化、读取损坏保护、恢复、请求顺序、Web 作用域和创建资料冻结。
+- `pnpm test:startup-presentation` 在隔离 Electron 中通过：语言读取前保持中性首帧，训练营三个选择更新页面语言属性；从 English 切回 system 保留选择方式，且原组件树保持不变。`pnpm test:desktop-bridge` 验证生产 preload 的语言读取、保存、事件清理及创建语言参数。
+- `pnpm build:desktop`（包含 Web、Execution Web、Main、preload 与 Renderer）和以真实主干为 base 的 `pnpm docs:check:ci` 通过。
+- `pnpm test:rust:pr` 在语言实现提交 `7c62e5580` 通过：474 项通过、1 项既有手动 smoke ignored；本功能未修改 Rust。后续主干合并仅处理翻译、文档与验收夹具的并行增量。
+- 规范与需求两项独立审查发现的读取异常提示丢失、登录交接期间新选择丢失均已修复，并通过回归与复核。保存失败文案按回退后的当前语言显示。
+- 完整复验曾触发未改动的 `cline-observer` 测试误判：它的敏感字段正则匹配到了 `observedAt` 的 `.999` 毫秒值；单项复查与完整重跑通过，未改动该 owner。
+
+本次只启动隔离自动验收进程，未启动真实 Runtime，也未安装或重启日常 App；不将 macOS 验收当作 Windows 原生系统通知验证。
+
+## App 退出提醒收口（2026-10-21）
+
+- User seq73 授权按退出范围简化并清理旧代码；独立分支 `rovai/app-exit-attention`。
+- User seq75 确认保留 Run 异常退出提醒，seq77 授权四处复核修复；不收窄既有 `execution_lost`，统一使用执行中断文案。
+- Migration 210 / schema 160 只替换终态 producer；退出取消/确认丢失仍沿原通知事务，
+  手动停止停止准入。旧 `user_stop` 不再参与侧栏候选，原审计不被删除或伪造为已读。
+- 前台正式 Thread 展示按已观察边界确认，无需精确 Run/command/output；显式标记已读保留分步与重试语义。
+- 删除短亮计时、本机停止意图、精确准入描述及专属 DOM 可见观察；移除未合入的无输出终态标记补丁。
+- 稳定通知 dispatcher，普通快照/进度不触发读取，空增量不读投影；成功批次及后续刷新不被慢批次阻塞。
+  Web 沿原 SSE 附加通知失效标识，普通消息失效不触发通知轮询。
+- 自动确认执行时再次校验快照代次，与工作区共用正式展示条件；拉取中的通知信号合并补读，
+  不跳过失败退避。恢复普通失败气泡可见来源，保持中断提醒的 Thread 范围确认。
+- 当前规范与验证边界见[退出提醒验收](interruption-attention-validation.md#当前收口退出提醒2026-10-21)。
+  本轮未安装或重启日常 App；没有新增运行中清单、恢复扫描、轮询器或已读存储。
+
+## 紧凑文件卡片与粘贴内容前缀（2026-10-21）
+
+- 独立 worktree `rovai-ai-compact-attachment-cards`，分支 `rovai/compact-attachment-cards`，基线 `caf66a6ea`。
+- 所有文件卡片最大宽度 224px；粘贴内容显示有界原文前缀及中英文类型标签。图片、原文件名、预览和移除流程保持。
+- [Camp Attachment v12](../../contracts/camp-attachment-v12.md) 仅增加可选展示前缀。复用现有登记、草稿、发送快照和 Source Ref JSON；不新增迁移或后台读取。
+- 扩展既有 Rust owner `source_ref_json_is_closed_and_pathless_view_is_stable`：旧记录兼容、前缀边界和序列化／投影；`source_path_message_bypasses_managed_attachment_publication`：实际发布持久化、全文读取保持。新字段在修改前会被 closed JSON 拒绝。没有新增、删除或禁用 Rust 测试函数。
+- 最小 Rust 验证：`cargo test -p rovai-core --lib source_ref_json_is_closed_and_pathless_view_is_stable`；发布 seam 使用 `cargo test -p rovai-core --features slow-tests --lib source_path_message_bypasses_managed_attachment_publication`。沿用原有 fixture，不新建数据库测试。
+
+验证结果：`pnpm typecheck`、`pnpm build:desktop`、`DOCS_BASE_REF=caf66a6eac581a62cb242b0c4037f60cb6855ed5 pnpm docs:check:ci` 通过。
+`pnpm test` 最终完整通过：252 个 Vitest 文件／2854 项、Node 357 项通过／2 项平台跳过。此前并行构建时出现既有配置读取、评测子进程等超时；隔离复验与最终默认命令均通过，未修改其测试或超时配置。
+`pnpm test:rust:pr` 默认 workspace 474 项通过／1 项既有 ignored；两个既有 Source Ref／实际发布 owner 定向通过。
+`pnpm test:composer-input` 三项通过；最终共享卡片夹具额外验证中英文／日夜主题、恢复、纯附件发送与队员文件列表的实际宽度，截图人工复核通过。未启动日常 App、改动其数据或调用真实模型。
+
+### Agent 文件列表宽度恢复（2026-10-21）
+
+User 后续要求恢复 Agent 文件列表并通过 PR 合入 main。分支 `rovai/restore-agent-file-width`，
+worktree `rovai-ai-restore-agent-file-width`，基线 `c0f8a0df7309913f63f8e12c1fa41badd2e90950`。
+恢复 PR #856 之前的 620px 列表上限和整行宽度，解除 Agent 文件区对用户 224px 上限的依赖；
+用户文件卡片和长粘贴内容前缀保持。同步当前 UI、附件合同与版本概览；不改变数据、模型上下文或发布版本。
+
+`pnpm typecheck` 通过；`pnpm test` 完整通过 252 个 Vitest 文件／2854 项与 Node 357 项／2 项平台跳过。
+首次全量的既有钉钉文件交付用例等待超时，定向复验和完整重跑均通过，未修改该测试或超时配置。
+`pnpm test:composer-input` 三项通过：既有生产夹具验证中英文、日夜主题、用户卡片 224px、
+Agent 列表 620px 上限及 200px 窄容器收缩，截图人工复核通过。验收使用隔离 Electron，无 Core 或真实 Runtime。
+基于上述基线运行通用文档门禁；源码布局评估与机械扫描未发现本次恢复的阻断问题。
+
+
+## Thread read 正向增量读取（2026-10-22）
+
+User 在接口与提示词清单交付后确认实施、PR 与合入 main。范围和完整前后文本见
+[已确认 r1](model-context-change-thread-read-after.md)；当前字段由 [History v16](../../contracts/camp-history-v16.md)
+与 [Transport v44](../../contracts/builtin-tool-transport-v44.md) 拥有。
+
+- after 与 before 互斥；after=0；正向跨页、空页、序列空洞、实时新增及 reply-chain。
+- 延用输出字段、权限、撤回/附件投影及历史 receipt；无 migration 或 Bootstrap/Manifest 升级。
+- 复用既有 Rust owner；实际检查结果统一记录在方案的实施验证段，未执行项不得视为通过。
+
+## 全界面分隔线快速松手（2026-10-23）
+
+User 在分隔线交互 Thread sequence 11 授权全界面实施、PR 到 main 并合并；独立 worktree
+`rovai-ai-splitter-release-consistency`，分支 `rovai/splitter-release-consistency`，基线 `e9cfbeac4`。
+
+共享 `useCollapsibleSplitter` 取消最小值停留计时。越过最小值 64px 立即进入可收起状态并显示短暂提示，
+按住时不自动收起；反向退出阈值取消意图。松手按最终指针坐标提交，未越过阈值保持最小值；
+确认收起后保留 160ms 动画，系统或 App 减少动态效果设置只省去动画。取消、失焦、捕获异常、
+容器或作用域变化恢复手势前状态，正常松手释放捕获不取消已接受的折叠。
+
+覆盖全局导航、队员／团队共用名册、文件／执行 Sidecar、回复详情、定时任务详情和底部执行详情。
+定时任务只在松手后 flush 草稿；失败保留草稿与最小宽度，取消后的迟到响应不得收起面板。
+MCP、原生 Skills、工具箱接入同一提交与取消逻辑，保持 240–560px 调宽范围和独立偏好，不新增折叠。
+修正 CSS zoom 的逻辑像素换算，并防止仅高度变化的 ResizeObserver 重置实时宽度。
+Mission 抽屉和 Diff 文件树已有最终指针提交与缩放换算，保留其全展开／只调宽语义。
+
+同步 DESIGN、当前 UI 页面、队员 surface brief 和中英文文案；属于 Renderer 局部交互收口，
+无 Core、模型上下文、数据库 schema、偏好格式或发布版本变更，无需新增 Version Decision。
+
+
+验证结果：
+
+- `pnpm typecheck`、`pnpm build:desktop` 通过；全量 Vitest 为 253 个文件、2,921 项通过、2 项既有 skip。
+  首次与构建并行时既有 `restorable-location` 文件读取测试触发 5s 超时；独立全量复验通过，未修改超时或业务代码。
+- 七个隔离 Electron owner 通过：`navigation-shell`、`member-editor`、`file-preview-layout`、
+  `automation-splitter`、`execution-avatar-rail`、`capability-workspace` 和 `reply-details`。
+  增加无 pointermove 的最终坐标提交、快速松手、按住不收起、反向取消、草稿保留与异步保存取消断言；
+  设置页覆盖 MCP／原生 Skills／工具箱独立偏好、CSS zoom、仅高度变化和失焦恢复。
+- 文件预览生产组件截图确认短暂“松开收起预览区”提示位置；Skills 阅读页及设置页保持原有视觉结构。
+  既有日夜主题、1040／1440／2560 尺寸、200% 缩放、键盘操作和减少动态效果检查随 owner 回归通过。
+- 回归同步修正 MCP 原生拖动夹具漏带按住标志的问题，以及文件预览 Night 色值断言：旧值已与
+  当前主题 token 不符，本次仅更新测试预期，未修改主题。
+- `pnpm docs:test`、`pnpm docs:check` 与以 `e9cfbeac4` 为 base 的 `pnpm docs:check:ci` 通过。
+  验收全部使用显式隔离 userData 与内存 bridge，无 Core、真实 Runtime 或日常 App 数据写入；未安装日常 App。
+
+
+## Command Code 原生接入简化（2026-10-24）
+
+官方 1.88.0、用户原生 HOME、官方 Mod、ACP MCP 和共享 Fleet 身份复用作为同一交付；删除配置镜像与
+摘要兼容性链。旧 Session/Binding 保留，结构简化本身不恢复公开准入。实现、复杂度对照及定向验证见
+[Command Code 简化记录](command-code-native-simplification.md)。
+
+2026-10-25 按 User 收口继续删除冷恢复 `session/list`，Run 发送前通过已有 ACP 控制命令更新 Mod 内存，
+首次/warm/cold 同路，删除 Bootstrap binding 文件及专属读写、SHA 与文件名限制；补共享
+`.agents/skills` user/project 来源。问卷通过现有 Mod 的官方 active-tools 过滤器移除；原生明确 edit
+新建与普通编辑片段进入现有 Diff 展示，write 创建状态不明确时不推测。没有新生产文件、专属状态或锁。
+固定 1.88 的确定性原生验证与既有 sub2api 真实模型证据分开，详见上述报告。
+
+2026-10-25 User seq61 另行确认 macOS 两架构开放，沿现有 Preview 准入与共享产品目录实施；
+同日 Windows x64 补验后也按 Preview 开放，Linux 保持 NotQualified。最低版本、原生接入和生命周期不变，
+不新增资格门禁；Windows 实测和已知限制见[实施记录](command-code-native-simplification.md#windows-preview-开放2026-10-25)。
+完整 Intel/Core/App 验收不由此次开放推导，决定见 [V1.72-D60](decisions.md#v1-72-d60)。
+
+
+2026-10-25 Linux x64 随独立目标机验收开放 Command Code Preview，保持官方稳定版 ≥1.88.0。
+真实 Core/浏览器、能力、生命周期和已接受差异分别记录于
+[Linux 验收](../../research/command-code-runtime/linux-acceptance-2026-10-25.md)；
+公开范围见 [V1.72-D61](decisions.md#v1-72-d61)，不增加 Runtime 管理机制。

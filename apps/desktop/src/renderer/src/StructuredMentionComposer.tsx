@@ -1,3 +1,9 @@
+import { useReferencePicker, type ReferenceScope } from './useReferencePicker'
+import { composerReferenceIdentities, useReferenceAvailability } from './useReferenceAvailability'
+import { ThreadReferenceMenu } from './ThreadReferenceMenu'
+import { useReferencePreview } from './ThreadReferencePreview'
+import { isReferenceAtom, referenceAtom, referenceIdentity } from './thread-reference'
+import { memberSearchMatches } from './member-search'
 import { useShortcuts } from './ShortcutProvider'
 import { shouldSendComposerKey } from '../../shared/shortcuts'
 import { useEditingRecovery } from './camp-client'
@@ -8,12 +14,20 @@ import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import {
   $getRoot,
+  $getNodeByKey,
+  $createTextNode,
   $getSelection,
+  $isNodeSelection,
+  $setSelection,
   $isRangeSelection,
   $isTextNode,
   $nodesOfType,
   CLEAR_HISTORY_COMMAND,
+  COMMAND_PRIORITY_CRITICAL,
+  KEY_ENTER_COMMAND,
+  HISTORIC_TAG,
   HISTORY_PUSH_TAG,
+  PASTE_TAG,
   SKIP_DOM_SELECTION_TAG
 } from 'lexical'
 import {
@@ -32,11 +46,13 @@ import {
 } from 'react'
 import {
   ComposerAtomNode,
+  $isComposerAtomNode,
   setComposerAtomPresentationResolver,
   type ComposerAtomPresentation
 } from './ComposerAtomNode'
 import { ComposerTypeaheadPlugin } from './ComposerTypeaheadPlugin'
 import { ComposerWebLinksPlugin } from './ComposerWebLinksPlugin'
+import { ComposerInputHistoryPlugin, type ComposerHistoryNavigation } from './ComposerInputHistoryPlugin'
 import { MemberAvatar } from './MemberAvatar'
 import { NavigationIcon } from './NavigationIcon'
 import { MentionRuntimeButton } from './MentionRuntimeButton'
@@ -45,9 +61,8 @@ import {
   setComposerExtensionRuntime,
   type ComposerExtensionRuntime
 } from './RovaiComposerExtension'
-import { SkillIdentityMark } from './SkillIdentityMark'
 import type { ComposerSkillOption } from './composer-skill-picker'
-import { $replaceEditorWithComposerDocument } from './composer-editor-state'
+import { $replaceEditorWithComposerDocument, $rootToComposerDocument } from './composer-editor-state'
 import {
   $replaceComposerTriggerWithAtom,
   type ComposerTriggerMatch
@@ -91,7 +106,11 @@ export type StructuredMentionOption =
   | { kind: 'back_to_camp' }
 
 export interface StructuredMentionComposerHandle {
+  getDocument(): ComposerDocument
   flush(): Promise<ComposerFlushResult<ThreadComposerDraftView>>
+  adoptHistoryPreview(): void
+  cancelHistoryPreview(): void
+  appendText(text: string): void
   setInteractionLocked(locked: boolean): void
   replaceDocument(
     document: ComposerDocument,
@@ -105,8 +124,11 @@ export interface StructuredMentionComposerHandle {
 }
 
 export interface StructuredMentionComposerProps {
+  referenceScope?: ReferenceScope
   purpose?: 'message' | 'mission'
   onDocumentChange?(document: ComposerDocument): void
+  onEffectiveDocumentChange?(document: ComposerDocument): void
+  inputHistory?: () => ComposerDocument[]
   id: string
   draftIdentity: string
   document: ComposerDocument
@@ -137,6 +159,7 @@ export interface StructuredMentionComposerProps {
   onSubmit(): void | Promise<void>
   onBackspaceAtStart?(): void | Promise<void>
   onPasteFiles?(files: File[]): void
+  onPasteLongText?(text: string): boolean
   onActivateMemberMention?(
     member: StructuredMentionMember,
     trigger: HTMLElement,
@@ -156,7 +179,7 @@ export function structuredMentionOptions(
   const options: StructuredMentionOption[] = []
   const matches = (member: StructuredMentionMember): boolean =>
     member.mentionable !== false
-      && `${member.displayName}\n${member.teamRole}`.toLocaleLowerCase().includes(normalizedQuery)
+      && (memberSearchMatches(member.displayName, query) || memberSearchMatches(member.teamRole, query))
   const current = members.filter((member) => member.inThread !== false && matches(member))
   const outside = members.filter((member) => member.inThread === false && matches(member))
   if (inviteLayer) {
@@ -255,8 +278,11 @@ export const StructuredMentionComposer = forwardRef<
 })
 
 function ComposerBridge({
+  referenceScope,
   purpose = 'message',
   onDocumentChange,
+  onEffectiveDocumentChange,
+  inputHistory,
   id,
   draftIdentity,
   document,
@@ -284,6 +310,7 @@ function ComposerBridge({
   onSubmit,
   onBackspaceAtStart,
   onPasteFiles,
+  onPasteLongText,
   onActivateMemberMention,
   onActivateAllMembersMention,
   onActivateSkillMention,
@@ -292,6 +319,43 @@ function ComposerBridge({
   forwardedRef: ForwardedRef<StructuredMentionComposerHandle>
 }): JSX.Element {
   const [editor] = useLexicalComposerContext()
+  const referencePreview = useReferencePreview()
+  const [referenceIdentities, setReferenceIdentities] = useState(() => composerReferenceIdentities(document))
+  const referenceAvailability = useReferenceAvailability(referenceScope, referenceIdentities)
+  const onActivateReference = (node: ComposerAtomNode, trigger: HTMLElement): boolean => {
+    const atom = node.getAtom()
+    if (!isReferenceAtom(atom) || !referenceScope || !referencePreview) return false
+    const savedSelection = $getSelection()?.clone()
+    const selectionKeys = $isRangeSelection(savedSelection)
+      ? [savedSelection.anchor.key, savedSelection.focus.key]
+      : savedSelection?.getNodes().map(selected => selected.getKey()) ?? []
+    let edited = false
+    const edit = (replace: boolean): void => {
+      edited = true
+      editor.update(() => {
+        const current = $getNodeByKey(node.getKey())
+        if (!$isComposerAtomNode(current)) return
+        if (replace) { const text = $createTextNode('@'); current.replace(text); text.selectEnd() }
+        else { current.selectNext(); current.remove() }
+      }, { discrete: true, tag: HISTORY_PUSH_TAG })
+      editor.focus()
+    }
+    referencePreview({ reference: referenceIdentity(atom), title: atom.labelFallback ?? referenceIdentity(atom).id,
+      titleMode: 'current', trigger, remove: () => edit(false), replace: () => edit(true),
+      restoreFocus: () => {
+        const root = editor.getRootElement()
+        if (!root?.isConnected) return
+        // NodeSelection alone does not focus the contenteditable DOM root.
+        root.focus({ preventScroll: true })
+        if (!edited && savedSelection) {
+          editor.update(() => {
+            if (selectionKeys.every(key => $getNodeByKey(key)?.isAttached())) $setSelection(savedSelection.clone())
+          }, { discrete: true })
+        } else editor.focus()
+      }
+    })
+    return true
+  }
   const mobile = useMobileLayout()
   const mobileRef = useRef(mobile)
   mobileRef.current = mobile
@@ -302,6 +366,7 @@ function ComposerBridge({
   const recoveryAttempted = useRef(false)
   const generatedId = useId()
   const syncRef = useRef<ComposerDraftSync<ThreadComposerDraftView> | null>(null)
+  const historyNavigationRef = useRef<ComposerHistoryNavigation | null>(null)
   const initializedRef = useRef(false)
   const readyRef = useRef(ready)
   const previousReadyRef = useRef(ready)
@@ -314,7 +379,11 @@ function ComposerBridge({
   shortcutRef.current = shortcutContext
   const callbacks = useRef({
     purpose,
+    referenceScope,
+    referenceAvailability,
+    onActivateReference,
     onDocumentChange,
+    onEffectiveDocumentChange,
     getAuthoritativeDraft,
     members,
     skills: skills ?? [],
@@ -327,13 +396,18 @@ function ComposerBridge({
     onSubmit,
     onBackspaceAtStart,
     onPasteFiles,
+    onPasteLongText,
     onActivateMemberMention,
     onActivateAllMembersMention,
     onActivateSkillMention
   })
   callbacks.current = {
     purpose,
+    referenceScope,
+    referenceAvailability,
+    onActivateReference,
     onDocumentChange,
+    onEffectiveDocumentChange,
     getAuthoritativeDraft,
     members,
     skills: skills ?? [],
@@ -346,10 +420,24 @@ function ComposerBridge({
     onSubmit,
     onBackspaceAtStart,
     onPasteFiles,
+    onPasteLongText,
     onActivateMemberMention,
     onActivateAllMembersMention,
     onActivateSkillMention
   }
+
+  useEffect(() => editor.registerCommand(KEY_ENTER_COMMAND, event => {
+    if (editor.isComposing() || event?.isComposing || event?.shiftKey) return false
+    const selection = $getSelection()
+    if (!$isNodeSelection(selection)) return false
+    const nodes = selection.getNodes()
+    const node = nodes.length === 1 ? nodes[0] : null
+    if (!$isComposerAtomNode(node) || !isReferenceAtom(node.getAtom())) return false
+    const trigger = editor.getElementByKey(node.getKey())
+    if (!trigger || !callbacks.current.onActivateReference(node, trigger)) return false
+    event?.preventDefault()
+    return true
+  }, COMMAND_PRIORITY_CRITICAL), [editor])
 
   const [triggerMatch, setTriggerMatch] = useState<ComposerTriggerMatch | null>(null)
   const [inviteLayer, setInviteLayer] = useState(false)
@@ -373,6 +461,9 @@ function ComposerBridge({
     () => mentionQuery === null ? [] : structuredMentionOptions(members, mentionQuery, inviteLayer, purpose !== 'mission'),
     [inviteLayer, members, mentionQuery, purpose]
   )
+  const referencePicker = useReferencePicker(referenceScope, triggerMatch, inviteLayer, mentionOptions)
+  const pickerRef = useRef(referencePicker)
+  pickerRef.current = referencePicker
   const skillOptions = useMemo(
     () => skillQuery === null ? [] : structuredSkillOptions(skills ?? [], skillQuery),
     [skillQuery, skills]
@@ -385,7 +476,16 @@ function ComposerBridge({
       atomPresentation(node, callbacks.current).availability === 'available',
     onStatusChange: (status: ComposerLocalStatus) =>
       callbacks.current.onLocalStatusChange?.(status),
-    onLocalDocumentChange: (local: ComposerDocument) => { callbacks.current.onDocumentChange?.(local); recovery?.set(draftIdentity, { document: local, base: callbacks.current.getAuthoritativeDraft?.()?.content ?? authorityDocument.current }) },
+    onLocalDocumentChange: (local: ComposerDocument) => {
+      historyNavigationRef.current?.adopt()
+      callbacks.current.onDocumentChange?.(local)
+      recovery?.set(draftIdentity, { document: local, base: callbacks.current.getAuthoritativeDraft?.()?.content ?? authorityDocument.current })
+    },
+    onEffectiveDocumentChange: (local: ComposerDocument) => {
+      const next = composerReferenceIdentities(local)
+      setReferenceIdentities(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next)
+      callbacks.current.onEffectiveDocumentChange?.(local)
+    },
     onSaved: (_version: number, savedDocument: ComposerDocument) => {
       const pending = recovery?.get(draftIdentity) as { document?: ComposerDocument } | null
       if (pending?.document) recovery?.set(draftIdentity, { document: pending.document, base: savedDocument })
@@ -402,6 +502,7 @@ function ComposerBridge({
     nextDocument: ComposerDocument,
     boundary: 'start' | 'end' = 'end'
   ): void => {
+    historyNavigationRef.current?.adopt()
     closeTypeaheads()
     editor.update(() => {
       $replaceEditorWithComposerDocument(nextDocument)
@@ -437,6 +538,7 @@ function ComposerBridge({
       },
       backspaceAtStart: () => { void callbacks.current.onBackspaceAtStart?.() },
       pasteFiles: (files) => callbacks.current.onPasteFiles?.(files),
+      pasteLongText: (text) => callbacks.current.onPasteLongText?.(text) ?? false,
       plainText: (selection) =>
         composerDocumentToPlainText(selection, callbacks.current.members),
       recoverClipboard: (value) => {
@@ -445,6 +547,10 @@ function ComposerBridge({
           parsed = { ...parsed, segments: parsed.segments.map(segment => segment.kind === 'atom' && segment.atom.type !== 'member'
             ? { kind: 'text', text: composerDocumentToPlainText({version:2, segments:[segment]}, callbacks.current.members) }
             : segment) }
+        }
+        if (parsed && !callbacks.current.referenceScope) {
+          parsed.segments = parsed.segments.map(segment => segment.kind === 'atom' && isReferenceAtom(segment.atom)
+            ? { kind: 'text', text: composerDocumentToPlainText({ version: 2, segments: [segment] }) } : segment)
         }
         return parsed
           ? recoverComposerClipboardDocument(
@@ -484,11 +590,12 @@ function ComposerBridge({
       editor,
       (node) => atomPresentation(node, callbacks.current)
     )
-    // Refreshing member/Skill labels must not move focus out of an open menu.
+    // Presentation changes neither editable content nor undo history; in a
+    // recall preview it must not make a previously viewed entry undoable.
     editor.update(() => {
       for (const atom of $nodesOfType(ComposerAtomNode)) atom.markDirty()
-    }, { tag: [ROVAI_ATOM_PRESENTATION_TAG, SKIP_DOM_SELECTION_TAG] })
-  }, [bindings, editor, members, skills])
+    }, { tag: [ROVAI_ATOM_PRESENTATION_TAG, HISTORIC_TAG, SKIP_DOM_SELECTION_TAG] })
+  }, [bindings, editor, members, skills, referenceAvailability])
 
   useLayoutEffect(() => {
     if (!initializedRef.current || previousReadyRef.current || !ready) {
@@ -521,6 +628,12 @@ function ComposerBridge({
   }, [disabled, editor, ready])
 
   useImperativeHandle(forwardedRef, () => ({
+    getDocument: () => editor.getEditorState().read($rootToComposerDocument),
+    adoptHistoryPreview() {
+      historyNavigationRef.current?.adopt()
+      syncRef.current?.adoptHistoryPreview()
+    },
+    cancelHistoryPreview() { historyNavigationRef.current?.cancel() },
     flush: async () => {
       const sync = syncRef.current
       if (!sync) {
@@ -532,6 +645,13 @@ function ComposerBridge({
         }
       }
       return sync.flush()
+    },
+    appendText(text) {
+      // Recovery uses the live editor, including edits made while preparation
+      // was pending. Never replace it with the pre-paste draft snapshot.
+      editor.update(() => {
+        $getRoot().selectEnd().insertRawText(text)
+      }, { discrete: true, tag: [PASTE_TAG, SKIP_DOM_SELECTION_TAG] })
     },
     setInteractionLocked(locked) {
       interactionLockCountRef.current = locked
@@ -581,7 +701,8 @@ function ComposerBridge({
     if (editorRef) editorRef.current = element
   }, [editorRef])
 
-  const mentionMenuOptions = useMemo(() => mentionOptions.slice(0, 50), [mentionOptions])
+  const mentionMenuOptions = referenceScope ? referencePicker.options : mentionOptions
+  const getMentionOptions = (query: string) => callbacks.current.referenceScope ? pickerRef.current.query === query && !pickerRef.current.loading ? pickerRef.current.options : [] : structuredMentionOptions(callbacks.current.members, query, inviteLayerRef.current, callbacks.current.purpose !== 'mission')
   const skillMenuOptions = useMemo(() => skillOptions.slice(0, 50), [skillOptions])
   const mentionMenuId = `${id || generatedId}-mention-options`
   const skillMenuId = `${id || generatedId}-skill-options`
@@ -589,6 +710,8 @@ function ComposerBridge({
 
   return <div className={`structured-mention-composer ${className}`.trim()}>
     <ComposerWebLinksPlugin />
+    {inputHistory && ready && <ComposerInputHistoryPlugin key={draftIdentity} getHistory={inputHistory}
+      syncRef={syncRef} navigationRef={historyNavigationRef} />}
     <ContentEditable id={id} ref={setEditorElement}
       className="structured-mention-editor" aria-label={ariaLabel}
       aria-expanded={menuOpen} aria-controls={skillOpen ? skillMenuId : mentionMenuId}
@@ -597,13 +720,18 @@ function ComposerBridge({
       aria-placeholder={placeholder} />
     <ComposerTypeaheadPlugin match={triggerMatch} memberOnly={purpose === 'mission'}
       menuAnchor={purpose === 'mission' ? 'caret' : 'editor'}
-      selectionScope={inviteLayer ? 'inviting' : 'camp'}
+      selectionScope={`${inviteLayer ? 'inviting' : 'camp'}:${referencePicker.filter}`}
+      onCycleCategory={referenceScope ? direction => {
+        const categories = ['members', 'thread', 'mission'] as const
+        const index = categories.indexOf(pickerRef.current.filter)
+        changeInviteLayer(false)
+        pickerRef.current.selectFilter(categories[(index + direction + categories.length) % categories.length])
+      } : undefined}
       optionCount={mentionOpen ? mentionMenuOptions.length : skillMenuOptions.length}
       getOptionState={(match) => match.kind === 'member'
         ? {
-            catalogStatus: 'ready',
-            optionCount: structuredMentionOptions(callbacks.current.members, match.query, inviteLayerRef.current, callbacks.current.purpose !== 'mission')
-              .slice(0, 50).length
+            catalogStatus: callbacks.current.referenceScope && (pickerRef.current.query !== match.query || pickerRef.current.loading) ? 'loading' : 'ready',
+            optionCount: getMentionOptions(match.query).length
           }
         : {
             catalogStatus: callbacks.current.skillCatalogStatus,
@@ -620,13 +748,9 @@ function ComposerBridge({
       onSelect={(index, match) => {
         if (editor.isComposing()) return false
         if (match.kind === 'member') {
-          const option = structuredMentionOptions(
-            callbacks.current.members,
-            match.query,
-            inviteLayerRef.current,
-            callbacks.current.purpose !== 'mission'
-          ).slice(0, 50)[index]
+          const option = getMentionOptions(match.query)[index]
           if (!option) return false
+          if (option.kind === 'reference') return $replaceComposerTriggerWithAtom(match, referenceAtom(option.item))
           if (option.kind === 'invite_other') {
             changeInviteLayer(true)
             return false
@@ -655,9 +779,12 @@ function ComposerBridge({
         }
       }}
       renderMenu={({ selectedIndex, setHighlightedIndex, selectIndex }) => mentionOpen
-        ? renderMentionMenu(
+        ? referenceScope ? <ThreadReferenceMenu menuId={mentionMenuId} picker={referencePicker} inviteLayer={inviteLayer}
+            pendingInviteIds={pendingInviteIds} selectedIndex={selectedIndex} setHighlightedIndex={setHighlightedIndex} selectIndex={selectIndex}
+            onFilter={filter => { changeInviteLayer(false); referencePicker.selectFilter(filter) }}
+            renderAvatar={option => <StructuredMentionOptionAvatar option={option} />} /> : renderMentionMenu(
             mentionMenuId,
-            mentionMenuOptions,
+            mentionOptions,
             inviteLayer,
             pendingInviteIds,
             mentionQuery ?? '',
@@ -764,45 +891,43 @@ export function renderSkillMenu(
   setHighlightedIndex: (index: number) => void,
   selectIndex: (index: number) => void
 ): JSX.Element {
-  const sections = [
-    { label:uiAttribute("工具箱"), entries: options.map((option, index) => ({ option, index })).filter(({ option }) => option.source === 'toolbox') },
+  const skillSource = (option: ComposerSkillOption): string => uiAttribute(option.source === 'toolbox' ? '工具箱' : option.sourceScope === 'project' ? '项目 Skill' : '用户 Skill')
+  const sourceCounts = new Map<string, number>()
+  options.forEach((s) => sourceCounts.set(s.name, (sourceCounts.get(s.name) ?? 0) + 1))
+  const groups = [
+    { label: uiAttribute('工具箱'), entries: options.map((option, index) => ({ option, index })).filter(({ option }) => option.source === 'toolbox') },
     { label: 'Skills', entries: options.map((option, index) => ({ option, index })).filter(({ option }) => option.source !== 'toolbox') }
-  ].filter(({ entries }) => entries.length > 0)
-  return <div id={menuId} className="mention-menu skill-picker-menu structured-skill-menu"
-    role="listbox" aria-label={uiAttribute("选择 Skill")}>
-    <div className="mention-menu-heading"><strong><UiText zh={"选择 Skill"} /></strong><span><UiText zh={"↑↓ 选择 · Enter 确认"} /></span>{onRefresh && <button type="button" aria-label={uiAttribute("刷新 Skill 候选")} disabled={refreshing} onMouseDown={(event) => event.preventDefault()} onClick={onRefresh}><UiText zh={"刷新"} /></button>}</div>
-    {status === 'loading'
-      ? <p className="structured-mention-empty"><UiText zh={"正在读取可用 Skills…"} /></p>
-      : status === 'error'
-        ? <p className="structured-mention-empty"><UiText zh={"Skills 暂时无法读取，请稍后重试"} /></p>
-        : options.length === 0
-          ? <p className="structured-mention-empty"><UiText zh={"没有匹配的 Skill"} /></p>
-          : sections.map((section) => <div className="skill-picker-section" role="group" aria-label={section.label} key={section.label}>
-            <div className="skill-picker-group" aria-hidden="true">{section.label}</div>
-            {section.entries.map(({ option, index }) => <button type="button" role="option" id={`${menuId}-option-${index}`}
-              key={`skill:${option.id}`} data-skill-name={option.name}
-              aria-selected={selectedIndex === index}
-              aria-label={`/${option.name}${uiAttribute('，')}${option.source === 'toolbox' ? uiAttribute("工具箱") : option.sourceScope === 'project' ? uiAttribute("项目 Skill") : uiAttribute("用户 Skill")}${option.memberIds?.length ? uiAttribute("，关联队员：{0}", members.filter((member) => option.memberIds?.includes(member.agentId)).map((member) => member.displayName).join(uiAttribute('、'))) : ''}`}
-              className={selectedIndex === index ? 'active' : ''}
-              onMouseMove={() => setHighlightedIndex(index)}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => selectIndex(index)}>
-              <SkillIdentityMark skillId={option.id} name={option.name} size="compact" />
-              <span className="skill-picker-copy">
-                <strong>/{option.name}</strong>
-                <small>{option.description}</small>
-              </span>
-              {option.memberIds && <span className="skill-picker-member-count" title={`${option.source === 'toolbox' ? uiAttribute("已配置此 Skill 的队员") : uiAttribute("在以下队员的环境中发现")}${uiAttribute('：')}${members.filter((member) => option.memberIds?.includes(member.agentId)).map((member) => member.displayName).join(uiAttribute('、'))}`}>{option.memberIds.slice(0, 3).map((id) => {
-                const member = members.find((candidate) => candidate.agentId === id)
-                return member ? <MemberAvatar key={id} agentId={id} avatarRef={member.avatarRef ?? null} displayName={member.displayName} size="execution" decorative /> : null
-              })}{option.memberIds.length > 3 && <small>+{option.memberIds.length - 3}</small>}</span>}
-              <span className="skill-picker-enter" aria-hidden="true">↵</span>
-            </button>)}
-          </div>)}
-    {refreshing && <p className="structured-mention-empty" role="status"><UiText zh={"正在刷新 Skill 候选…"} /></p>}
-    {refreshFailed
-      ? <p className="structured-mention-empty" role="alert"><UiText zh={"刷新失败，当前显示上次读取的候选。请重试。"} /></p>
-      : errors.length > 0 && <p className="structured-mention-empty" role="status"><UiText zh={"部分来源暂不可读，仍可选择已发现的 Skill。"} /></p>}
+  ].filter(group => group.entries.length)
+  return <div className="mention-menu structured-skill-menu simple-skill-menu">
+    <div id={menuId} role="listbox" aria-label={uiAttribute("选择 Skill")}>
+      {status === 'loading' ? <p className="structured-mention-empty" role="status">{uiAttribute("正在读取可用 Skills…")}</p>
+        : status === 'error' ? <p className="structured-mention-empty">{uiAttribute("Skills 暂时无法读取")}</p>
+        : !options.length ? <p className="structured-mention-empty">{uiAttribute("没有匹配的 Skill")}</p>
+        : groups.map(group => <div key={group.label} className="simple-skill-group" role="group" aria-label={group.label}>
+          <div className="simple-skill-group-label" aria-hidden="true">{group.label}</div>
+          {group.entries.map(({ option, index }) => {
+          const associated = members.filter((m) => option.memberIds?.includes(m.agentId))
+          return <button type="button" role="option" tabIndex={-1} key={option.id} id={`${menuId}-option-${index}`}
+            className={`simple-skill-option${selectedIndex === index ? ' active' : ''}`} aria-selected={selectedIndex === index}
+            data-skill-id={option.id} data-skill-name={option.name}
+            aria-label={`/${option.name}${uiAttribute('，')}${skillSource(option)}${associated.length ? uiAttribute('，关联队员：{0}', associated.map(m => m.displayName).join(uiAttribute('、'))) : ''}`}
+            title={`/${option.name} · ${skillSource(option)}\n${option.description}\n${option.entryPath ?? ''}`}
+            onMouseMove={() => setHighlightedIndex(index)} onMouseDown={e => e.preventDefault()} onClick={() => selectIndex(index)}>
+            <NavigationIcon name="sparkles" />
+            <span className="simple-skill-copy"><strong>{option.name}</strong>
+              {sourceCounts.get(option.name)! > 1 && <em>{skillSource(option)}</em>}
+              <small>{option.description}</small></span>
+            <span className="simple-skill-members" title={associated.map((m) => m.displayName).join('、')}>
+              {associated.slice(0, 2).map((m) => <MemberAvatar key={m.agentId} agentId={m.agentId} avatarRef={m.avatarRef ?? null} displayName={m.displayName} size="mention" decorative />)}
+              {associated.length > 2 && <span>+{associated.length - 2}</span>}
+            </span>
+          </button>
+        })}</div>)}
+    </div>
+    {(refreshFailed || errors.length > 0 || status === 'error') && <div className="simple-skill-error" role={refreshFailed || status === 'error' ? 'alert' : 'status'}>
+      <span>{uiAttribute(refreshFailed ? '刷新失败，保留上次结果' : status === 'error' ? '请重试' : '部分来源暂不可读')}</span>
+      {onRefresh && <button type="button" disabled={refreshing} onMouseDown={e => e.preventDefault()} onClick={onRefresh}>{uiAttribute(refreshing ? '刷新中…' : '重试')}</button>}
+    </div>}
   </div>
 }
 
@@ -810,9 +935,17 @@ function atomPresentation(
   node: ComposerAtomNode,
   input: Pick<StructuredMentionComposerProps,
     'purpose' | 'members' | 'skills' | 'skillCatalogStatus' | 'onActivateMemberMention'
-    | 'onActivateAllMembersMention' | 'onActivateSkillMention'>
+    | 'onActivateAllMembersMention' | 'onActivateSkillMention'> & { referenceAvailability?: ReturnType<typeof useReferenceAvailability>; onActivateReference?(node: ComposerAtomNode, trigger: HTMLElement): void }
 ): ComposerAtomPresentation {
   const atom = node.getAtom()
+  if (isReferenceAtom(atom)) {
+    const id = referenceIdentity(atom).id
+    const item = input.referenceAvailability?.get(id)
+    const unavailable = item === null
+    const label = item?.title ?? atom.labelFallback ?? id
+    const ariaLabel = uiAttribute(atom.type === 'mission_reference' ? '使命引用：{0}' : '会话引用：{0}', label)
+    return { label, availability: unavailable ? 'unavailable' : 'available', interactive: !!input.onActivateReference, ariaLabel: unavailable ? uiAttribute('{0}，引用不可用', ariaLabel) : ariaLabel }
+  }
   if (atom.type === 'member') {
     const member = input.members.find((candidate) => candidate.agentId === atom.agentId)
     const available = Boolean(member && member.mentionable !== false)
@@ -852,9 +985,10 @@ function activateAtom(
   focusPanel: boolean,
   input: Pick<StructuredMentionComposerProps,
     'members' | 'onActivateMemberMention'
-    | 'onActivateAllMembersMention' | 'onActivateSkillMention'>
+    | 'onActivateAllMembersMention' | 'onActivateSkillMention'> & { onActivateReference?(node: ComposerAtomNode, trigger: HTMLElement): void }
 ): void {
   const atom = node.getAtom()
+  if (isReferenceAtom(atom)) { input.onActivateReference?.(node, trigger); return }
   if (atom.type === 'member') {
     const member = input.members.find((candidate) => candidate.agentId === atom.agentId)
     if (member && member.mentionable !== false) {

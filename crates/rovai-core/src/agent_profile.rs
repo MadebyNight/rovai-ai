@@ -19,8 +19,9 @@ use crate::{
         ANTIGRAVITY_RUNTIME_DEFAULT_MODEL_ID, AdapterRuntimeResolutionInput,
         AgentRuntimeAdapterRegistry, CLAUDE_CODE_RUNTIME_DEFAULT_MODEL_ID, ExecutableFileIdentity,
         PI_MACHINE_PROTOCOL, PI_RUNTIME_DEFAULT_MODEL_ID, TRAE_RUNTIME_DEFAULT_MODEL_ID,
-        claude_code_catalog_has_native_evidence, observe_executable_file_identity,
-        trae_static_permission_options, validate_machine_ready_snapshot,
+        claude_code_catalog_has_native_evidence, model_catalog_has_usable_entries,
+        normalize_model_catalog, observe_executable_file_identity, trae_static_permission_options,
+        validate_machine_ready_snapshot,
     },
     collaboration::end_camp_membership,
     command::{
@@ -50,6 +51,7 @@ pub enum AdapterKind {
     CursorAgent,
     KimiCodeCli,
     MinimaxCodeCli,
+    HermesCli,
     GrokBuild,
     DeepseekHarness,
     ZcodeApp,
@@ -100,7 +102,7 @@ impl MissingSendRecoveryMode {
 }
 
 impl AdapterKind {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::CodexCli,
         Self::Pi,
         Self::OpencodeCli,
@@ -117,6 +119,7 @@ impl AdapterKind {
         Self::CursorAgent,
         Self::KimiCodeCli,
         Self::MinimaxCodeCli,
+        Self::HermesCli,
         Self::GrokBuild,
         Self::DeepseekHarness,
         Self::ZcodeApp,
@@ -139,6 +142,7 @@ impl AdapterKind {
             Self::CursorAgent => "cursor-agent",
             Self::KimiCodeCli => "kimi-code-cli",
             Self::MinimaxCodeCli => "minimax-code-cli",
+            Self::HermesCli => "hermes-cli",
             Self::GrokBuild => "grok-build",
             Self::DeepseekHarness => "deepseek-harness",
             Self::ZcodeApp => "zcode-app",
@@ -163,6 +167,7 @@ impl AdapterKind {
             Self::CursorAgent => "cursor-agent",
             Self::KimiCodeCli => "kimi",
             Self::MinimaxCodeCli => "mcode",
+            Self::HermesCli => "hermes",
             Self::GrokBuild => "grok",
             Self::DeepseekHarness => "dsh",
             Self::ZcodeApp => "ZCode",
@@ -181,6 +186,7 @@ impl AdapterKind {
             Self::Pi => &["pi"],
             Self::KimiCodeCli => &["kimi"],
             Self::MinimaxCodeCli => &["mcode"],
+            Self::HermesCli => &["hermes"],
             Self::GrokBuild => &["grok"],
             Self::DeepseekHarness => &["dsh"],
             Self::ZcodeApp => &["ZCode"],
@@ -216,6 +222,7 @@ impl AdapterKind {
             Self::CursorAgent => "Cursor Agent",
             Self::KimiCodeCli => "Kimi Code",
             Self::MinimaxCodeCli => "MiniMax Code",
+            Self::HermesCli => "Hermes Agent",
             Self::GrokBuild => "Grok Build",
             Self::DeepseekHarness => "DeepSeek Harness",
             Self::ZcodeApp => "ZCode",
@@ -238,6 +245,7 @@ impl AdapterKind {
                 | Self::CursorAgent
                 | Self::KimiCodeCli
                 | Self::MinimaxCodeCli
+                | Self::HermesCli
                 | Self::GrokBuild
                 | Self::DeepseekHarness
                 | Self::ZcodeApp
@@ -261,6 +269,7 @@ impl AdapterKind {
             Self::CursorAgent => "ROVAI_CURSOR_BIN",
             Self::KimiCodeCli => "ROVAI_KIMI_BIN",
             Self::MinimaxCodeCli => "ROVAI_MINIMAX_CODE_BIN",
+            Self::HermesCli => "ROVAI_HERMES_BIN",
             Self::GrokBuild => "ROVAI_GROK_BIN",
             Self::DeepseekHarness => "ROVAI_DEEPSEEK_HARNESS_BIN",
             Self::ZcodeApp => "ROVAI_ZCODE_BIN",
@@ -290,6 +299,7 @@ impl AdapterKind {
             | Self::CursorAgent
             | Self::KimiCodeCli
             | Self::MinimaxCodeCli
+            | Self::HermesCli
             | Self::GrokBuild
             | Self::DeepseekHarness
             | Self::ZcodeApp
@@ -316,6 +326,7 @@ impl AdapterKind {
             | Self::TraeCnCli
             | Self::KimiCodeCli
             | Self::MinimaxCodeCli
+            | Self::HermesCli
             | Self::GrokBuild
             | Self::DeepseekHarness
             | Self::ZcodeApp
@@ -345,6 +356,7 @@ impl FromStr for AdapterKind {
             "cursor-agent" => Ok(Self::CursorAgent),
             "kimi-code-cli" => Ok(Self::KimiCodeCli),
             "minimax-code-cli" => Ok(Self::MinimaxCodeCli),
+            "hermes-cli" => Ok(Self::HermesCli),
             "grok-build" => Ok(Self::GrokBuild),
             "deepseek-harness" => Ok(Self::DeepseekHarness),
             "zcode-app" => Ok(Self::ZcodeApp),
@@ -493,8 +505,8 @@ pub struct FrozenAgentRuntimeConfig {
     pub model: ResolvedModelSelection,
     pub permissions: AdapterPermissionConfig,
     pub native_session_compatibility_key: Option<String>,
-    pub binding_compatibility_digest: String,
-    pub host_config_digest: String,
+    pub binding_compatibility_digest: Option<String>,
+    pub host_config_digest: Option<String>,
     pub config_digest: String,
 }
 
@@ -593,7 +605,9 @@ fn model_catalog_has_native_evidence(
     adapter_kind: AdapterKind,
     models: &[ModelDescriptor],
 ) -> bool {
-    adapter_kind != AdapterKind::ClaudeCodeCli || claude_code_catalog_has_native_evidence(models)
+    model_catalog_has_usable_entries(models)
+        && (adapter_kind != AdapterKind::ClaudeCodeCli
+            || claude_code_catalog_has_native_evidence(models))
 }
 
 pub fn runtime_model_catalog_cache_view(
@@ -1716,17 +1730,22 @@ impl AgentProfileService {
                 json!({ "installationId": runtime.installation_id }),
             )));
         }
+        // A live Command Host is admitted by its installation identity. Disk
+        // entry observations belong to the Fleet's cold startup branch.
+        let command = runtime.adapter_kind == AdapterKind::CommandCodeCli;
         if adapter_kind != runtime.adapter_kind.as_str()
-            || executable_path != runtime.executable_path
-            || generation != runtime.installation_generation
-            || executable_fingerprint.as_deref() != Some(runtime.executable_fingerprint.as_str())
+            || (!command
+                && (executable_path != runtime.executable_path
+                    || generation != runtime.installation_generation
+                    || executable_fingerprint.as_deref()
+                        != Some(runtime.executable_fingerprint.as_str())))
         {
             return Ok(Some(runtime_blocker(
                 "runtime_snapshot_changed",
                 json!({ "installationId": runtime.installation_id }),
             )));
         }
-        if path_state != "valid" {
+        if !command && path_state != "valid" {
             return Ok(Some(runtime_blocker(
                 "runtime_path_invalid",
                 json!({
@@ -1870,6 +1889,8 @@ impl AgentProfileService {
     ) -> Result<String> {
         validate_installation(&verified.executable_path, &verified.auth_scope)?;
         validate_command_name(&verified.command_name)?;
+        verified.snapshot.models =
+            normalize_model_catalog(std::mem::take(&mut verified.snapshot.models));
         validate_snapshot(&verified.snapshot)?;
         validate_machine_ready_snapshot(verified.adapter_kind, &verified.snapshot)?;
         if verified.snapshot.probe_status != "ready"
@@ -2148,7 +2169,11 @@ impl AgentProfileService {
             return Ok(false);
         };
         let transaction = database.connection_mut().transaction()?;
-        let models = merge_persisted_dsh_options(&transaction, &expected.id, models)?;
+        let models = normalize_model_catalog(models.to_vec());
+        if models.is_empty() {
+            return Ok(false);
+        }
+        let models = merge_persisted_dsh_options(&transaction, &expected.id, &models)?;
         let updated = transaction.execute(
             "UPDATE adapter_capability_snapshot SET model_catalog_json = ?2, model_catalog_succeeded_at = ?3
              WHERE installation_id = ?1 AND probe_status = 'ready'
@@ -3609,17 +3634,37 @@ impl AgentProfileService {
         self.gateway.execute(database, envelope, |transaction| {
             let current = transaction
                 .query_row(
-                    "SELECT adapter_kind, version FROM adapter_installation WHERE id = ?1",
-                    [&envelope.payload.installation_id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                    "SELECT adapter_kind, version,
+                        executable_path = ?2 AND command_name = ?3 AND source = ?4
+                        AND auth_scope = ?5 AND enabled = ?6
+                     FROM adapter_installation WHERE id = ?1",
+                    params![
+                        envelope.payload.installation_id,
+                        envelope.payload.executable_path,
+                        envelope.payload.command_name,
+                        envelope.payload.source.as_str(),
+                        envelope.payload.auth_scope,
+                        envelope.payload.enabled,
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, bool>(2)?)),
                 )
                 .optional()?;
-            let Some((adapter_kind, version)) = current else {
+            let Some((adapter_kind, version, unchanged)) = current else {
                 return Ok(CommandHandlerResult::rejected(
                     "adapter_installation.not_found",
                     json!({ "installationId": envelope.payload.installation_id }),
                 ));
             };
+            if unchanged {
+                return Ok(CommandHandlerResult::applied(
+                    "adapter_installation.unchanged",
+                    json!({ "installationId": envelope.payload.installation_id, "version": version }),
+                    Some(EntityReference {
+                        entity_type: "adapter_installation".to_string(),
+                        entity_id: envelope.payload.installation_id.clone(),
+                    }),
+                ));
+            }
             if version != envelope.payload.expected_version {
                 return Ok(version_conflict(version));
             }
@@ -3695,7 +3740,9 @@ impl AgentProfileService {
         database: &mut Database,
         envelope: &CommandEnvelope<RecordAdapterCapabilitySnapshotCommand>,
     ) -> Result<CommandExecution> {
-        validate_snapshot(&envelope.payload.snapshot)?;
+        let mut snapshot = envelope.payload.snapshot.clone();
+        snapshot.models = normalize_model_catalog(snapshot.models);
+        validate_snapshot(&snapshot)?;
         if let Some(failure) = envelope.payload.failure.as_ref() {
             failure.validate()?;
             if envelope.payload.snapshot.probe_status == "ready" {
@@ -3740,7 +3787,7 @@ impl AgentProfileService {
                 return Ok(version_conflict(version));
             }
             let adapter_kind = AdapterKind::from_str(&adapter_kind)?;
-            validate_machine_ready_snapshot(adapter_kind, &envelope.payload.snapshot)?;
+            validate_machine_ready_snapshot(adapter_kind, &snapshot)?;
             if adapter_kind == AdapterKind::TraeCnCli
                 && envelope.payload.snapshot.probe_status == "ready"
                 && executable_identity.is_none()
@@ -3752,7 +3799,7 @@ impl AgentProfileService {
             {
                 anyhow::bail!("public Runtime failure kind must match Adapter installation");
             }
-            let snapshot = &envelope.payload.snapshot;
+            let snapshot = &snapshot;
             let successful = snapshot.probe_status == "ready";
             let previous_snapshot = transaction
                 .query_row(
@@ -4269,7 +4316,8 @@ fn upsert_successful_capability_snapshot(
     if snapshot.probe_status != "ready" {
         anyhow::bail!("only a successful probe can replace the capability snapshot");
     }
-    // Health and a complete MiniMax options catalog have separate success times.
+    let catalog_complete = catalog_complete && model_catalog_has_usable_entries(&snapshot.models);
+    // Health and a usable discovery catalog have separate success times.
     // Preserve a complete catalog only inside its existing identity/config scope.
     let retained_catalog = if catalog_complete {
         None
@@ -4520,6 +4568,7 @@ fn provisional_runtime_protocol(adapter_kind: AdapterKind) -> &'static str {
         | AdapterKind::CursorAgent
         | AdapterKind::KimiCodeCli
         | AdapterKind::MinimaxCodeCli
+        | AdapterKind::HermesCli
         | AdapterKind::GrokBuild
         | AdapterKind::DeepseekHarness
         | AdapterKind::CommandCodeCli => "acp-v1",
@@ -4990,8 +5039,10 @@ fn resolve_frozen_runtime_binding_with_snapshot(
         // pre-upgrade member-env sessions) keep that identity only when today's
         // installation/protocol/permission projection still matches exactly.
         // Do not read member env or historical environment plans to decide this.
-        None if native_binding_compatibility_digest
-            == Some(projection.binding_compatibility_digest.as_str()) =>
+        None if adapter_kind != AdapterKind::CommandCodeCli
+            && native_binding_compatibility_digest.is_some()
+            && native_binding_compatibility_digest
+                == projection.binding_compatibility_digest.as_deref() =>
         {
             None
         }
@@ -5020,14 +5071,19 @@ fn resolve_frozen_runtime_binding_with_snapshot(
         host_config_digest: projection.host_config_digest,
         config_digest: String::new(),
     };
-    if let Some(api) = &frozen.custom_api {
+    if let Some(api) = &frozen.custom_api
+        && !matches!(
+            adapter_kind,
+            AdapterKind::CommandCodeCli | AdapterKind::HermesCli
+        )
+    {
         let identity = api.identity()?;
-        frozen.host_config_digest = canonical_json_digest(&json!({
+        frozen.host_config_digest = Some(canonical_json_digest(&json!({
             "native": frozen.host_config_digest, "customApi": identity
-        }))?;
-        frozen.binding_compatibility_digest = canonical_json_digest(&json!({
+        }))?);
+        frozen.binding_compatibility_digest = Some(canonical_json_digest(&json!({
             "native": frozen.binding_compatibility_digest, "customApi": identity
-        }))?;
+        }))?);
     }
     frozen.refresh_config_digest()?;
     Ok(Ok(frozen))
@@ -5035,7 +5091,7 @@ fn resolve_frozen_runtime_binding_with_snapshot(
 
 fn resolve_model_selection(
     adapter_kind: AdapterKind,
-    models: &[ModelDescriptor],
+    _models: &[ModelDescriptor],
     selection: &ModelSelection,
 ) -> Result<std::result::Result<ResolvedModelSelection, RuntimeConfigurationBlocker>> {
     let dsh_source = match selection {
@@ -5046,75 +5102,29 @@ fn resolve_model_selection(
         }
         _ => None,
     };
-    let (source, model, configured_options) = match selection {
-        ModelSelection::RuntimeDefault => {
-            return Ok(Ok(ResolvedModelSelection {
-                dsh_source,
-                source: "runtime_default".to_string(),
-                model_id: runtime_default_model_id(adapter_kind),
-                options: json!({}),
-            }));
-        }
+    let (source, model_id, options) = match selection {
+        ModelSelection::RuntimeDefault => (
+            "runtime_default",
+            runtime_default_model_id(adapter_kind),
+            json!({}),
+        ),
         ModelSelection::Explicit {
             model_id, options, ..
         } => {
-            if model_id.trim().is_empty() {
-                return Ok(Err(runtime_blocker(
-                    "runtime_model_unavailable",
-                    json!({ "modelId": model_id }),
-                )));
-            }
-            let Some(configured_options) = options.as_object() else {
+            if model_id.trim().is_empty() || !options.is_object() {
                 return Ok(Err(runtime_blocker(
                     "runtime_model_options_invalid",
-                    json!({ "modelId": model_id }),
+                    json!({"modelId": model_id}),
                 )));
-            };
-            if adapter_kind == AdapterKind::DeepseekHarness {
-                // Preserve explicit intent, including a now unsupported value;
-                // the selected live model validates it before any prompt.
-                return Ok(Ok(ResolvedModelSelection {
-                    dsh_source,
-                    source: "explicit".to_string(),
-                    model_id: model_id.clone(),
-                    options: Value::Object(configured_options.clone()),
-                }));
             }
-            let model = models
-                .iter()
-                .find(|model| model.id == *model_id && !model.hidden && !model.deprecated);
-            if model.is_none() {
-                // The cached catalog is a configuration aid, not execution truth. Preserve a
-                // saved or manually entered explicit selection so the real Runtime Session can make
-                // the final decision without silently falling back.
-                return Ok(Ok(ResolvedModelSelection {
-                    dsh_source,
-                    source: "explicit".to_string(),
-                    model_id: model_id.clone(),
-                    options: Value::Object(configured_options.clone()),
-                }));
-            }
-            (
-                "explicit",
-                model.expect("model was checked above"),
-                Some(options),
-            )
+            ("explicit", model_id.clone(), options.clone())
         }
     };
-    let mut options = serde_json::Map::new();
-    let configured_options = configured_options.and_then(Value::as_object);
-    for descriptor in &model.options {
-        if let Some(value) = configured_options.and_then(|values| values.get(&descriptor.key)) {
-            options.insert(descriptor.key.clone(), value.clone());
-        } else if let Some(default_value) = &descriptor.default_value {
-            options.insert(descriptor.key.clone(), Value::String(default_value.clone()));
-        }
-    }
     Ok(Ok(ResolvedModelSelection {
         dsh_source,
         source: source.to_string(),
-        model_id: model.id.clone(),
-        options: Value::Object(options),
+        model_id,
+        options,
     }))
 }
 
@@ -5540,66 +5550,12 @@ struct RuntimeConfigurationIssue {
 }
 
 fn runtime_configuration_issue(
-    models_json: &str,
+    _models_json: &str,
     permission_schema_version: i64,
     permissions_json: &str,
     configuration: &ResolvedRuntimeBinding,
 ) -> Result<Option<RuntimeConfigurationIssue>> {
     let issue = |code, payload| Some(RuntimeConfigurationIssue { code, payload });
-    let models: Vec<ModelDescriptor> =
-        serde_json::from_str(models_json).context("invalid Adapter model catalog")?;
-    if let ModelSelection::Explicit {
-        model_id, options, ..
-    } = &configuration.model
-    {
-        if model_id.trim().is_empty() {
-            return Ok(issue(
-                "runtime_model_unavailable",
-                json!({ "modelId": model_id }),
-            ));
-        }
-        let Some(model) = models
-            .iter()
-            .find(|model| &model.id == model_id && !model.hidden && !model.deprecated)
-        else {
-            return Ok(issue(
-                "runtime_model_unavailable",
-                json!({ "modelId": model_id }),
-            ));
-        };
-        let option_descriptors = model
-            .options
-            .iter()
-            .map(|descriptor| (descriptor.key.as_str(), descriptor))
-            .collect::<BTreeMap<_, _>>();
-        let Some(options) = options.as_object() else {
-            return Ok(issue(
-                "runtime_model_options_invalid",
-                json!({ "modelId": model_id }),
-            ));
-        };
-        for (key, value) in options {
-            let Some(descriptor) = option_descriptors.get(key.as_str()) else {
-                return Ok(issue(
-                    "runtime_model_option_unknown",
-                    json!({ "modelId": model_id, "option": key }),
-                ));
-            };
-            let valid = value.as_str().is_some_and(|value| {
-                descriptor
-                    .values
-                    .iter()
-                    .any(|candidate| candidate.value == value)
-            });
-            if !valid {
-                return Ok(issue(
-                    "runtime_model_option_invalid",
-                    json!({ "modelId": model_id, "option": key, "value": value }),
-                ));
-            }
-        }
-    }
-
     if configuration.permissions.schema_version != permission_schema_version {
         return Ok(issue(
             "runtime_permission_schema_mismatch",
@@ -5657,7 +5613,7 @@ fn runtime_configuration_issue(
 
 #[cfg(test)]
 #[test]
-fn model_option_validation_rejects_preserved_effort_after_catalog_refresh() {
+fn model_options_preserve_native_intent_across_catalog_refresh() {
     let models = vec![ModelDescriptor {
         id: "gpt-next".to_string(),
         display_name: "GPT Next".to_string(),
@@ -5695,10 +5651,11 @@ fn model_option_validation_rejects_preserved_effort_after_catalog_refresh() {
 
     let issue =
         runtime_configuration_issue(&serde_json::to_string(&models).unwrap(), 1, "[]", &binding)
-            .unwrap()
-            .expect("the refreshed model does not support the preserved value");
-    assert_eq!(issue.code, "runtime_model_option_invalid");
-    assert_eq!(issue.payload["value"], "high");
+            .unwrap();
+    assert!(
+        issue.is_none(),
+        "the Runtime owns acceptance of preserved options"
+    );
     let default = ModelSelection::Explicit {
         model_id: "gpt-next".into(),
         options: json!({}),
@@ -5709,7 +5666,7 @@ fn model_option_validation_rejects_preserved_effort_after_catalog_refresh() {
             .unwrap()
             .unwrap()
             .options,
-        json!({"reasoning_effort":"low"})
+        json!({})
     );
     let native_default = resolve_model_selection(AdapterKind::DeepseekHarness, &models, &default)
         .unwrap()
@@ -5847,14 +5804,6 @@ fn validate_snapshot(snapshot: &AdapterCapabilitySnapshot) -> Result<()> {
         }
         if snapshot.stale_at.is_some() || snapshot.last_error.is_some() {
             anyhow::bail!("Ready Adapter snapshot cannot be stale or contain lastError");
-        }
-        if snapshot.models.is_empty()
-            || !snapshot
-                .models
-                .iter()
-                .any(|model| model.is_default && !model.hidden && !model.deprecated)
-        {
-            anyhow::bail!("Ready Adapter snapshot requires an available default model");
         }
     }
     if is_static_snapshot_status(&snapshot.probe_status) {
@@ -7201,6 +7150,25 @@ mod slow_tests {
             .as_str()
             .expect("installation id")
             .to_string();
+        let unchanged = service
+            .update_installation(
+                &mut database,
+                &user_command(
+                    "unchanged-installation",
+                    UpdateAdapterInstallationCommand {
+                        installation_id: installation_id.clone(),
+                        expected_version: 0,
+                        executable_path: executable_path.to_string_lossy().into_owned(),
+                        command_name: "codex".into(),
+                        source: InstallationSource::Custom,
+                        auth_scope: "default".into(),
+                        enabled: true,
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(unchanged.result.code, "adapter_installation.unchanged");
+        assert_eq!(unchanged.result.payload["version"], 1);
         let profile = service
             .get_profile(&database, &profile_id)
             .expect("profile should load")
@@ -8115,6 +8083,56 @@ mod slow_tests {
                     ),
                 )
                 .expect("ready snapshot should be recorded");
+            // A usable Session with no discovery data must not replace the last good catalog.
+            let before = service
+                .list_installations(&database)
+                .unwrap()
+                .into_iter()
+                .find(|value| value.id == installation_id)
+                .unwrap();
+            let mut no_catalog = ready.clone();
+            no_catalog.models.clear();
+            no_catalog.last_attempted_at = chrono::Utc::now().to_rfc3339();
+            service
+                .record_snapshot(
+                    &mut database,
+                    &user_command(
+                        "record-ready-without-catalog",
+                        RecordAdapterCapabilitySnapshotCommand {
+                            installation_id: installation_id.clone(),
+                            expected_installation_version: 1,
+                            snapshot: no_catalog,
+                            failure: None,
+                        },
+                    ),
+                )
+                .unwrap();
+            let after = service
+                .list_installations(&database)
+                .unwrap()
+                .into_iter()
+                .find(|value| value.id == installation_id)
+                .unwrap();
+            assert_eq!(after.snapshot.as_ref().unwrap().models, ready.models);
+            assert_eq!(
+                after.model_catalog.observed_at,
+                before.model_catalog.observed_at
+            );
+            // Return to the baseline health observation before the existing failed-attempt matrix.
+            service
+                .record_snapshot(
+                    &mut database,
+                    &user_command(
+                        "record-baseline-health",
+                        RecordAdapterCapabilitySnapshotCommand {
+                            installation_id: installation_id.clone(),
+                            expected_installation_version: 1,
+                            snapshot: ready.clone(),
+                            failure: None,
+                        },
+                    ),
+                )
+                .unwrap();
             let failed_at = chrono::Utc::now().to_rfc3339();
             service
                 .record_snapshot(
@@ -8513,8 +8531,8 @@ mod slow_tests {
                     old.binding_compatibility_digest
                 );
                 for previous in [
-                    &old.binding_compatibility_digest,
-                    &hosted.binding_compatibility_digest,
+                    old.binding_compatibility_digest.as_deref().unwrap(),
+                    hosted.binding_compatibility_digest.as_deref().unwrap(),
                     "unknown-binding",
                 ] {
                     let current = resolve_frozen_runtime_binding_with_snapshot(
@@ -8525,9 +8543,12 @@ mod slow_tests {
                     )
                     .unwrap()
                     .unwrap();
-                    if previous == old.binding_compatibility_digest {
+                    if Some(previous) == old.binding_compatibility_digest.as_deref() {
                         assert!(current.custom_api.is_none());
-                        assert_eq!(current.binding_compatibility_digest, previous);
+                        assert_eq!(
+                            current.binding_compatibility_digest.as_deref(),
+                            Some(previous)
+                        );
                         assert_eq!(current.host_config_digest, old.host_config_digest);
                     } else {
                         assert!(current.custom_api.is_some());
@@ -8552,7 +8573,7 @@ mod slow_tests {
                     database.connection(),
                     &changed,
                     None,
-                    Some(&old.binding_compatibility_digest),
+                    old.binding_compatibility_digest.as_deref(),
                 )
                 .unwrap()
                 .unwrap();
@@ -8577,7 +8598,7 @@ mod slow_tests {
                         database.connection(),
                         &changed,
                         None,
-                        Some(&old.binding_compatibility_digest),
+                        old.binding_compatibility_digest.as_deref(),
                     )
                     .unwrap()
                     .is_err(),

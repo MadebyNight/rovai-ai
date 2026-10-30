@@ -21,6 +21,7 @@ import {
 } from './automation-workspace-model'
 import { UiText, uiAttribute } from './interface-language'
 import { splitterScale, useCollapsibleSplitter } from './useCollapsibleSplitter'
+import { SplitterFeedback } from './SplitterFeedback'
 
 
 export type AutomationLeaveGuard = () => Promise<boolean>
@@ -31,7 +32,6 @@ export function AutomationWorkspace({
   defaultMemberId,
   topNotices,
   onOpenThread,
-  onNotify,
   onLeaveGuardChange
 }: {
   agents: AgentProfile[]
@@ -39,7 +39,6 @@ export function AutomationWorkspace({
   defaultMemberId: string
   topNotices?: React.ReactNode
   onOpenThread(threadId: string): void
-  onNotify(message: string): void
   onLeaveGuardChange?(guard: AutomationLeaveGuard | null): void
 }): React.JSX.Element {
   const client = useThreadClient()
@@ -63,6 +62,8 @@ export function AutomationWorkspace({
   const [query, setQuery] = useState('')
   const [listWidth, setListWidth] = useState(AUTOMATION_DEFAULT_LIST_WIDTH)
   const [editorClosed, setEditorClosed] = useState(false)
+  const [heldFold, setHeldFold] = useState(false)
+  const editorHidden = editorClosed || heldFold
   const [createChooserOpen, setCreateChooserOpen] = useState(false)
   const createChooserId = useId()
   const createChooserRef = useRef<HTMLElement>(null)
@@ -240,6 +241,7 @@ export function AutomationWorkspace({
             memberId: snapshot.memberId,
             projectRef: snapshot.projectRef,
             schedule: snapshot.schedule,
+            threadNaming: snapshot.threadNaming,
             notifyChannels: snapshot.notifyChannels
           }
         })
@@ -380,7 +382,6 @@ export function AutomationWorkspace({
       savedFingerprints.current.set(created.automationId, draftFingerprint(normalizedDraft))
       setSelectedId(created.automationId)
       setDraft(normalizedDraft)
-      onNotify(uiAttribute('定时任务已保存'))
     } catch (nextError) {
       setIssue({ kind: 'action', message: readErrorMessage(nextError) })
     } finally {
@@ -398,10 +399,6 @@ export function AutomationWorkspace({
         commandId: newCommandId(), command: { automationId: current.automationId }
       })
       if (result.status === 'rejected') throw new Error(String(result.payload.message ?? uiAttribute('任务未能开始。')))
-      const status = String(result.payload.status ?? '')
-      onNotify(status === 'skipped'
-        ? uiAttribute('已有一次运行正在进行，本次已跳过')
-        : status === 'failed' ? uiAttribute('任务未能开始，请查看运行状态') : uiAttribute('任务已开始运行'))
       await refresh(true)
     } catch (nextError) {
       setIssue({ kind: 'action', message: readErrorMessage(nextError) })
@@ -425,7 +422,6 @@ export function AutomationWorkspace({
       })
       const updated = automationFromResult(result)
       replaceAutomation(updated)
-      onNotify(enabled ? uiAttribute('任务已重新开启') : uiAttribute('任务已关闭'))
     } catch (nextError) {
       setIssue({ kind: 'action', message: readErrorMessage(nextError) })
     } finally {
@@ -450,7 +446,6 @@ export function AutomationWorkspace({
       setAutomations(next)
       automationsRef.current = next
       if (selectedIdRef.current === automationId) setSelectedId(null)
-      onNotify(uiAttribute('定时任务已删除'))
     } catch (nextError) {
       setIssue({ kind: 'action', message: readErrorMessage(nextError) })
     } finally {
@@ -504,6 +499,7 @@ export function AutomationWorkspace({
     onPreview: previewDetailWidth,
     onCommit: previewDetailWidth,
     onCollapseFrame: paintDetailWidth,
+    onFoldPreview: edge => setHeldFold(edge === 'minimum'),
     onCollapse: before => { paintDetailWidth(0); setListWidth(before.listWidth); setEditorClosed(true) },
     onCancel: before => {
       paintDetailWidth(before.editorClosed ? 0 : availableWidth - automationListWidth(before.listWidth, availableWidth) - 7)
@@ -520,7 +516,7 @@ export function AutomationWorkspace({
   )
 
   return (
-    <div className={`automation-workspace ${overview ? 'overview' : 'detail'} ${editorClosed ? 'editor-closed' : ''}`}>
+    <div className={`automation-workspace ${overview ? 'overview' : 'detail'} ${editorHidden ? 'editor-closed' : ''}`}>
       {topNotices}
       {issue && (
         <div className="automation-error" role="alert">
@@ -592,7 +588,7 @@ export function AutomationWorkspace({
           </section>}
         </aside>
         {!overview && <>
-          <div className="automation-splitter" role="separator" tabIndex={0} aria-label={uiAttribute("调整任务列表宽度")} aria-orientation="vertical" aria-valuemin={AUTOMATION_MIN_LIST_WIDTH} aria-valuemax={Math.max(AUTOMATION_MIN_LIST_WIDTH, availableWidth - 7)} aria-valuenow={editorClosed ? Math.max(AUTOMATION_MIN_LIST_WIDTH, availableWidth - 7) : width} aria-valuetext={editorClosed ? uiAttribute("详情已收起，向左调整可重新打开") : uiAttribute("任务列表宽度 {0} 像素", String(width))} title={editorClosed ? uiAttribute("向左拖动打开任务页") : uiAttribute("拖动调整宽度，详情最窄处停留后继续向右拖动收起；Escape 取消拖动")}
+          <div className="automation-splitter" role="separator" tabIndex={0} aria-label={uiAttribute("调整任务列表宽度")} aria-orientation="vertical" aria-valuemin={AUTOMATION_MIN_LIST_WIDTH} aria-valuemax={Math.max(AUTOMATION_MIN_LIST_WIDTH, availableWidth - 7)} aria-valuenow={editorHidden ? Math.max(AUTOMATION_MIN_LIST_WIDTH, availableWidth - 7) : width} aria-valuetext={editorHidden ? uiAttribute("详情已收起，向左调整可重新打开") : uiAttribute("任务列表宽度 {0} 像素", String(width))} title={editorClosed ? uiAttribute("向左拖动打开任务页") : uiAttribute("拖动调整宽度，详情最窄处继续向右内推直接收起；Escape 取消拖动")}
             {...splitter.handlers}
             onDoubleClick={() => { splitter.cancel(); setListWidth(AUTOMATION_DEFAULT_LIST_WIDTH); setEditorClosed(false) }}
             onKeyDown={(event) => {
@@ -601,8 +597,8 @@ export function AutomationWorkspace({
               else if (event.key === 'Home') { event.preventDefault(); setListWidth(AUTOMATION_MIN_LIST_WIDTH); setEditorClosed(false) }
               else if (event.key === 'End') { event.preventDefault(); void closeEditor() }
               else if (event.key === 'Enter') { event.preventDefault(); setEditorClosed(false); setListWidth(AUTOMATION_DEFAULT_LIST_WIDTH) }
-            }}><span /></div>
-          <section className="automation-editor" aria-label={selectedId === 'new' ? uiAttribute("新建定时任务") : uiAttribute("定时任务详情")} hidden={editorClosed}>
+            }}><span /><SplitterFeedback phase={splitter.phase} target={splitter.target} label={uiAttribute('继续拖动收起任务详情')} /></div>
+          <section className="automation-editor" aria-label={selectedId === 'new' ? uiAttribute("新建定时任务") : uiAttribute("定时任务详情")} hidden={editorHidden}>
             <header className="automation-editor-toolbar"><span>{selectedId === 'new' ? uiAttribute("新建") : uiAttribute("详情")}</span><small role="status">{selected ? saveLabel : ''}</small><button type="button" className="automation-icon-button" aria-label={uiAttribute("返回定时任务总览")} onClick={() => void showOverview()}><AutomationGlyph name="close" /></button></header>
             <AutomationEditor key={selectedId} draft={draft} onChange={setDraft} agents={agents} projects={projects} automation={selected} busy={busy !== null} onOpenThread={onOpenThread} onCreate={() => void create()} />
           </section>

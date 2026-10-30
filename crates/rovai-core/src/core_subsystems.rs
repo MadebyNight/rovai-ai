@@ -324,12 +324,24 @@ impl super::Core {
                             &mut database,
                             &self.startup_pending_camp_ids,
                         )?;
+                    for camp in &camps {
+                        emit_navigation_invalidated(
+                            &self.output,
+                            "camps.discardPending",
+                            Some(camp),
+                        );
+                    }
                     initialization.retired_camp_directories.extend(camps);
                     Ok(())
                 })()
             );
             initialization.retired_camp_directories.retain(|camp| {
-                if let Err(error) = attachments.remove_camp(camp) {
+                let legacy = attachments.remove_camp(camp);
+                let output = rovai_core::storage_layout::remove_camp_attachment_output(
+                    database.runtime_camp_files_root(),
+                    camp,
+                );
+                if let Err(error) = legacy.and(output) {
                     errors.push(format!("pending_camp_directory: {error:#}"));
                     true
                 } else {
@@ -389,27 +401,32 @@ mod tests {
     }
 
     #[test]
-    fn pi_private_storage_failure_is_isolated_from_core_and_peer_runtimes() {
-        let subsystems = CoreSubsystems::new();
-        for entry in subsystems.snapshot() {
-            subsystems.finish(&entry.id, Ok(()));
-        }
-        subsystems.finish(
-            &runtime_subsystem_id(AdapterKind::Pi),
-            Err(anyhow::anyhow!("Pi private storage unavailable")),
-        );
+    fn private_storage_failure_is_isolated_from_core_and_peer_runtimes() {
+        for kind in [AdapterKind::Pi, AdapterKind::GrokBuild] {
+            let subsystems = CoreSubsystems::new();
+            for entry in subsystems.snapshot() {
+                subsystems.finish(&entry.id, Ok(()));
+            }
+            let id = runtime_subsystem_id(kind);
+            // A healthy adapter may own reused Hosts; retry must not run cleanup.
+            assert!(!subsystems.begin(&id));
+            subsystems.finish(
+                &id,
+                Err(anyhow::anyhow!("private storage cleanup unavailable")),
+            );
 
-        assert!(subsystems.require("skills").is_ok());
-        assert!(subsystems.require("mcp").is_ok());
-        assert!(
-            subsystems
-                .require(&runtime_subsystem_id(AdapterKind::ClaudeCodeCli))
-                .is_ok()
-        );
-        assert!(
-            subsystems
-                .require(&runtime_subsystem_id(AdapterKind::Pi))
-                .is_err()
-        );
+            assert!(subsystems.require("skills").is_ok());
+            assert!(subsystems.require("mcp").is_ok());
+            assert!(
+                subsystems
+                    .require(&runtime_subsystem_id(AdapterKind::ClaudeCodeCli))
+                    .is_ok()
+            );
+            assert!(subsystems.require(&id).is_err());
+            assert!(subsystems.begin(&id));
+            subsystems.finish(&id, Ok(()));
+            assert!(subsystems.require(&id).is_ok());
+            assert!(!subsystems.begin(&id));
+        }
     }
 }

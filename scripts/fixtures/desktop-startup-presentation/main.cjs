@@ -6,6 +6,7 @@ const { app, BrowserWindow } = require('electron')
 const [renderer, userData] = process.argv.slice(2)
 assert.ok(isAbsolute(renderer) && isAbsolute(userData), 'The startup fixture requires isolated absolute paths')
 mkdirSync(userData, { recursive: true })
+mkdirSync(join(userData, 'managed-skill-library'), { recursive: true })
 app.setPath('userData', userData)
 app.setPath('sessionData', join(userData, 'session'))
 
@@ -33,7 +34,10 @@ app.whenReady().then(async () => {
   for (const theme of ['day', 'night']) {
     for (const collapsed of [false, true]) {
       const alignment = await window.webContents.executeJavaScript(`window.startupTest.captureNavigation(${JSON.stringify(theme)}, ${collapsed})`, true)
-      assert.deepEqual(alignment, { control: 20, title: 19, actions: 19 }, 'Preserve the approved 1px offset from the original Camp header')
+      // Compare at one Chromium layout unit, retaining the approved 1px offset
+      // while ignoring smaller fractional text-baseline measurements.
+      const layoutAlignment = Object.fromEntries(Object.entries(alignment).map(([key, value]) => [key, Math.round(value * 64) / 64]))
+      assert.deepEqual(layoutAlignment, { control: 20, title: 19, actions: 19 }, 'Preserve the approved 1px offset from the original Camp header')
       writeFileSync(join(dirname(userData), `navigation-camp-${theme}-${collapsed ? 'collapsed' : 'expanded'}.png`), (await window.webContents.capturePage()).toPNG())
     }
     await window.webContents.executeJavaScript(`window.startupTest.captureStoppedThread(${JSON.stringify(theme)})`, true)

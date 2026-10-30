@@ -1,3 +1,4 @@
+import { languageTestApi } from '../../../apps/desktop/src/renderer/src/interface-language-test-api'
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { createRoot } from 'react-dom/client'
 import * as Dialog from '@radix-ui/react-dialog'
@@ -6,7 +7,8 @@ import { createDesktopNavigation } from '../../../apps/desktop/src/renderer/src/
 import { ThreadNavigation } from '../../../apps/desktop/src/renderer/src/ThreadNavigation'
 import { AppHeader } from '../../../apps/desktop/src/renderer/src/AppHeader'
 import { AppearanceSettings } from '../../../apps/desktop/src/renderer/src/AppearanceSettings'
-import { DEFAULT_APPEARANCE } from '../../../apps/desktop/src/shared/appearance'
+import { DEFAULT_APPEARANCE, isThemePreference, resolveThemeMode } from '../../../apps/desktop/src/shared/appearance'
+import { applyAppearanceSnapshot } from '../../../apps/desktop/src/renderer/src/theme'
 import type { AgentProfile, AppearancePreferences, AppearanceSnapshot } from '@contracts'
 import { ThreadWorkspace, campConversationTimeline } from '../../../apps/desktop/src/renderer/src/ThreadWorkspace'
 import { ThreadClientProvider } from '../../../apps/desktop/src/renderer/src/camp-client'
@@ -50,12 +52,18 @@ function Glyph({ kind }: { kind: string }) {
 
 function Workbench() {
   const state = useSyncExternalStore(model.subscribe, model.get)
-  const [theme, setTheme] = useState(params.get('theme') === 'night' ? 'night' : 'day')
+  useEffect(() => { if (params.has('replies')) model.showReplyCase(params.get('replies') === 'long') }, [])
   const [proposal, setProposal] = useState(params.get('baseline') !== '1')
   const [controls, setControls] = useState(params.get('pure') !== '1')
   const [info, setInfo] = useState(false)
   const [settings, setSettings] = useState(false)
-  const [appearance, setAppearance] = useState<AppearanceSnapshot>({ ...DEFAULT_APPEARANCE, resolvedTheme: theme as 'day' | 'night' })
+  const [appearance, setAppearance] = useState<AppearanceSnapshot>(() => {
+    const value = params.get('theme')
+    const preference = isThemePreference(value) ? value : 'day'
+    return { ...DEFAULT_APPEARANCE, preference, resolvedTheme: resolveThemeMode(preference, matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day') }
+  })
+  const theme = appearance.resolvedTheme
+  const setTheme = (value: 'day' | 'night') => setAppearance(current => ({ ...current, preference: value, resolvedTheme: value }))
   const [inspector, setInspector] = useState<any>(null)
   const [detailHost, setDetailHost] = useState<HTMLElement | null>(null)
   const [placement, setPlacement] = useState<any>('inspector')
@@ -76,21 +84,12 @@ function Workbench() {
     nav.reset({ kind: 'camp', threadId: state.snapshot.thread.id } as any)
     return nav
   }, [])
-  const openMotionSettings = async () => {
-    await navigation.push({ kind: 'settings', section: 'appearance' })
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const control = document.querySelector<HTMLSelectElement>('#appearance-motion')
-      control?.scrollIntoView({ block: 'center', behavior: 'instant' })
-      control?.focus({ preventScroll: true })
-    }))
-  }
   const changeAppearance = async (preferences: AppearancePreferences): Promise<AppearanceSnapshot> => {
-    const next = { ...preferences, resolvedTheme: theme as 'day' | 'night' }
+    const next = { ...preferences, resolvedTheme: resolveThemeMode(preferences.preference, matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day') }
     setAppearance(next)
     return next
   }
-  useEffect(() => { document.documentElement.dataset.motionPreference = appearance.motionPreference }, [appearance.motionPreference])
-  useEffect(() => { document.documentElement.dataset.theme = theme }, [theme])
+  useEffect(() => { applyAppearanceSnapshot(document.documentElement, appearance) }, [appearance])
   useEffect(() => { document.documentElement.dataset.presence = proposal ? 'proposal' : 'baseline' }, [proposal])
   useEffect(() => {
     const key = (e: KeyboardEvent) => { if (e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); setControls(x => !x) } }
@@ -110,8 +109,8 @@ function Workbench() {
         ...['消息投递与恢复', '会话工作区优化', '发布前检查'].map((title, i) => ({ ...current, id: `demo-thread-${i}`, title, marker: 'none' }))] }] }
   useEffect(() => {
     Object.assign(window, { __presence: { setScenario: model.setScenario, setStage: model.setStage, setTheme, setProposal, setMemberName, setIdentityFields,
-      setLanguage: (language: 'zh-CN' | 'en') => changeInterfaceLanguage({ setInterfaceLanguage: async (interfaceLanguage: string) => ({ interfaceLanguage }) } as any, language),
-      getState: model.get, showSourceCase: model.showSourceCase.bind(model), showSteerTimeline: model.showSteerTimeline.bind(model), updateSteerTimeline: model.updateSteerTimeline,
+      setLanguage: (language: 'zh-CN' | 'en') => changeInterfaceLanguage(languageTestApi, language),
+      getState: model.get, showReplyCase: model.showReplyCase.bind(model), withdrawReply: model.withdrawReply, showSourceCase: model.showSourceCase.bind(model), showSteerTimeline: model.showSteerTimeline.bind(model), updateSteerTimeline: model.updateSteerTimeline,
       showReceiptCase: model.showReceiptCase.bind(model), finishSteerRuns: model.finishSteerRuns, showSteerCase: model.showSteerCase.bind(model), setRunModel: model.setRunModel, setMemberAvailability: model.setMemberAvailability,
       showNarration: model.showNarration, showStartupStatus: model.showStartupStatus, controls: model.controls, resync: model.resync, stop: model.stop, retry: model.retry, failRun: model.failRun, verify: () => {
         const s = model.get().snapshot
@@ -124,14 +123,14 @@ function Workbench() {
         return { allMessagesPresent: s.messages.every((m: any) => ids.includes(m.id)),
           messagesInOrder: positions.every((n, i) => !i || n > positions[i - 1]), uniqueMessages: ids.length === new Set(ids).size,
           slotsAreNotMessages: !document.querySelector('.conversation-run-presence[data-message-id]'),
-          noQueuedPlaceholders: slots.every((x: any) => x.status !== 'queued'),
-          noCompletedRows: slots.every((x: any) => !['succeeded','cancelled'].includes(x.status)),
+          queuedRunsAreStarting: rows.every(e => e.dataset.presenceState !== 'queued' || e.querySelector('.run-presence-preview')?.textContent === '启动中…'),
+          noSuccessfulRows: slots.every(slot => slot.run.status !== 'succeeded'),
           uniqueRuns: rows.length === new Set(rows.map(e => e.dataset.presenceRun)).size,
           anchoredOrder: JSON.stringify(actualOrder) === JSON.stringify(expectedOrder),
           independentActivityRows: rows.every(e => !e.closest('.message-actions')),
-          compactRows: rows.every((e, i) => e.querySelectorAll('.run-presence-line button').length === (slots[i].run.status === 'failed' && slots[i].run.failure?.retryable === false ? 1 : 2) && !e.querySelector('.presence-elapsed')),
+          compactRows: rows.every((e, i) => e.querySelectorAll('.run-presence-line button').length === (slots[i].run.status === 'failed' && slots[i].run.failure?.retryable === false ? 1 : 2) && !e.querySelector('.run-presence-guide')),
           commandIconsMatchContent: rows.every(e => Boolean(e.querySelector('.tool-call-icon')) === (e.querySelector('.run-presence-open')?.getAttribute('data-preview-kind') === 'command')),
-          retryOnlyOnFailure: rows.every(e => !e.querySelector('.run-presence-retry') || e.dataset.presenceState === 'failed'),
+          resumeOnlyOnTerminal: rows.every(e => !e.querySelector('.run-presence-resume') || ['failed', 'cancelled'].includes(e.dataset.presenceState ?? '')),
           identityMatchesRun: rows.every((e, i) => Boolean(e.querySelector('.member-avatar')) === !slots[i].continuation),
           slots: slots.length, messages: s.messages.length, viewport: [innerWidth, innerHeight],
           overflow: document.documentElement.scrollWidth > innerWidth,
@@ -167,7 +166,6 @@ function Workbench() {
             worldMapEnabled={false} inspectorVisible={inspector !== null} inspectorTab={inspector ?? 'members'}
             detailEntryHost={detailHost} onOpenInspector={setInspector} onCloseInspector={() => setInspector(null)} onInspectorTabChange={setInspector}
             onOpenSingleChat={() => unsupported('单聊')} onConfigureRuntime={() => unsupported('运行配置')}
-            onOpenMotionSettings={() => { void openMotionSettings() }}
             suppressExecutionAutoOpen onNotify={model.note} onNotifyError={model.note} />
         </main>
         {settings && <main className="content settings-content"><div className="settings-workbench"><div className="settings-panel settings-panel-appearance">
@@ -175,7 +173,7 @@ function Workbench() {
         </div></div></main>}
       </NavigationShell>
       {controls && <section className="prototype-control-bar" aria-label="交互稿演示控制">
-        <div className="prototype-label"><strong>队员占位</strong><span>停止区分隔 · 模拟数据</span></div>
+        <div className="prototype-label"><strong>队员占位</strong><span>整行执行条 · 模拟数据</span></div>
         <label className="sr-only" htmlFor="prototype-scenario">演示场景</label>
         <select id="prototype-scenario" value={state.scenario} onChange={e => { setInspector(null); model.setScenario(e.target.value) }}>
           {Object.entries(scenarios).map(([id, scenario]) => <option key={id} value={id}>{scenario.name}</option>)}
@@ -183,6 +181,16 @@ function Workbench() {
         <div className="prototype-steps" aria-label="演示阶段">{sequence.steps.map((step, i) => <button type="button" key={i}
           aria-current={state.stage === i ? 'step' : undefined} data-demo-step={i} title={sequence.descriptions[i]}
           onClick={() => model.setStage(i)}>{step}</button>)}</div>
+        {params.has('start-stop') && <div className="prototype-steps">
+          <button onClick={() => model.showStartupStatus('runtime_initializing')}>初始化阶段</button>
+          <label><input type="checkbox" onChange={event => { model.controls.holdStop = event.target.checked }} />保持停止提交</label>
+        </div>}
+        {params.has('replies') && <div className="prototype-steps">
+          <button onClick={() => model.showReplyCase()}>重置回复</button>
+          <button onClick={() => model.showReplyCase(true)}>长回复链</button>
+          <button onClick={() => model.withdrawReply()}>撤回示例回复</button>
+          <button onClick={() => model.finishReplyRuns()}>完成示例执行</button>
+        </div>}
         <div className="prototype-bar-actions">
           <button className="prototype-icon" aria-label={state.playing ? '暂停演示' : '自动演示'} title={state.playing ? '暂停演示' : '自动演示'} onClick={() => model.play()}><Glyph kind={state.playing ? 'pause' : 'play'} /></button>
           <button className="prototype-icon" aria-label="重置演示" title="重置演示" onClick={() => { setInspector(null); model.reset() }}><Glyph kind="reset" /></button>
@@ -197,10 +205,10 @@ function Workbench() {
       {!proposal && <div className="prototype-baseline-label">现有界面</div>}
     </div>
     <Dialog.Root open={info} onOpenChange={setInfo}><AppDialogContent className="app-dialog prototype-info-dialog">
-      <AppDialogHeader title="跟着消息向下，继续处理" description="群聊中的队员占位 · 停止区分隔" />
+      <AppDialogHeader title="跟着消息向下，继续处理" description="群聊中的队员占位 · 整行执行条" />
       <AppDialogBody>
         <p>发送前固定在本次输入锚点；自己的公开消息发送成功后，才接到这条消息下面。其他人的消息和追加输入不移动这个位置。紧接同一 Run 的消息或产物时沿用身份。</p>
-        <div className="prototype-info-rule"><strong>RunCard 高亮、单行正文、停止</strong><p>正文按原文已有换行在同一行内逐行推进，未换行的长内容静态省略。运行中复用 RunCard 文字高亮，命令保留原工具图标。右侧短竖线分隔停止区，按钮默认中性色、悬浮变红，点击后确认。点击内容打开现有执行台，查看全文与耗时。</p></div>
+        <div className="prototype-info-rule"><strong>转圈、单行正文与运行时间</strong><p>正文按原文已有换行在同一行内逐行推进，未换行的长内容静态省略。运行中显示独立转圈，命令保留原工具图标。浅灰整行没有分隔线，时间可点击到对应执行卡片。停止图标默认无底、悬浮整行变浅红，点击后确认。</p></div>
         <div className="prototype-info-rule"><strong>中断可重试，结束就收起</strong><p>中断行保留原因入口和重试按钮。重试受理后收起旧提示，切群和刷新也保持收起；新执行开始后恢复占位，再失败时重试新执行。原失败记录与继续执行按钮保留在执行台。排队不占位，结束不保留完成行。复制／回复继续使用现有规则。</p></div>
         <div className="prototype-info-rule"><strong>直接复用当前前端</strong><p>侧栏、顶栏、消息气泡、头像、Composer、队员列表与执行台均由当前仓库的生产 React 组件渲染。日夜主题使用原有 token。</p>
           <code>ThreadWorkspace · ThreadNavigation · NavigationShell<br />AppHeader · MemberAvatar · styles.css · theme.css</code>
@@ -214,4 +222,5 @@ function Workbench() {
     </FilePreviewProvider></CurrentUserProfileContext.Provider>
   </ThreadClientProvider></MobileLayoutProvider>
 }
+if (params.get('startup') === 'queued') model.showStartupStatus(null, false, 'queued')
 createRoot(document.getElementById('root')!).render(<Workbench />)

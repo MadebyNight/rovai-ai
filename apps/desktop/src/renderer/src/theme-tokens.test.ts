@@ -12,6 +12,7 @@ const requiredTokens = [
   '--surface-subtle',
   '--surface-muted',
   '--surface-selected',
+  '--scrollbar-thumb',
   '--workspace-surface-subtle',
   '--workspace-surface-raised',
   '--workspace-surface-hover',
@@ -24,6 +25,7 @@ const requiredTokens = [
   '--workspace-faint',
   '--conversation-surface',
   '--conversation-action',
+  '--conversation-action-ink',
   '--conversation-action-hover',
   '--conversation-action-contrast',
   '--conversation-control-line',
@@ -35,9 +37,11 @@ const requiredTokens = [
   '--mission-unread-ink',
   '--file-update-marker',
   '--execution-running-surface',
+  '--execution-surface',
   '--inspector-surface',
   '--conversation-inspector-line',
   '--home-surface',
+  '--settings-choice-selected-surface',
   '--ink',
   '--muted',
   '--faint',
@@ -140,6 +144,8 @@ function expectTextContrast(tokens: Record<string, string>): void {
     ['--ink', '--surface'],
     ['--muted', '--surface'],
     ['--faint', '--surface'],
+    ['--ink', '--settings-choice-selected-surface'],
+    ['--muted', '--settings-choice-selected-surface'],
     ['--dialog-field-label', '--surface-raised'],
     ['--ink', '--new-camp-picker-surface'],
     ['--faint', '--new-camp-picker-surface'],
@@ -147,10 +153,12 @@ function expectTextContrast(tokens: Record<string, string>): void {
     ['--ink', '--execution-running-surface'],
     ['--muted', '--execution-running-surface'],
     ['--info', '--execution-running-surface'],
+    ['--ink', '--execution-surface'],
+    ['--muted', '--execution-surface'],
     ['--brand-contrast', '--brand'],
     ['--conversation-action-contrast', '--conversation-action'],
     ['--conversation-action-contrast', '--conversation-action-hover'],
-    ['--conversation-action', '--surface-selected'],
+    ['--conversation-action-ink', '--surface-selected'],
     ['--mission-unread-ink', '--home-surface'],
     ['--success', '--success-soft'],
     ['--attention', '--attention-soft'],
@@ -269,7 +277,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(day['--diff-add-soft']).toBe('#d9f1e2')
     expect(day['--diff-remove-soft']).toBe('#f5dede')
     expect(contrast(day['--mention-ink'], day['--surface'])).toBeGreaterThanOrEqual(4.5)
-    expect(css).toContain('.camp-workspace { background: var(--conversation-surface); }')
+    expect(css).toMatch(/\.camp-workspace\s*\{[^}]*background: var\(--conversation-surface\)[^}]*\}/)
     expect(css).toContain('border-left: 1px solid var(--conversation-inspector-line)')
     expect(css).toContain('background: var(--inspector-surface)')
     expect(css).toContain('.new-conversation-workspace { background: var(--home-surface); }')
@@ -389,7 +397,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(gutterSize - (thumbInset * 2)).toBe(8)
     expect(css).toMatch(/\*::-webkit-scrollbar\s*\{[^}]*width: var\(--scrollbar-gutter-size\)[^}]*height: var\(--scrollbar-gutter-size\)[^}]*background: transparent/)
     expect(css).toMatch(/\*::-webkit-scrollbar-track,\s*\*::-webkit-scrollbar-corner\s*\{[^}]*background: transparent/)
-    expect(css).toMatch(/\*::-webkit-scrollbar-thumb\s*\{[^}]*border: var\(--scrollbar-thumb-inset\) solid transparent[^}]*border-radius: 999px[^}]*background: var\(--surface-selected\)/)
+    expect(css).toMatch(/\*::-webkit-scrollbar-thumb\s*\{[^}]*border: var\(--scrollbar-thumb-inset\) solid transparent[^}]*border-radius: 999px[^}]*background: var\(--scrollbar-thumb\)/)
     expect(css).not.toContain('scrollbar-width: thin')
     expect(css).toContain('.file-preview-tab-strip::-webkit-scrollbar { display: none; }')
     expect(css).toContain('.run-pulse-inspector .run-pulse-list::-webkit-scrollbar { display: none; }')
@@ -480,9 +488,8 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(css).toMatch(/\.agent-message-output > \.agent-message-output-actions\s*\{[^}]*width: fit-content[^}]*justify-content: flex-start[^}]*margin: 3px 0 0 37px/)
     expect(css).toContain('.agent-message-output:hover > .message-actions')
     expect(css).toContain('.message-actions.is-persistent')
-    expect(css).toMatch(/\.message-copy-button,\s*\.message-reply-button,\s*\.message-withdraw-button\s*\{[^}]*width: 28px[^}]*height: 28px/)
+    expect(css).toMatch(/\.message-copy-button,\s*\.message-reply-button,\s*\.message-withdraw-button\s*\{[^}]*width: 28px[^}]*height: 28px[^}]*margin: 0[^}]*place-items: center/)
     expect(css).toMatch(/\.message-copy-button svg,\s*\.message-reply-button svg,\s*\.message-withdraw-button svg\s*\{[^}]*width: 17px[^}]*height: 17px/)
-    expect(css).toMatch(/\.message-actions > button \+ button\s*\{[^}]*margin-left: 1px/)
     expect(css).toMatch(/\.message-long-toggle\s*\{[^}]*min-height: 28px[^}]*margin: 3px 0 -4px -5px[^}]*color: var\(--muted\)/)
     expect(css).toContain('.message-long-toggle[aria-expanded="true"] svg')
     expect(css).not.toContain('.message-long-ellipsis')
@@ -490,7 +497,10 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
       /\.conversation-bubble:is\(\.user, \.external_principal\):has\(\.message-attachments\) \.message-surface\s*\{[^}]*width: 100%[^}]*max-width: none/
     )
     expect(css).toMatch(/\.user-message-files\s*\{[^}]*justify-content: flex-end/)
-    expect(css).toMatch(/\.attachment-card\s*\{[^}]*--user-file-card-max-width:\s*220px/)
+    expect(css).toMatch(/\.attachment-card\s*\{[^}]*--user-file-card-max-width:\s*224px/)
+    expect(css).toMatch(/\.single-chat-message-attachments \.user-timeline\s*\{[^}]*width: fit-content[^}]*max-width: min\(var\(--user-file-card-max-width\), 100%\)/)
+    expect(css).toMatch(/\.agent-timeline\s*\{[^}]*width: 100%[^}]*min-height: 56px/)
+    expect(css).toMatch(/\.agent-output-files\s*\{[^}]*width: min\(620px, 100%\)/)
     expect(css).toMatch(/\.user-timeline\s*\{[^}]*max-width:\s*min\(var\(--user-file-card-max-width\), 100%\)/)
     expect(css).toMatch(/\.composer-attachment-card\s*\{[^}]*max-width:\s*min\(var\(--user-composer-max-width\), var\(--user-file-card-max-width\)\)/)
     expect(css).toMatch(
@@ -511,9 +521,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
     expect(css).toMatch(
       /@media\s*\(min-width:\s*1800px\)\s*\{\s*:root\s*\{[^}]*--conversation-composer-width:\s*1440px/
     )
-    expect(css).toMatch(
-      /\.conversation-bubble\.agent \.safe-markdown > :where\(pre, \.markdown-code-frame, table\)\s*\{[^}]*width:\s*min\(var\(--conversation-artifact-width\), 100%\)/
-    )
+    expect(css).toContain('--agent-message-prose-width: 780px;')
     expect(css).toMatch(
       /@media\s*\(min-width:\s*1800px\)[\s\S]*?\.timeline-event-card:not\(\.task-event-card\)\s*\{[^}]*width:\s*min\(var\(--conversation-artifact-width\), 100%\)/
     )
@@ -633,7 +641,7 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
   })
 
   it('keeps raw color literals inside the canonical token block', () => {
-    const componentCss = css.replace(/:root(?:\[data-theme="night"\])?\s*\{[\s\S]*?\n\}/g, '')
+    const componentCss = css.replace(/:root(?:\[data-theme(?:-id)?="[a-z-]+"\])?\s*\{[\s\S]*?\n\}/g, '')
 
     expect(componentCss).not.toMatch(/#[0-9a-f]{3,8}\b/i)
     expect(componentCss).not.toMatch(/\brgba?\(/i)
@@ -655,5 +663,21 @@ describe('Porcelain Day + Steel Night theme tokens', () => {
       '--radix-popover-content-available-height'
     ])
     expect([...used].filter((token) => !declared.has(token) && !runtimeOwned.has(token))).toEqual([])
+  })
+})
+
+
+describe.each(['horizon', 'classic-red', 'ember'])('%s palette', theme => {
+  const tokens = tokenBlock(`:root[data-theme-id="${theme}"]`)
+  it('covers the existing semantic token contract and uses production message surfaces', () => {
+    for (const name of requiredTokens) expect(tokens[name], name).toBeTruthy()
+    expect(tokens['--conversation-user-message-line']).toBe(tokens['--conversation-user-message-surface'])
+  })
+  it('keeps text, identity and semantic labels readable', () => {
+    expectTextContrast(tokens)
+    expect(contrast(tokens['--ink'], tokens['--conversation-user-message-surface'])).toBeGreaterThanOrEqual(4.5)
+    for (const [line, surface] of [['--conversation-control-line', '--input'], ['--new-camp-picker-line-strong', '--new-camp-picker-surface']]) {
+      expect(contrast(tokens[line], tokens[surface]), `${line} on ${surface}`).toBeGreaterThanOrEqual(3)
+    }
   })
 })

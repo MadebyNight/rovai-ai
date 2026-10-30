@@ -45,11 +45,11 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let marker = match classify_database_contract(&tx)? {
             DatabaseContractClassification::SupportedMigrationSource(m)
-                if m.projection_schema_version == 158 =>
+                if m.projection_schema_version == 168 =>
             {
                 m
             }
-            _ => anyhow::bail!("Chat reply context requires complete schema 158"),
+            _ => anyhow::bail!("Chat reply context requires complete schema 168"),
         };
         anyhow::ensure!(
             matches!(
@@ -120,7 +120,7 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
         tx.execute_batch(&profile)?;
         tx.execute_batch("CREATE TRIGGER agent_run_input_v43_only_insert BEFORE INSERT ON agent_run_input WHEN NEW.context_manifest_version IS NOT 43 BEGIN SELECT RAISE(ABORT,'new public Thread AgentRunInput must use ContextManifest v43'); END; DROP TRIGGER runtime_input_delivery_attachment_auth_insert;")?;
         tx.execute_batch(&attachment)?;
-        tx.execute_batch("INSERT INTO schema_migration VALUES(213,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=159,updated_at=datetime('now') WHERE singleton=1;")?;
+        tx.execute_batch("INSERT INTO schema_migration VALUES(223,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=173,updated_at=datetime('now') WHERE singleton=1;")?;
         validate_migration_foreign_keys(
             &tx,
             &[
@@ -151,7 +151,7 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
 pub(super) fn downgrade_for_test(c: &Connection) {
     if !c
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=213)",
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=223)",
             [],
             |r| r.get::<_, bool>(0),
         )
@@ -239,7 +239,7 @@ pub(super) fn downgrade_for_test(c: &Connection) {
     tx.execute_batch("CREATE TRIGGER agent_run_input_v40_only_insert BEFORE INSERT ON agent_run_input WHEN NEW.context_manifest_version IS NOT 40 BEGIN SELECT RAISE(ABORT,'new public Thread AgentRunInput must use ContextManifest v40'); END;
         DROP TRIGGER runtime_input_delivery_attachment_auth_insert;").unwrap();
     tx.execute_batch(&attachment).unwrap();
-    tx.execute_batch("DELETE FROM schema_migration WHERE version=213; UPDATE rovai_data_contract SET projection_schema_version=158 WHERE singleton=1;").unwrap();
+    tx.execute_batch("DELETE FROM schema_migration WHERE version=223; UPDATE rovai_data_contract SET projection_schema_version=172 WHERE singleton=1;").unwrap();
     tx.commit().unwrap();
     c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 }
@@ -248,7 +248,7 @@ pub(super) fn downgrade_for_test(c: &Connection) {
 pub(super) fn assert_upgrade(db: &mut Database) {
     downgrade_for_test(db.connection());
     let before = public_history_claim_preserved_evidence_digest(db.connection()).unwrap();
-    db.connection().execute_batch("CREATE TEMP TRIGGER reject_chat_reply_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=213 BEGIN SELECT RAISE(ABORT,'chat reply rollback'); END;").unwrap();
+    db.connection().execute_batch("CREATE TEMP TRIGGER reject_chat_reply_receipt BEFORE INSERT ON schema_migration WHEN NEW.version=223 BEGIN SELECT RAISE(ABORT,'chat reply rollback'); END;").unwrap();
     let error = migrate(db).unwrap_err();
     assert!(error.to_string().contains("chat reply rollback"), "{error:#}");
     assert_eq!(

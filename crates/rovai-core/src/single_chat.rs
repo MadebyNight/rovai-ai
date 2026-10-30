@@ -357,7 +357,7 @@ impl SingleChatService {
                             "sequence": {"type": "integer", "minimum": 1},
                             "role": {"type": "string", "enum": ["user", "assistant"]},
                             "body": {"type": "string"},
-                            "quotes": crate::message_quote::model_quotes_schema("current_messages"),
+                            "quotes": crate::message_quote::model_quotes_schema(),
                             "attachments": {
                                 "type": "array",
                                 "items": {
@@ -3455,6 +3455,76 @@ mod tests {
                 [&cancelled_run_id],
             )
             .unwrap();
+        let stopped = runtime
+            .request_agent_run_cancellation(
+                &mut database,
+                &user_envelope(
+                    "single-chat-explicit-stop",
+                    Some(&camp_id),
+                    crate::runtime::CancelAgentRunCommand {
+                        camp_id: camp_id.clone(),
+                        agent_run_id: cancelled_run_id.clone(),
+                        expected_version: 1,
+                    },
+                ),
+            )
+            .unwrap();
+        assert_eq!(stopped.result.status, CommandResultStatus::Applied);
+        assert_eq!(
+            database
+                .connection()
+                .query_row(
+                    "SELECT count(*) FROM notification_occurrence WHERE agent_run_id=?1",
+                    [&cancelled_run_id],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0,
+            "manual stop does not create an exit reminder"
+        );
+        let shutdown_send = send(
+            &service,
+            &mut database,
+            &camp_id,
+            &cancel_conversation_id,
+            "single-chat-exit-reminder",
+        );
+        let shutdown_run = shutdown_send.result.payload["agentRunId"].as_str().unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE agent_run SET status='cancelled',cancel_requested_at=datetime('now'),
+            cancel_reason_code='app_shutdown_cancel_all',ended_at=datetime('now') WHERE id=?1",
+                [shutdown_run],
+            )
+            .unwrap();
+        let stop_id: String = database.connection().query_row(
+            "SELECT id FROM notification_occurrence WHERE agent_run_id=?1 AND interruption_kind='app_shutdown'",
+            [shutdown_run], |r|r.get(0)).unwrap();
+        assert!(
+            notifications
+                .thread_interruptions(&mut database, "local_user", &[camp_id.clone()])
+                .unwrap()
+                .threads[0]
+                .has_unread_interruption
+        );
+        // Keep the original owner: ending C1 also cancels a still-running reply
+        // and fences its late output, independently of the preceding user stop.
+        let cancelled_send = send(
+            &service,
+            &mut database,
+            &camp_id,
+            &cancel_conversation_id,
+            "single-chat-send-cancel-on-end",
+        );
+        let cancelled_run_id = cancelled_send.result.payload["agentRunId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        database.connection().execute(
+            "UPDATE agent_run SET status='running',execution_epoch=1,started_at=updated_at WHERE id=?1",
+            [&cancelled_run_id],
+        ).unwrap();
         service
             .end(
                 &mut database,
@@ -3468,6 +3538,16 @@ mod tests {
                 ),
             )
             .unwrap();
+        assert!(
+            !notifications
+                .thread_interruptions(&mut database, "local_user", &[camp_id.clone()])
+                .unwrap()
+                .threads[0]
+                .has_unread_interruption
+        );
+        assert!(database.connection().query_row(
+            "SELECT acknowledged_at IS NULL FROM notification_occurrence_disposition WHERE occurrence_id=?1",
+            [&stop_id], |r| r.get::<_, bool>(0)).unwrap());
         let late = runtime
             .succeed_agent_run(
                 &mut database,
@@ -3516,7 +3596,7 @@ mod tests {
             "single-chat-send-failure",
         );
         let failed_run = failed_send.result.payload["agentRunId"].as_str().unwrap();
-        database.connection().execute("UPDATE agent_run SET status='failed',ended_at=datetime('now'),updated_at=datetime('now') WHERE id=?1",[failed_run]).unwrap();
+        database.connection().execute("UPDATE agent_run SET status='failed',last_error_code='accepted_input_outcome_unknown',ended_at=datetime('now'),updated_at=datetime('now') WHERE id=?1",[failed_run]).unwrap();
         let changes = notifications
             .changes_since(&mut database, "local_user", through, 100)
             .unwrap();
@@ -3535,6 +3615,13 @@ mod tests {
             failed_conversation
         );
         let failure_id = failure.action.acknowledgement_id.clone().unwrap();
+        assert!(
+            notifications
+                .thread_interruptions(&mut database, "local_user", &[camp_id.clone()])
+                .unwrap()
+                .threads[0]
+                .has_unread_interruption
+        );
         service
             .end(
                 &mut database,
@@ -3548,7 +3635,27 @@ mod tests {
                 ),
             )
             .unwrap();
-        assert!(database.connection().query_row("SELECT resolved_at IS NOT NULL FROM notification_occurrence_disposition WHERE occurrence_id=?1",[failure_id],|r|r.get::<_,bool>(0)).unwrap());
+        assert!(database.connection().query_row("SELECT resolved_at IS NOT NULL AND acknowledged_at IS NULL FROM notification_occurrence_disposition WHERE occurrence_id=?1",[&failure_id],|r|r.get::<_,bool>(0)).unwrap());
+        assert!(
+            !notifications
+                .thread_interruptions(&mut database, "local_user", &[camp_id.clone()])
+                .unwrap()
+                .threads[0]
+                .has_unread_interruption
+        );
+        open(
+            &service,
+            &mut database,
+            &camp_id,
+            "single-chat-next-after-interruption",
+        );
+        assert!(
+            !notifications
+                .thread_interruptions(&mut database, "local_user", &[camp_id.clone()])
+                .unwrap()
+                .threads[0]
+                .has_unread_interruption
+        );
         assert_eq!(
             database
                 .connection()
@@ -4237,14 +4344,8 @@ mod tests {
                     expected_revision: 2,
                     action: crate::message_quote::QuoteAction::Add {
                         selection: crate::message_quote::QuoteSelection {
-                            current_user_display_name: None,
-                            message_id: first.result.payload["conversationMessageId"]
-                                .as_str()
-                                .unwrap()
-                                .to_string(),
-                            body_at_selection: "请检查这一处设计".into(),
-                            start_scalar: 3,
-                            end_scalar: 8,
+                            message_id: None,
+
                             text: "这一处设计".into(),
                         },
                     },
@@ -4252,12 +4353,16 @@ mod tests {
             ),
         )
         .unwrap();
+        // Restart the existing persistence owner with a source-free saved selection.
+        #[cfg(feature = "slow-tests")]
+        database.reopen_production().unwrap();
         let captured = load_quotes(
             database.connection(),
             QuoteStorage::PrivateDraft,
             &conversation_id,
         )
         .unwrap();
+        assert!(captured[0].source.is_none());
         let queued = service
             .send(
                 &mut database,
@@ -4376,6 +4481,79 @@ mod tests {
         assert_eq!(snapshot.messages.len(), 3);
         assert_eq!(snapshot.messages[2].body, "读取排队附件");
         assert_eq!(snapshot.messages[2].quotes, captured);
+        let candidate = runtime
+            .list_dispatchable_agent_runs(&database, 8)
+            .unwrap()
+            .into_iter()
+            .find(|candidate| candidate.agent_run_id == queued_run_id)
+            .unwrap();
+        let workspace = crate::runtime::AgentRunWorkspace {
+            execution_root: database.directory().join("workspace").display().to_string(),
+            access: "read_only".into(),
+            isolation: "shared".into(),
+        };
+        let claimed = runtime
+            .claim_agent_run(
+                &mut database,
+                &CommandEnvelope {
+                    command_id: "source-free-quote-claim".into(),
+                    actor: ActorRef::System {
+                        component_id: "agent-run-scheduler".into(),
+                    },
+                    camp_id: Some(camp_id.clone()),
+                    expected_versions: vec![],
+                    execution_epoch: None,
+                    payload: crate::runtime::ClaimAgentRunCommand {
+                        agent_run_id: queued_run_id.into(),
+                        expected_version: candidate.version,
+                        lease_owner: "quote-test".into(),
+                        lease_seconds: 60,
+                        workspace: Some(workspace),
+                        starting_git_observation: None,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            claimed.result.code, "agent_run.claimed",
+            "{:?}",
+            claimed.result
+        );
+        let epoch = claimed.result.payload["executionEpoch"].as_i64().unwrap();
+        crate::team_tool::TeamToolService::default()
+            .prepare_binding_credential(&mut database, queued_run_id, epoch, false)
+            .unwrap();
+        let blobs = crate::managed_blob::ManagedBlobStore::new(database.directory());
+        let crate::context::ContextMaterialization::Ready(context) = crate::context::ContextService
+            .materialize(
+                &mut database,
+                &blobs,
+                &crate::context::MaterializeContextRequest {
+                    agent_run_id: queued_run_id,
+                    execution_epoch: epoch,
+                    charter_delivery_mode: crate::context::CharterDeliveryMode::NativeAppend,
+                    max_payload_bytes: 96 * 1024,
+                },
+            )
+            .unwrap()
+        else {
+            panic!("source-free quote must materialize");
+        };
+        let input: serde_json::Value = serde_json::from_str(
+            context
+                .rendered_payload
+                .split("[CURRENT_INPUT]\n")
+                .nth(1)
+                .unwrap()
+                .split("\n[/CURRENT_INPUT]")
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            input["quotes"],
+            json!([{"kind":"message_excerpt","text":"这一处设计"}])
+        );
         assert_eq!(snapshot.messages[2].attachments.len(), 1);
         assert!(snapshot.pending_inputs.items.is_empty());
         let public_messages: i64 = database

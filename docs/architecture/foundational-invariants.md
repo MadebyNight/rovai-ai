@@ -1,7 +1,7 @@
 ---
 document_type: architecture
 authority: current-foundational-invariants
-last_updated: 2026-10-19
+last_updated: 2026-10-29
 ---
 
 # 当前基础架构不变量
@@ -22,20 +22,19 @@ last_updated: 2026-10-19
   非权威页面框架不属于业务读写：本机恢复目标读取后挂载对应页面框架，从 Renderer 首帧起用不透明整窗品牌画布
   遮住框架，正常启动、迁移与目标读取交接期间持续显示；可见层只显示完整品牌标记，辅助技术统一获得
   “正在打开会话”，不暴露内部阶段。只有最终阻断或 crashed 才展示“暂时无法打开会话”的 Bootstrap 恢复面。
-- Core 必须先持有绑定 canonical data directory 与稳定对象身份的 OS 排他 lease，再观察或操作 SQLite。数据库
-  准入只返回 existing、initializable、migration 或 typed blocked；票据绑定 lease、不可复制、一次消费并在打开、
-  清理或发布前复核相关对象。只有 `lumen.sqlite` 时精确使用它，不创建 `rovai.sqlite`。
-- 没有 main 但存在 WAL/journal 是不完整 authority，必须阻断；孤立 SHM 只有在票据消费时 exact identity 未变才能
-  清理。全新 authority 只在两个 namespace 都确认无 main/WAL/journal 后，通过 staging 与原子 no-replace 发布。
-- 只读探测报告需要正常 SQLite journal recovery 时，可在同一 lease 的 exact target 上让引擎完成恢复，再重新准入；
-  不把正常 hot journal 回滚永久当作权限故障，也不授权业务写入或手动删除日志。正式连接统一配置 WAL 与同步策略。
-- 受支持旧合同只在 ticket 的 exact 原库上执行逐版本事务，无 CREATE；任何写入前重验 contract/classifier/schema cookie/
-  全部 receipts 与文件 identity。每步 DDL/DML/marker/receipt 一起提交，中断后从缺失步骤继续；不新建普通升级副本、
-  备份或 manifest，不替换主文件，不默认全库扫描。迁移后只重新准入并打开同一 main，不以失败或原库消失为由建空库。
-  旧 manifest 继续按 current main 的 original/migrated identity 恢复；未知 identity fail closed。
+- Core 必须先持有 canonical data directory 的 OS 排他 lease，再选择 SQLite 路径。操作类型仅区分已打开库、
+  确认首次初始化、升级与 typed blocked；现有库单次 READ_WRITE/NOFOLLOW 打开，不带 CREATE。只有 `lumen.sqlite`
+  时精确使用它，不创建 `rovai.sqlite`。保留目录租约和主文件稳定对象身份，不维护日志/元数据状态票据。
+- 两个 main、没有 main 但存在 WAL/journal、另一 namespace 的孤立日志均进入恢复。孤立 SHM 只在确认首次初始化时
+  清理。全新库经 staging 与原子 no-replace 发布；失败不覆盖现有文件，不将已见 authority 丢失当作首次安装。
+- WAL/hot journal 交给 SQLite 恢复，mtime/ctime/长度/来源标记变化不构成阻断。正式连接统一 WAL、同步策略与
+  5000ms busy timeout，不增加数据库重试循环。
+- 受支持旧合同在同一连接执行逐版本 IMMEDIATE 事务；每步 DDL/DML/marker/receipt 一起提交，中断后续跑。
+  历史结构与编号冲突检查仅在对应升级/恢复路径执行。普通升级不复制整库、不切换 main、不重新准入/重开。
+  旧 manifest 继续按 original/migrated identity 恢复；未知对象保留原文件并报错。
 - 当前数据库打开只检查现行 marker、迁移完成和必要业务结构，不比较 `sqlite_master.sql` 全文，不重验历史来源链。Usage 派生结构错误由模块处理，不阻断业务数据库；历史来源识别仍用于升级步骤。见[输入快照与数据库准入](../contracts/input-snapshot-storage-v1.md)。
 - Full Core Supervisor 发布单调 generation/revision 的完整快照。旧 child 的 frame、event、response 或 exit 不能污染
-  当前 generation；准入/打开/迁移的明确瞬时故障使用独立 250/750/1500ms startup retry，确定性错误不自动重试，均不
+  当前 generation；准入/打开/迁移的明确瞬时故障最多自动重启一次，间隔 250ms，确定性错误不自动重试，均不
   消耗 crash budget。已见 authority 的后续重启禁止初始化空库。Renderer-facing request 继续是 `Promise<T>`，内部 transport
   必须保留领域拒绝、基础设施失败、Full Core 不可用与 shutdown 的结构化类别；failure 以普通对象穿过 contextBridge，
   不能依赖 Error 自定义字段跨隔离世界保留。
@@ -91,7 +90,7 @@ last_updated: 2026-10-19
 - Core 拥有聚合、原因计数、排序、最早未确认 mention、类型化 action 和 availability。Renderer 只负责本地化、布局与执行 action；Electron Main 不保存通知副本，普通 Agent 公屏消息也不会仅因出现而生成通知。
 - 通知命令、snapshot、有界 incremental journal 与重新 snapshot 规则都是 Core API；Renderer 不保存可独立写入的 inbox、不从 Toast 生命周期推算已读/清除。Core 指示历史已不可连续读取（resetRequired）或未知 schema 时必须重取 snapshot；能力过滤或仅可见性切换产生的空序号沿批次游标消费，不推断为历史丢失。
 
-- 新本轮完成只由全部消息输入/产出关联分量的 Run 成功与 Delivery 结算产生；通知图不参与执行调度、预算或权限。Mission/Task 只在真实状态转换时生成事实，用户自己的状态操作不提醒，问题正文只来自显式消息来源。详见 [Notification Episode v10](../contracts/notification-episode-v10.md)。
+- 新本轮完成只由全部消息输入/产出关联分量的 Run 成功与 Delivery 结算产生；通知图不参与执行调度、预算或权限。Mission/Task 只在真实状态转换时生成事实，用户自己的状态操作不提醒，问题正文只来自显式消息来源。详见 [Notification Episode v12](../contracts/notification-episode-v12.md)。
 
 ## Camp、Workspace 与 Composer
 
@@ -151,7 +150,7 @@ last_updated: 2026-10-19
   幂等创建首个成员、Runtime 选择和“初次集结”Camp，不把半完成状态伪装为已完成；无可用 Runtime 且
   provisioning 尚未开始时可以原子完成为 `runtime_deferred`，但不得创建成员、Runtime 配置、Camp、Run 或
   onboarding restore target，也不得在以后启动时重新打开训练营。
-- Camp 永久删除保持 User-only、exact-version、单事务聚合删除和不可撤销。所有 Runtime 状态共用异步受理：短事务原子结算当前业务、在 Camp 写 Deletion Intent 并关闭新执行准入，前台返回 `accepted + operationId`，不等待 Runtime、数据库聚合或文件系统。后台只有在精确 Runtime 停止/隔离确认后，才在同一事务建立既有 cleanup journal handoff、删除 Camp 聚合并产生 `camp.deleted`；journal 与可选 Mission cleanup 完成全部承诺资源后才产生 `camp.deletion_completed`。删库前由 Camp marker 恢复，删库后由既有 journal 恢复，不新增全过程删除表；accepted receipt 必须存活以支持 replay。旧 Starting、lease 和 callback 不能恢复业务写入，正常 read side 排除 deleting Camp。Camp 清理自己的 Authority 附件根、永久输出目录和 legacy View，包括已编辑/未发布内容；外部 Source Ref、项目目录、Runtime 原生 Home 与明确 retain 的 Mission Workspace 不删除。自动恢复耗尽后只暴露原 operation 的统一重试，不把内部阶段交给用户。完整组件与协议见 [Camp 永久删除](camp-deletion.md)和 [Camp Permanent Deletion v4](../contracts/camp-permanent-deletion-v4.md)。
+- Camp 永久删除保持 User-only、exact-version、单事务聚合删除和不可撤销。所有 Runtime 状态共用异步受理：短事务原子结算当前业务、在 Camp 写 Deletion Intent 并关闭新执行准入，前台返回 `accepted + operationId`，不等待 Runtime、数据库聚合或文件系统。后台只将本次 Core 持有的精确 Run/epoch 作为停止目标与提交前清理门禁，前代 ACK 或回执缺失不单独阻断删除且不回填 ACK；当前 Runtime 停止/隔离与 Fleet fence 确认后，才在同一事务建立既有 cleanup journal handoff、删除 Camp 聚合并产生 `camp.deleted`；journal 与可选 Mission cleanup 完成全部承诺资源后才产生 `camp.deletion_completed`。删库前由 Camp marker 恢复，删库后由既有 journal 恢复，不新增全过程删除表；accepted receipt 必须存活以支持 replay。旧 Starting、lease 和 callback 不能恢复业务写入，正常 read side 排除 deleting Camp。Camp 清理自己的 Authority 附件根、永久输出目录和 legacy View，包括已编辑/未发布内容；外部 Source Ref、项目目录、Runtime 原生 Home 与明确 retain 的 Mission Workspace 不删除。自动恢复耗尽后只暴露原 operation 的统一重试，不把内部阶段交给用户。完整组件与协议见 [Camp 永久删除](camp-deletion.md)和 [Camp Permanent Deletion v4](../contracts/camp-permanent-deletion-v4.md)。
 
 ## 成员身份、生命周期与投影
 
@@ -266,7 +265,11 @@ last_updated: 2026-10-19
   一个可操作主状态，不从路径、版本或错误文本自行判定可执行性。Runtime executable 缺失或路径失效只形成
   `missing | path_missing` Availability 和既有执行门禁，不把 `runtime.<AdapterKind>` optional subsystem 标成
   degraded；后者只表示 Adapter 自有私有存储或初始化失败。
-- Core 在启动和每次 rescan 时构建不可变 Runtime Search Environment。Windows 上，手动绝对路径、Adapter 专用环境 override、自动 PATH/known locations 是依次封闭的 candidate set；显式入口失败不能回退另一个同名 Runtime。Windows 每次 capture 只读合并 inherited process PATH、HKCU User PATH、HKLM Machine PATH 与 known locations，按该顺序稳定、大小写不敏感去重，并忽略无效或不存在目录；Registry 失败不阻断 inherited PATH。冻结 PATH 同时用于发现、version/deep/health Probe、AgentRun 与 Runtime 必要子命令。Windows 同目录候选只允许 `.exe → .cmd → .bat`，不随 PATHEXT 放开 `.ps1`。Codex npm/pnpm `.cmd` 只可作为受限 locator 解析到 package 内真实 native `codex.exe`；解析成功后脚本、Node entrypoint 与 `node.exe` 不成为 Installation 或 launch identity，但 Core 必须内部持久化 canonical shim/content、System32 interpreter identity 及 resolved target identity 的 locator evidence。locator digest 参与 Installation generation、snapshot 与 Host compatibility；shim 改写即使仍指向同一 native executable 也撤销旧 Ready evidence。其他 `.cmd/.bat` 必须保持 `windows_command_shim` identity，其 canonical path、内容 digest 与 canonical System32 interpreter identity 共同 fence snapshot/Host，并只经 Managed Runtime Process 的受控 batch serializer 启动。
+- Core 在启动、rescan 和用户主动单项检查时通过同一入口采集不可变 Runtime Search Environment。
+  macOS/Linux 正常采集只读取交互式登录 shell 的 PATH，保留有界超时和原回退；主动检查不以入口存在为由跳过刷新，
+  候选解析及检查进程绑定同次搜索环境与 Runtime 通用配置。配置重读、输入比较和代次／写回保护沿用既有机制。
+  普通运行使用当前基础环境，不逐消息重扫；额外变量只经原通用／队员配置传递，不增加版本管理器适配。
+  详见 [Runtime Launch v74](../contracts/runtime-launch-and-verification-v74.md)。Windows 上，手动绝对路径、Adapter 专用环境 override、自动 PATH/known locations 是依次封闭的 candidate set；显式入口失败不能回退另一个同名 Runtime。Windows 每次 capture 只读合并 inherited process PATH、HKCU User PATH、HKLM Machine PATH 与 known locations，按该顺序稳定、大小写不敏感去重，并忽略无效或不存在目录；Registry 失败不阻断 inherited PATH。冻结 PATH 同时用于发现、version/deep/health Probe、AgentRun 与 Runtime 必要子命令。Windows 同目录候选只允许 `.exe → .cmd → .bat`，不随 PATHEXT 放开 `.ps1`。Codex npm/pnpm `.cmd` 只可作为受限 locator 解析到 package 内真实 native `codex.exe`；解析成功后脚本、Node entrypoint 与 `node.exe` 不成为 Installation 或 launch identity，但 Core 必须内部持久化 canonical shim/content、System32 interpreter identity 及 resolved target identity 的 locator evidence。locator digest 参与 Installation generation、snapshot 与 Host compatibility；shim 改写即使仍指向同一 native executable 也撤销旧 Ready evidence。其他 `.cmd/.bat` 必须保持 `windows_command_shim` identity，其 canonical path、内容 digest 与 canonical System32 interpreter identity 共同 fence snapshot/Host，并只经 Managed Runtime Process 的受控 batch serializer 启动。
 - Managed Process 的普通 capture 只接受已存在的绝对 application file，不替调用方按 cwd 或 PATH 解析可执行文件。
   ACP Terminal 等明确准入的 derived child 可以提交 portable command；Managed Process 必须先形成请求最终 cwd 与环境
   覆盖，Unix bare command 才由 OS 按该 PATH 查找、相对 path 才按该 cwd 锚定，Windows 才在本次 launch 内按
@@ -274,8 +277,8 @@ last_updated: 2026-10-19
   Host 模板提前解析后再改变执行上下文。
 - 历史 capability snapshot、Probe attempt 和目录缓存仅供诊断/展示，不授权或否决新的真实启动，不新增 LKG、健康快照、轮询或重试调度。入口已检测到只代表可以尝试，版本未知不阻断任务；失败进入本次 Run 并展示具体原因。
 - Runtime Check Manager 仅拥有主动诊断及目录检查的有界 attempt：同 Runtime 单飞、全局并发二、deadline、前后身份围栏与进程树清理保持。Superseded 不提交错误身份结果；普通执行不进入此诊断队列，也不因历史失败等待其成功。 单项检查只验证初始化、认证和当前模型；MiniMax 全模型参数遍历属于完整目录请求，健康成功与目录成功时间分离。Pi/Grok/Kiro 不演练恢复或重复设置，ZCode 只在明确 probe 入口省略订阅和重复模式。细则由 [Runtime Launch v64](../contracts/runtime-launch-and-verification-v64.md#单项检查的必要工作) 拥有。
-- 所有 Runtime 的启动只做静态安装发现；手动 rescan 在缺少同身份可信版本时允许既有有界版本补读，不运行认证或协议深检。真实 Host 在输入前验证必要协议、显式模型/选项与权限，默认模型不等待完整目录。TRAE 模式须由本次 Session 明确确认；无历史 Ready 仍可尝试启动。
-- `MemberRuntimeConfiguration` 原子保存产品 Runtime、精确模型意图及 Adapter 静态权限配置；背景发现不创建、扩权或改写。历史 Probe/目录不成为配置保存和运行门禁，动态模型与权限应用在真实 Host 验证。既有 Adapter 权限默认保持，用户仍可选择较窄模式。
+- 所有 Runtime 的启动只做静态安装发现；手动 rescan 在缺少同身份可信版本时允许既有有界版本补读，不运行认证或协议深检。真实 Host 在输入前建立必要协议并应用用户明确的模型、选项与权限；原生 Runtime 判断模型配置，目录不参与准入。TRAE 模式须由本次 Session 明确确认；无历史 Ready 仍可尝试启动。
+- `MemberRuntimeConfiguration` 原子保存产品 Runtime、精确模型意图及 Adapter 静态权限配置；背景发现不创建、扩权或改写。历史 Probe/目录不成为配置保存和运行门禁，模型与参数原样传给真实 Host 的原生协议，权限沿用既有映射。既有 Adapter 权限默认保持，用户仍可选择较窄模式。
 - 成员保存的 model policy 与单次 AgentRun 的实际模型观测是不同事实。`runtime_default` 只在 Runtime-native、结构化且可归因到当前 Thread/Session 的字段出现时记录首个模型；目录默认值、请求参数、冻结配置、Usage 或文本输出不得补推。观测按 Run execution epoch、default-only、write-once 持久化，缺失或拒绝不改变 Run 终态，也不回写成员配置。
 - `ResolvedRuntimeBinding` 只是调度、诊断和 Run 冻结使用的内部执行状态，不进入普通 AgentProfile 读取或成员编辑。用户发送先按消息、目标和冻结配置完成业务接受，Runtime resolution、workspace launchability 和完整执行 Preflight 由 Scheduler 在真实执行边界重查；失败形成诚实 Run 结果，不回滚已接受消息或静默改派目标。
 - AgentRun 冻结 Adapter、Installation、auth scope、模型及权限的逻辑身份。排队 Run 可经 Core-owned 命令在同一身份内有界解析并原子 rebind，再由真实 Host 验证；不静默改换账户、Runtime 或权限，不先执行独立深检。输入已接收或接收未知时不自动重放。
@@ -285,16 +288,22 @@ last_updated: 2026-10-19
 
 ### 校验、进程与 Session 所有权
 
+模型目录是发现信息，不能作为显式配置的执行准入表。共享归一化合并重复 ID、局部处理坏条目；读取失败
+保留模型、参数和有效缓存。原生 Runtime 决定明确配置是否可执行，不按目录过滤或补入用户选项。
+当前规则见 [Runtime Launch v74](../contracts/runtime-launch-and-verification-v74.md)。
+
 - 完整可执行文件 hash 不在消息发送热路径。安装、更新、受管迁移、轻量身份变化或用户显式检查才使用标准 SHA-256；成功后保存路径、hash、size、mtime 和平台文件 ID。执行边界先比较轻量身份，未变则不重读文件；变化时完整 hash 仍匹配冻结 fingerprint 才可更新轻量身份并继续。校验失败是已持久消息之后的诚实执行结果，不撤销消息。
 - 每个正式 AgentRun 独占一个 Runtime 进程，内部作业使用临时独占进程；Adapter 明确声明哪些 Runtime 可进入 IdleWarm，one-shot/Burst 终态后关闭。Native Session 连续性不授予并行共享进程的资格。
-- `AgentRuntimeFleetManager` 是唯一正式进程所有者，内聚 spawn/reuse/stop/reap、唯一 lease、Resident accounting、TTL/LRU/Sweeper、Core generation 与崩溃清理。Adapter 生成 opaque compatibility digest 并证明 health/quiescence；Manager 不解析模型、权限、MCP 或 Runtime 私有字段。所有事件、释放、取消与迟到回调必须匹配不可复制的 `process_id + agent_run_id + execution_epoch + lease_generation`。
+- `AgentRuntimeFleetManager` 是唯一正式进程所有者，内聚 spawn/reuse/stop/reap、唯一 lease、Resident accounting、TTL/LRU/Sweeper、Core generation 与崩溃清理。Adapter 明确选择 opaque compatibility digest 或 Native Binding 身份策略，并证明 health/quiescence；Manager 不解析模型、权限、MCP 或 Runtime 私有字段。所有事件、释放、取消与迟到回调必须匹配不可复制的 `process_id + agent_run_id + execution_epoch + lease_generation`。
 - 冻结 `config_digest` 保存完整 Run 配置与审计证据，不作为 Codex、ACP 或 Pi 的进程复用字段；ACP 的 `mcp_projection_digest` 同样只绑定该 Run 的投影证据。进程兼容摘要保留 Host 配置、执行目录/Workspace、有效权限语义、Built-in Tool 合同及目录、默认附件输出位置和实际注入的外部 MCP Server 定义；Grok、ZCode、DSH 的原生配置摘要继续参与。Codex 的模型、推理档位、`serviceTier` 和 Native Session binding key 不决定 Host 身份；CodeBuddy 显式 `--model` 仍决定 Host 身份；Kimi 由原生配置负责 Provider，不再读取私有 env 或把其摘要作为复用条件。Kimi 的 `permission_mode` 由每个 Run 建立 Session 时设置，不能沿用旧 Host 捕获的值。
+- Command Code 明确按 Camp/member、Native Binding ID 与 canonical execution root 复用，不使用配置/安装/程序摘要。旧摘要不决定恢复或 Binding 换代；显式启动设置/MCP 变更沿已有 Fleet 失效接口应用，外部原生配置修改不触发自动扫描。新进程仍经过公共启动验证。每 Run 在业务输入前用已有 ACP 控制命令更新 Mod 内存正文，首次/warm/cold 同路；不创建 Bootstrap binding 文件，控制回复不归约为业务终态或用量。详见 [Runtime Launch and Verification v72](../contracts/runtime-launch-and-verification-v72.md)。
 - Reusable Host 的 `ROVAI_RUN_TMP` 使用进程稳定 exact path，但每次 bind 必须在 active lease/context 前 fail-closed 清空、重建并恢复私有权限；unbind/fence best-effort 清理不能替代下一 bind 重置。所有 Adapter 继续只配置 execution workspace、当前 Camp exact 默认输出目录 和该 exact writable Run tmp，不暴露 process root/父目录；Source Attachment 不新增外部 read root，而是把对应记录的 exact stored path 作为 Context 字符串交给 Runtime，能否读取继续由既有 Runtime/OS 权限决定。Adapter 不解析 source/Temp/Managed 差异。Agent file ingress 绑定当前 process、lease generation、Run 与 epoch；指定源按其实际位置引用，不转入 Run tmp。
 - IdleWarm 默认必须精确匹配 `camp_id + agent_profile_id + runtime_compatibility_digest`；只有能证明完整 Session teardown/rebind 和跨 scope 无泄漏的 Adapter 才可声明另一种复用 identity。此时 Fleet 必须把复用 identity、Resident quota bucket 与当前 Camp/member invalidation scope 分开，并在每次独占领取时更新 invalidation scope，不能以跨 scope 复用为由绕过 Camp 删除或成员永久移除。process digest 与 Native Session binding digest 是不同身份。Resident 的 scope/global 配额约束跨 Run 保留的 IdleWarm/BusyResident/Stopping/Starting；无兼容 Resident 时仍可创建本 Run 独占且终态即关闭的 Burst。acquire 必须使用 `Reserve → Spawn outside lock → Commit`：短锁内原子选择兼容空闲进程、容量或 LRU eviction 并登记计入容量的 Starting，随后无 suspension 地启动 Fleet-owned Startup Operation，在锁外 stop/spawn/handshake，再以 generation、Run/epoch 和 shutdown/invalidation fence 提交。相同 Run/epoch 只等待同一 completion；waiter drop 不取消 operation，不同 Run/Runtime 可并发启动。删除、force-stop、失效与 shutdown 向 Starting operation 发取消，迟到进程不得提交且必须 reap。所有 Host 停止统一为 `Mark Stopping → Reap outside global lock → exact-operation Commit`；同 Host 共享 stop completion，timeout 保留 Stopping、lease 与 Resident capacity。
 - Runtime compatibility 只绑定默认 `attachmentOutputRoot` 位置及原有 Runtime 配置，不绑定文件内容、legacy generation 或 View visibility。文件更新不触发重新 Bootstrap 或 Native Session 重建。旧 View/receipt 只在实际历史附件读取与必要恢复时使用；不能作为普通 Run 或新发布前置。原有 additional directories 加入当前 Camp 输出目录并遵循有效权限模式，不授予 instance/Camps 父目录或统一完全访问。
 - Run 结束只有在输入结果已知、输出和 tool work 收敛、Team/Run lease 已解绑且 Adapter 能证明进程 quiescent/healthy 时才可进入 IdleWarm；否则必须关闭。Fleet 启动时必须同时启动单调时间 TTL 与 LRU Sweeper，配置变更、Camp 删除、成员永久移除、不健康和容量回收也会立即使精确 scope 失效/停止；已冻结活跃 Run 只标记 run 后退役，不被容量策略中断。
 - IdleWarm 可保留精确冻结的外部 MCP 投影、Runtime 内存、私有配置与其进程/连接直到 TTL、失效或容量回收；这不等于 AgentRun 终态即撤销外部凭据。空闲期没有活跃 Run lease，built-in/Team 调用 fail closed；不能证明安全保留精确字节时必须关闭整个 Runtime。
 - Fleet 是单一 Core generation 的内存状态，不写 SQLite、不跨重启接管。正常关闭停止并 reap 全部进程；崩溃清理只能在 owner record、旧 generation、进程组组长与命令身份均可证明时终止，不能仅凭 PID、路径或 UID 猜测性杀进程。
+- Hermes 的正式进程所有权仅覆盖独占 ACP 客户端；`RuntimeConnection` 不拥有共享原生 Gateway 或其工具后代。Fleet 的 Stop/reap 与 cleanup ACK 只证明客户端已关闭，不证明原生执行已停止。新任务仍精确恢复原 Session，由官方协议处理原生忙碌或 unknown；不得递归清理共享执行端或自动重放旧输入。原生 Home、无压缩补发及此生命周期边界由 [Hermes Runtime](../contracts/hermes-managed-runtime-v1.md)拥有。
 - 正式 AgentRun 默认继承用户通用 `HOME` 与 Runtime 原生 state/config Home；Provider env、External MCP、Run tmp、私有 cwd 或 Skill projection 都不能隐式升级成独立 Runtime Home。只有当前产品合同明确要求隔离、同时定义迁移与清理时才能覆盖 Runtime-specific Home。Discovery/Probe/fixture 可以使用一次性临时 Home，但其 Session、认证和 continuation 证据不得外推到正式 AgentRun，也不得进入产品 Binding。
 - Rovai 启动 Codex 时不设置/覆盖 `CODEX_HOME`，不拥有 Codex Home、Home lock、Camp cleanup 或 orphan GC；用户、Project、managed、plugin、hook、memory 和 native MCP 按目标 executable、process environment 与 cwd 的 Codex 原生规则生效。Conversation 只持久 Native Binding/thread ID 和证据，逻辑私有连续性不承诺 Camp/member 级物理 Home 隔离；Camp 删除也不宣称删除外部 Runtime 数据。
 - Codex Adapter 在 thread start/resume 前通过 native `config/read(includeLayers=true, cwd=executionRoot)` 发现有效 top-level MCP 名称，只将不同名的 Rovai Server 以 thread-scoped addition 传入。Codex process compatibility 只包含真正 process-scoped 输入，不包含 Conversation Home 或 thread MCP；每次 acquire 都重新发现并 finalise 本 Run 的 additive projection。
@@ -316,7 +325,7 @@ last_updated: 2026-10-19
 - Runtime accepted input 只有在能证明原 Native Turn 的 identity、接受状态和可重连终态时才能恢复。证据不足必须终态为诚实失败并保留 typed unknown evidence，不能重发可能已经产生外部效果的输入；主界面只展示普通红色失败。
 - 新输入的恢复验证冻结 Manifest attachment receipt 的 closed shape/digest，再独立验证 admitted Runtime Files Root identity、精确 Camp root containment 与当前 Camp-root Auth Receipt；不要求 legacy View ready、append-only successor 或 generation 匹配。路径和历史 payload 不重新解析、探测或改写。Migration 99/100 的旧非终态输入按 delivery/action evidence 诚实终结，历史 Manifest/Blob/Auth Receipt/ACK 保留但不可再 dispatch。
 - Cancellation 在业务事务内把精确目标 Run 结算为 cancelled；Stop 使用 `agentRunId + version` CAS，不暂停 `(CampId, AgentId)` lane、不取消 waiting Delivery，也不能命中 successor。未发送 Input 为 not_accepted；accepted/delivery_unknown 与可能已执行的 Action 证据保留，原输入禁止自动重发。User 可主动授权新的续做执行；不提供“用户确认后强制放行”入口。
-- Run 业务终态不证明旧执行已经停止。Adapter cleanup/isolation 未确认时，后继 Delivery 只保持 waiting，不创建必败 Run；旧执行仍可能写某 execution root 时，临时阻止该 root 的新 dispatch。没有输出不是隔离证明。unknown 后默认新 Native Session，但换 Session 或撤销 Core 写权限不能替代旧进程清理。
+- Run 业务终态不证明旧执行已经停止。当前 Core 仍精确持有 Run/epoch 且 Adapter cleanup/isolation 未确认时，后继 Delivery 保持 waiting，并临时阻止相同 execution root 的冲突 dispatch。工作区准备、消息领取、共享 root 与执行入口共用此判断；历史缺 ACK、不可读或身份未知不构成活跃冲突。前代进程只在 ready 后尝试一次有界后台清理，不阻断工作区或 Runtime，不补写旧 ACK，不重投旧输入。当前任务停止和退出仍如实确认。
 - 计划关闭保留 protocolVersion 3/report 和既有 writer/route barrier；public Composer 不再有持久 Draft 前置 fence。持久化 cycle 后先统一结算业务，barrier 后补齐再完成 cycle，Runtime 清理只影响清理事实与 deadline。未知外部效果保留，不伪造 Runtime outcome。
 - Diagnostics 是严格只读、最小化数据的 Core view；修复必须是用户显式选择的独立动作。导出集中脱敏，不能把 secret、完整路径、模型输入或 Runtime 原始输出作为便利诊断数据。
 
@@ -335,9 +344,9 @@ last_updated: 2026-10-19
   由对应结果确认。字段与生命周期由 [Runtime Launch v49](../contracts/runtime-launch-and-verification-v49.md) 拥有。
 
 - TRAE 的 light check、显式 availability verification、cold resume、HistoryRestore 和 replay quarantine 使用独立的用户授权、Session ID 校验和有界恢复路径；恢复响应 ID 不一致时 fail closed。
-- Product execution qualification 是 `AdapterKind × HostPlatformKey` 的封闭准入。存在安装或能启动进程不等于平台合格；不合格组合保留配置但阻止执行，并提供结构化 reason/evidence。
+- Product execution qualification 是 `AdapterKind × HostPlatformKey` 的封闭准入。存在安装或能启动进程不等于平台合格；不合格组合保留配置但阻止执行，并提供结构化 reason/evidence。维护者明确普通开放的 `enabled` 允许使用但不声称 qualified，reason/evidence 均为空；Hermes 的四个平台沿此状态开放。
 - Pi 不得继承 ACP、Kimi、Grok 或通用平台 evidence。macOS arm64、macOS x64、Windows x64 当前分别绑定各自 Pi immutable qualification artifact 并为 Qualified；任何未来平台或不兼容版本在自己的 artifact 建立前仍必须 NotQualified。本机 debug override 只用于隔离 smoke，release 不得读取或应用。
-- Windows 正式进程必须在创建时原子加入受管 Job 并限制继承 handle；本地 IPC、私有存储、DACL、validated Node shim、长路径和 descendant cleanup 都是平台 admission 的组成部分，不能在进程启动后补偿安全边界。
+- Windows 整树所有权进程必须在创建时原子加入受管 Job 并限制继承 handle；`RuntimeConnection` 只拥有捕获的客户端根 handle，不将共享 Gateway 放入 Job，清理只终止该根进程。两种模式均保留入口身份与 stdio handle 继承校验。本地 IPC、私有存储、DACL、validated Node shim、长路径和相应所有权范围的 cleanup 都是平台 admission 的组成部分，不能在进程启动后补偿安全边界。
 
 ## Native Session、Context 与 Bootstrap
 
@@ -345,7 +354,7 @@ last_updated: 2026-10-19
 
 ### Session continuity 与 Bootstrap
 
-- 同一 Run 的既有 Bootstrap 原字节恢复；新 Run 的公开执行使用当前模板，Single Chat 专用模板保持。旧历史材料不成为新输入的恢复门槛。`agent_v1`／`agent_v2` 分别验证旧／新投影，Skill 在原路径同步。精确规则见 [User Naming v1](../contracts/user-naming-v1.md)。
+- 同一 Run 的既有 Bootstrap 原字节恢复；新 Run 使用当前公开／Single Chat 模板；适配器固定完成规则见下文。旧历史材料不成为新输入的恢复门槛。`agent_v1`／`agent_v2` 分别验证旧／新投影，Skill 在原路径同步。精确规则见 [User Naming v1](../contracts/user-naming-v1.md)。
 
 - 同一 Camp、队员和当前 Conversation，未重置且 AdapterKind 相同，优先把当前绑定的原生 ID 交给 Adapter 恢复。历史配置、安装记录、版本、指纹、兼容 key 或上下文摘要不否决资格；切换 CLI 类型不传递旧 ID。当前权限、工具、工作目录、进程归属与执行防重继续检查。恢复目标与业务输入接收是不同权威。
 - Adapter 在恢复调用处提供结论；只有能力不支持、针对恢复请求的结构化拒绝或已有精确目标核验才允许一次新建。认证、网络、锁、初始化、模型、MCP、取消和超时等不能从报错文本推断旧历史失效。新建成功并绑定后才切换目标和提示，失败保留旧目标；完整行为见 [Runtime Launch v60](../contracts/runtime-launch-and-verification-v60.md)。
@@ -353,6 +362,7 @@ last_updated: 2026-10-19
 - 新 public Run 在 claim 时冻结本次启动内容与预算相关区段；首次物化和后续 Binding 准备复用同一内容，后续 Memory／身份编辑进入下一 Run。FIFO 按完整 payload 选批，同包 Bootstrap 以实际字节加补发包装预留；独立系统层保持原规则，见 [Profile 13](../contracts/context-delivery-profile-v13.md)。
 - 同一 Run/Binding/generation 的 Bootstrap 与 Manifest bytes 保持冻结。历史 Bootstrap 不作为下一个 Run 的必读材料，损坏或缺失不挡续聊；现有 Evidence 表保留每次准备结果和旧 Blob 引用。是否投递仍由 Adapter delivery mode、Charter digest、redelivery requirement 和 accepted Input 门禁决定；不重复业务输入，也不伪造已接受事实。
 - Session Charter 只拥有稳定产品合同、工具/Skill 进入方法与协作纪律，不复制 operation schema；文案及格式版本不构成原生历史有效性的证明。
+- Claude Code 在已有私有 settings 和最终进程环境固定原生后台开关；CodeBuddy 只注入三个启动环境变量，原生同名 settings 仍按 CLI 自身规则生效。两个 Runtime 的普通／Single Chat Charter 加入任务所需有限命令与原生子 Agent 的前台完成规则，Rovai 同伴等待纪律保留。Host 策略升级不改变 Session 绑定，精确边界见 [Runtime Launch v70](../contracts/runtime-launch-and-verification-v70.md)。
 - Bootstrap 各组件、完整序列化 bytes 和实际投递是不同 evidence 层；不用“已生成完整 Bootstrap”替代 Runtime accepted evidence。ContextManifest 保存实际输入与必要来源，Runtime Input Delivery Evidence 记录实际 bytes 与 accepted ACK；只有当前有效 Run/epoch 和 Native Binding 的 accepted ACK 推进 Conversation 水位；明确未接受才可重新准备，accepted/unknown 不自动重发。迟到回执只补充证据，不修改 successor 水位。
 - Pi 的 `managed_system_prompt` 是第三种 Bootstrap delivery mode，不改变既有 Bootstrap 或 Formatter 22 原始 Dynamic Context。v7 extension 不注册 `input` 或 `tool_call` hook；它在每个 `before_agent_start` 重新读取当前 binding，只校验基本结构与 Bootstrap digest，并把完整 Bootstrap 追加到当时的 Pi system prompt。读取失败只发布脱敏 diagnostic 并让 Pi 按原生行为继续，不调用 abort，也不建立第二套 Session/cwd/Tool catalog 认证。`prompt` RPC response 只结束 command round trip；当前 Host owner 精确绑定的第一个 `agent_start` 才以现有 Delivery transition 接受 Input 并幂等发布 started。更早原生 Extension handled 输入而没有 `agent_start` 时，Rovai 不伪造 started。新 Run 不生成或读取 Managed Input Receipt；历史 Receipt 数据只作审计保留。Formatter 22 `prepared_context.rendered_payload` 不解析 `CURRENT_INPUT` 或 slash command，逐字节成为 Pi `prompt.message`；已授权图片只从结构化 ContextManifest refs 生成，schema-2 私有 evidence 直接绑定 Delivery。Pi `abort` 使用普通 pending request/response correlation，waiter 超时后迟到 response 仍被消费；非 Rovai Extension 的未映射交互只返回 cancelled/denied，不 poison Host。Pi system prompt 独立于压缩消息历史，因此固定使用 `native_system_prompt_preserved`，不创建 redelivery requirement 或 compaction observer lease。
 - Bootstrap redelivery 是 durable requirement，但 detector signal 本身不证明 compaction、不授权发送。Core 通过每 Native Session 唯一的 observer lease/generation、Runtime-owned policy epoch、prepared-input cutoff 和幂等 Session-scoped command 决定下一个尚未准备的输入是否需要 redelivery；旧 binding、旧 generation、迟到信号或已经 prepare 的输入都 fail closed。
@@ -432,11 +442,12 @@ last_updated: 2026-10-19
 - Core IPC 先返回并校验完整 Envelope，然后按 operation 投影一份 closed Agent result JSON。普通 Agent 输出不包含 envelope wrapper、request identity 或 receipt，也不通过递归删字段得到；每个 operation 有明确 `agentOutputSchema` 与 golden fixture。完整 Envelope 只用于 Core、Evidence、Qualification 和 host-controlled debug 边界。
 - `rovai` CLI 是 Runtime 调用 Rovai-owned built-ins 的唯一运输。内置 MCP/`rovai_team` Bridge、注入、alias map、Runtime 临时配置和 native permission bundle 已 clean break 删除；不存在 fallback 或同 Run 双运输。用户外部 MCP 继续走独立 Library/Runtime-native projection，不经 Built-in Router。
 - CLI 使用领域分组命令，但 请求记录、审计、Activity 与 Envelope 保留 canonical dotted operation identity。Native Session Bootstrap 只教稳定 CLI 入口和通用失败纪律；Agent 侧没有 `tool list`、`tool describe`、generic invoke 或全量 schema discovery。精确输入源和本命令约束由简短 `--help` 给出，复杂选择/恢复由 `cli-operations` Skill 说明。
-- CLI 将输入规范化为一个请求对象；只有 Send 正文文件可与除 `--body` 外的直接参数组合。Send 文件严格命中现有封闭请求 Schema 时保留整个请求，且禁止混入直接参数；其他合法 UTF-8 文本成为原文正文。识别后的业务失败不能降级重发。其他命令仍一次只选 direct arguments、JSON stdin/heredoc 或 JSON `--input-file`，不合并或覆盖；显式文件/参数不读取继承 stdin。文件与兼容边界见 [Built-in Tool Transport v43](../contracts/builtin-tool-transport-v43.md)。`camp.read` 只在所选来源成为 JSON 对象之后、canonical Schema 校验之前补全安全 Timeline 默认；默认 Timeline 发送给 Core 的 canonical JSON 始终包含 mode/direction/limit，其他显式 mode 继续发送各自完整 branch。其他命令不引入业务默认；输入文件路径、Shell quoting 与临时文件不是 Core 信任边界或保密保证。
+- CLI 将输入规范化为一个请求对象；只有 Send 正文文件可与除 `--body` 外的直接参数组合。Send 文件严格命中现有封闭请求 Schema 时保留整个请求，且禁止混入直接参数；其他合法 UTF-8 文本成为原文正文。识别后的业务失败不能降级重发。其他命令仍一次只选 direct arguments、JSON stdin/heredoc 或 JSON `--input-file`，不合并或覆盖；显式文件/参数不读取继承 stdin。文件与兼容边界见 [Built-in Tool Transport v44](../contracts/builtin-tool-transport-v44.md)。`thread.read` 的默认 timeline、before/after 排他分页与 messageId/replyChain 由封闭输入决定；CLI 不合成 mode/direction 字段。正向查询从 cursor 后最早可见消息取页，返回顺序与续页规则见 [History v16](../contracts/camp-history-v16.md)。默认值由领域读取处理；输入文件路径、Shell quoting 与临时文件不是 Core 信任边界或保密保证。
 - 目标 Runtime 必须在接收 Run 输入前证明 CLI、当前 IPC、Run binding 和当前 contract 可用；否则以结构化理由 fail closed，不启动降级 Agent。发布资格按 Runtime 及宿主平台独立验收，不因一个平台未准入而否定其他已验收组合。
 - Business rejection 投影稳定 code、safe message、closed recovery 和合同允许的 details；不泄露 stack、SQL、内部路径、IPC 地址、secret 或未筛底层错误。乐观冲突要求重读后重新判断；只有 Core 明确允许时才以同一 request identity 有界重试。幂等重试返回原结果而不重复效果；无法证明时返回 outcome indeterminate 并要求核对当前状态。
-- CLI 子进程通过当前 Run 的受保护本地 IPC endpoint 与新 lease 继承调用身份，不从可复用 Runtime 进程身份继承权力。Runtime 及它启动的子进程共享当前 Run/Member 归属和同一 scope/version/quota/fence，不根据父进程名、命令文本或层级猜测模型意图。Run release 先 fence lease，迟到子进程调用不得归属于后续 Run。
-- Unix Socket 和受保护 Windows Named Pipe 共享 Local IPC v3 语义：每 App 一个 endpoint，基于 OS identity 加 process/lease token 的双重校验，当前用户专用权限、framing、超时与断连不明时不盲重发。Rovai-owned request/response/Runtime adapter 不再使用统一逻辑总量上限；一次调用完整成功或明确失败，不允许 success + truncated，也不要求 Agent 通过 preview/blobRef/offset 补读。
+- 上下文文件来源的 CLI 子进程通过受保护本地 IPC endpoint 与新 lease 继承调用身份，不从可复用 Runtime 进程身份继承权力。Runtime 及它启动的子进程共享当前 Run/Member 归属和同一 scope/version/quota/fence，不根据父进程名、命令文本或层级猜测模型意图。Run release 先 fence lease，此来源的迟到子进程调用不得归属于后续 Run。
+- Hermes 原生会话来源按调用时归属：CLI 一次业务请求只携带逻辑 Session，Core 从现有 Conversation/活动 Run 与 ActiveLease 固定本次身份。旧后台程序直到后继 Run 才首次调用，会属于后继 Run；已受理操作不重新定位，派发未知不自动重试。没有新表、来源证明或上下文交换；其他 Runtime 不变，详见 [Hermes CLI 边界](../contracts/hermes-managed-runtime-v1.md#内置-cli-的原生会话来源)。
+- Unix Socket 和受保护 Windows Named Pipe 共享 Local IPC v3 语义：每 App 一个 endpoint，当前用户专用权限、framing、超时与断连不明时不盲重发。上下文文件来源使用 OS identity 加 process/lease token 校验；Hermes 原生来源在 Core 内部取得并重验现有活动 lease，不向 CLI 交换 token。Rovai-owned request/response/Runtime adapter 不再使用统一逻辑总量上限；一次调用完整成功或明确失败，不允许 success + truncated，也不要求 Agent 通过 preview/blobRef/offset 补读。
 - 当前 catalog 不包含 Gather。多人协作使用普通多目标 send；Core 不提供 Barrier、captured return 或 completion。CLI/Skill/help 不能继续宣传历史能力。
 - Mission read side 以有效 Run/epoch/lease/Binding 认证后全局读取，不把目标 Camp membership 或历史 ContextManifest 当 ACL；`mission.list/get` 不切换当前 Mission，`mission.update/status` 不接受目标 ID。数据库关系、内部事件、Agent Mission 操作和新 Context 共用唯一内部 `rvm_...` ID；number 派生的 `M-xxx` 只用于人类界面，不作为 Agent selector 或结果字段。
 - 一次已由 Core 验证的 CLI invocation 在主 Activity 中以 canonical operation 呈现。Runtime Shell Evidence 只在具有显式 Core request/receipt 与结构化 command identity 关联时折叠为 supporting transport；无法证明时保留两项独立 Evidence，不用文本、时间或目录猜测。
@@ -474,6 +485,7 @@ last_updated: 2026-10-19
 - 本机导入保留 env/Header 的原始值语义（含空值、空白和鉴权前缀），不生成新变量名或强制重复填写。引用按来源语义无损转换，并以 Core 实际启动环境判定缺项；不兼容语法明确拒绝该候选，不影响其他候选。新增仍默认停用且不分配队员；替换保留 identity、启停和分配，失败不破坏旧配置。历史生成的占位符不推测恢复，只有显式重新选取原始来源执行替换才迁移来源值。
 - 新配置从空 `mcpServers`、空管理元数据和无 Assignment 开始；产品不内置、恢复、广告或自动创建第三方 preset/受审定义。所有外部 Server 都来自用户显式创建/导入。
 - 对声明 `additive` 的 Runtime，每个 AgentRun 冻结当时已启用且分配给该成员的 server identity/revision 与经脱敏的 projection input；后续文件编辑不改写已冻结 Run。Runtime 投影只能写入 Core-owned 私有边界，不覆盖用户 Global/Project/Workspace 配置，Run 结束按进程复用与所有权规则清理。声明 `unsupported` 的 Runtime 不读取或冻结 Assignment，也不形成 projection。
+- MCP 私有快照布局在新 Run 创建时冻结；新 Run 使用固定 `snapshot/` 目录，缺少布局标记的旧 Run 保留 epoch 路径，不迁移或回填。错误限定在对应 Run 或可选 Runtime 初始化，不能反向阻断 Core authority；字段、原子发布和 Grok 新前缀清理见 [Input Snapshot Storage](../contracts/input-snapshot-storage-v1.md#mcp-snapshot-storage-layout)。
 - 外部 MCP Runtime 能力只有 `additive | unsupported`。Core 生成 projection request，Adapter 根据已验证的原生优先级和同名行为 finalise 实际配置；同名只能结构化拒绝、或在与较高优先级有效定义字节完全相同时结构化复用，不猜测 merge 或 override。不存在 Runtime-wide 降级、replacement fallback 或 transport fallback；一个 Server 失败不改变 built-in transport 或整台 Runtime 身份。
 - Pi 的 External MCP 能力固定为 `unsupported`。Core 对 Pi 静默忽略既有 Assignment，不读取或投影 server 定义，不启动
   server、不注册 proxy Tool、不建立 approval/bridge envelope，也不让 `mcp` optional subsystem 状态阻断 Pi dispatch。

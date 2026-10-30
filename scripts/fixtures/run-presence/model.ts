@@ -199,7 +199,7 @@ const refresh = () => {
   update({ snapshot: value, stopId: value.agentRuns.some((r: any) => r.id === state.stopId && ['running','waiting'].includes(r.status)) ? state.stopId : null })
   if (controls.persistServer) sessionStorage.setItem(persistenceKey, JSON.stringify({
     scenario: state.scenario, stage: state.stage, serial, extraMessages, extraRuns, extraDeliveries,
-    retries: [...retries], holdDispatch: controls.holdDispatch
+    retries: [...retries], stopped: [...stopped], holdDispatch: controls.holdDispatch
   }))
 }
 function streamTick() {
@@ -265,6 +265,44 @@ export const model = {
   },
   get: () => state, subscribe: (fn: () => void) => { listeners.add(fn); return () => listeners.delete(fn) },
   note: (note: string) => update({ note }),
+  showReplyCase(long = false, allLoaded = false, wrapped = false, grouped = false) {
+    this.setScenario('stream'); halt()
+    const messages = [
+      makeMessage('reply-a', 1, '回复详情保持只读，沿用当前会话里的回复锚点。'),
+      makeMessage('reply-b', 2, '我先核对消息的来源，再把详情接到回复块上。', 0),
+      makeMessage('reply-c', 3, '详情用头像、作者和正文排列，复制与回到原文悬浮出现。', 1),
+      makeMessage('reply-d', 4, '执行中的消息也要能查看过程。'),
+      makeMessage('reply-e', 5, '这里是另一个话题。'),
+      makeMessage('reply-f', 6, '已经确认，执行条可以复用原有浮层。', 2),
+      makeMessage('reply-g', 7, '合批收到两条输入时，仍然沿着最后一条输入的回复锚点展示。', 0, 'run-alice'),
+      makeMessage('reply-h', 8, '这个回复属于第二个话题。', 3),
+      makeMessage('reply-i', 9, '另一批输入不会把两个回复链合并。', 0, 'run-other')
+    ]
+    const parents: Record<string,string> = { 'reply-b':'reply-a','reply-c':'reply-a','reply-d':'reply-b',
+      'reply-f':'reply-d','reply-g':'reply-d','reply-h':'reply-e','reply-i':'reply-h' }
+    for (const message of messages) message.replyToThreadMessageId = parents[message.id] ?? null
+    if (long) for (let i = 10; i <= 120; i++) {
+      // Cross the public-message grouping height when the detail pane closes.
+      const body = `长链回复 ${i}${wrapped ? '\n\n' + '消息正文会随会话宽度重新换行，关闭右侧详情后仍应显示选中的原文。'.repeat(16) : ''}`
+      messages.push({ ...makeMessage(`long-${i}`,i,body,0,grouped ? 'run-alice' : null), replyToThreadMessageId:'reply-g' })
+    }
+    const run = { ...makeRun('run-alice',0,'running',['reply-c','reply-d']),anchorMessageId:'reply-d',publicTailSequenceAtStart:4 }
+    const other = { ...makeRun('run-other',0,'running',['reply-f','reply-h']),anchorMessageId:'reply-h',publicTailSequenceAtStart:8 }
+    controls.hiddenMessages = long && !allLoaded ? messages.slice(0,-12) : []
+    update({ snapshot: { ...state.snapshot, thread: { ...state.snapshot.thread,title:'回复详情' }, messages:long && !allLoaded ? messages.slice(-12) : messages,
+      agentRuns:[run,other],executionEvidence:[...evidence(run),...evidence(other)],messageDeliveries:[] } })
+    model.resync()
+  },
+  finishReplyRuns() {
+    halt()
+    update({ snapshot: { ...state.snapshot, agentRuns:state.snapshot.agentRuns.map((run:any)=>({ ...run,status:'succeeded',endedAt:new Date().toISOString() })) } })
+    model.resync()
+  },
+  withdrawReply() {
+    update({ snapshot: { ...state.snapshot, messages:state.snapshot.messages.map((m:any)=>m.id==='reply-c'
+      ? { ...m,body:'',content:[],withdrawn:true,version:m.version+1 } : m) } })
+    model.resync()
+  },
   showSourceCase(kind: 'batch' | 'batch-history' | 'history' | 'missing' | 'withdrawn' | 'legacy' | 'attachment') {
     this.setScenario('stream'); halt()
     const source = makeMessage('source-first', 1, '第一条原始输入：核对执行行的来源。')
@@ -320,7 +358,7 @@ export const model = {
         ...(multiple ? [0,1,2] : kind === 'other-member' ? [2] : []).map(index => ({ kind: 'atom', atom: { type: 'member', agentId: aid(index) } })),
         { kind: 'text', text: '采用这条更正。' }] } } })
   },
-  showReceiptCase(routes: Array<'steer' | 'steer-pending' | 'steer-sending' | 'running' | 'waiting' | 'unknown' | 'failed' | 'cancelled' | 'failed-before-run' | 'cancelled-before-run' | 'steer-failed'>, completed = false) {
+  showReceiptCase(routes: Array<'steer' | 'steer-pending' | 'steer-sending' | 'running' | 'waiting' | 'unknown' | 'unknown-cancelled' | 'failed' | 'cancelled' | 'succeeded' | 'failed-before-run' | 'cancelled-before-run' | 'steer-failed' | 'steer-cancelled'>, completed = false) {
     this.setScenario('stream'); halt(); controls.steerReview = true
     const message = { ...makeMessage('receipt-example', 4,
       routes.map((_, index) => '@' + profiles[index].displayName).join(' ') + ' 请按这条补充继续处理。'),
@@ -328,10 +366,13 @@ export const model = {
     const runs: any[] = [], deliveries: any[] = []
     routes.forEach((route, index) => {
       const runId = `receipt-run-${index}`
-      const steered = route === 'steer' || route === 'steer-failed'
+      const steered = route === 'steer' || route === 'steer-failed' || route === 'steer-cancelled'
+      const unknown = route === 'unknown' || route === 'unknown-cancelled'
       const pendingSteer = route === 'steer-pending' || route === 'steer-sending'
       const noRun = route === 'waiting' || route.endsWith('-before-run')
-      const status = route.startsWith('failed') || route === 'steer-failed' ? 'failed' : route.startsWith('cancelled') ? 'cancelled' : completed ? 'succeeded' : 'running'
+      const status = route.startsWith('failed') || route === 'steer-failed' ? 'failed'
+        : route.startsWith('cancelled') || route === 'steer-cancelled' || route === 'unknown-cancelled' ? 'cancelled'
+        : completed || route === 'succeeded' ? 'succeeded' : 'running'
       if (!noRun && route !== 'unknown') runs.push({
         ...makeRun(runId, index, status,
           steered ? ['history-user', message.id] : [message.id]),
@@ -339,10 +380,10 @@ export const model = {
         executionEvidenceCount: 0, executionEvidenceChangeSequence: 0
       })
       deliveries.push({ ...delivery(`receipt-delivery-${index}`, message.id, aid(index), noRun ? null : runId,
-        pendingSteer ? 'claimed' : route === 'waiting' ? 'waiting' : route === 'unknown' || status === 'failed' ? 'failed' : status === 'cancelled' ? 'cancelled' : route === 'running' && !completed ? 'running' : 'settled'),
-        requestedMode: steered || pendingSteer || route === 'unknown' ? 'steer' : 'send',
+        pendingSteer ? 'claimed' : route === 'waiting' ? 'waiting' : unknown || status === 'failed' ? 'failed' : status === 'cancelled' ? 'cancelled' : route === 'running' && !completed ? 'running' : 'settled'),
+        requestedMode: steered || pendingSteer || unknown ? 'steer' : 'send',
         ...(pendingSteer ? { dispatchPhase: route === 'steer-sending' ? 'attempting' : 'materialized' } : {}),
-        inputDeliveryStatus: steered ? 'accepted' : route === 'unknown' ? 'delivery_unknown' : null })
+        inputDeliveryStatus: steered ? 'accepted' : unknown ? 'delivery_unknown' : null })
     })
     update({ streamPaused: true, generation: state.generation + 1,
       snapshot: { ...state.snapshot, messages: [...state.snapshot.messages.slice(0, 2), message],
@@ -389,9 +430,10 @@ export const model = {
       members: state.snapshot.members.map((member: any) => member.agentId === aid(0) ? { ...member, membershipStatus, profilePresence } : member)
     } })
   },
-  showStartupStatus(waitReason: 'runtime_initializing' | null, preserveEvidence = false) {
+  showStartupStatus(waitReason: 'runtime_initializing' | null, preserveEvidence = false, status?: 'queued' | 'running') {
     update({ streamPaused: true, snapshot: { ...state.snapshot,
-      agentRuns: state.snapshot.agentRuns.map((run: any) => run.id === 'run-alice' ? { ...run, waitReason } : run),
+      agentRuns: state.snapshot.agentRuns.map((run: any) => run.id === 'run-alice' ? { ...run, waitReason,
+        ...(status ? { status } : {}), executionEvidenceCount: preserveEvidence ? run.executionEvidenceCount : 0 } : run),
       executionEvidence: preserveEvidence ? state.snapshot.executionEvidence
         : state.snapshot.executionEvidence.filter((item: any) => item.agentRunId !== 'run-alice')
     } })
@@ -428,8 +470,9 @@ export const model = {
   },
   restoreStopFocus() { if (stopTrigger?.isConnected) stopTrigger.focus() },
   stop(id: string) {
-    if (!state.snapshot.agentRuns.some((r: any) => r.id === id && ['running','waiting'].includes(r.status))) { update({ stopId: null }); return }
-    halt(); stopped.set(id, { run: { status: 'cancelled', endedAt: new Date().toISOString(), cancelReasonCode: 'user_requested_agent_run_stop', cancelRequestedAt: new Date().toISOString() },
+    const source = state.snapshot.agentRuns.find((r: any) => r.id === id && ['running','waiting'].includes(r.status))
+    if (!source) { update({ stopId: null }); return }
+    halt(); stopped.set(id, { run: { ...source, status: 'cancelled', endedAt: new Date().toISOString(), cancelReasonCode: 'user_requested_agent_run_stop', cancelRequestedAt: new Date().toISOString() },
       publishedIds: state.snapshot.messages.filter((m: any) => m.sourceAgentRunId === id).map((m: any) => m.id) })
     refresh()
   },
@@ -475,7 +518,7 @@ export const model = {
   client: { ...backing.client,
     onInvalidated: (listener: () => void) => { invalidationListeners.add(listener); return () => invalidationListeners.delete(listener) },
     request: async (method: string, input: any = {}): Promise<any> => {
-      if (['agentRunExecution.page', 'agentRunExecution.changes', 'agentRunEvidence.getContent', 'thread.messages.around'].includes(method))
+      if (['agentRunExecution.page', 'agentRunExecution.changes', 'agentRunEvidence.getContent', 'thread.messages.around', 'thread.messages.replies'].includes(method))
         controls.executionReads.push({ method, ...input })
       if (method === 'members.list') return profiles
       if (method === 'agentRunExecution.page' || method === 'agentRunExecution.changes') {
@@ -514,6 +557,20 @@ export const model = {
         controls.receipts.set(input.commandId, result)
         if (controls.continuationMode === 'response-lost') throw new Error('Simulated lost receipt')
         return result
+      }
+      if (method === 'thread.messages.replies') {
+        const all = [...controls.hiddenMessages,...state.snapshot.messages]
+        const byId = new Map(all.map((m:any)=>[m.id,m]))
+        const root = (id:string): string => { const seen=new Set<string>(); let m:any=byId.get(id); while(m?.replyToThreadMessageId && !seen.has(m.id) && byId.has(m.replyToThreadMessageId)) { seen.add(m.id); m=byId.get(m.replyToThreadMessageId) } return m?.id ?? id }
+        const rootId = root(input.messageId)
+        const chain = all.filter((m:any)=>root(m.id)===rootId).sort((a:any,b:any)=>a.sequence-b.sequence)
+        const candidates = chain.filter((m:any)=>input.before ? m.sequence<input.sequence : m.sequence>(input.sequence??0))
+        const page = input.before ? candidates.slice(-(input.limit??50)) : candidates.slice(0,input.limit??50)
+        return { schemaVersion:1,threadId:state.snapshot.thread.id,messageId:input.messageId,rootMessageId:rootId,
+          throughGlobalSequence:state.version,sourceAvailable:byId.has(input.messageId),replyCount:Math.max(0,chain.length-1),
+          hasEarlier:!!page.length && chain[0].sequence<page[0].sequence,
+          hasLater:!!page.length && chain.at(-1).sequence>page.at(-1).sequence,messages:structuredClone(page),
+          runAnchorMessageIds:(input.runAnchorMessageIds??[]).filter((id:string)=>root(id)===rootId) }
       }
       if (method === 'thread.messages.anchors') {
         const items = state.snapshot.messages.filter((m: any) => m.authorType === 'user').map((m: any) => ({
@@ -573,6 +630,7 @@ if (savedServer) {
   Object.assign(state, { scenario: saved.scenario, stage: saved.stage })
   serial = saved.serial; extraMessages = saved.extraMessages; extraRuns = saved.extraRuns; extraDeliveries = saved.extraDeliveries
   for (const [sourceId, record] of saved.retries) retries.set(sourceId, record)
+  for (const [sourceId, record] of saved.stopped ?? []) stopped.set(sourceId, record)
   controls.persistServer = true; controls.holdDispatch = saved.holdDispatch
 }
 refresh()

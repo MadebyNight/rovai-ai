@@ -25,8 +25,8 @@ use rovai_core::{
     agent_profile::{AdapterKind, FrozenAgentRuntimeConfig},
     agent_run_image::{AcpImageAccumulator, RuntimeImageObservation},
     agent_runtime_adapter::{
-        AcpClientTerminalMode, AgentRuntimeAdapterRegistry, acp_model_catalog_for_adapter,
-        acp_runtime_model_id_from_session, write_kiro_additive_agent_config,
+        AcpClientTerminalMode, AgentRuntimeAdapterRegistry, acp_runtime_model_id_from_session,
+        write_kiro_additive_agent_config,
     },
     builtin_tool_transport::BUILTIN_TOOL_CONTRACT_VERSION,
     command::canonical_json_digest,
@@ -291,6 +291,17 @@ struct AcpActivePrompt {
     kimi_compaction_lifecycle: KimiCompactionLifecycle,
     zcode_input_id: Option<String>,
     codebuddy_request_id: Option<String>,
+    hermes_progress: HermesPromptProgress,
+}
+
+/// Hermes may turn a late slash steer into another native prompt. Keep the
+/// existing Run's route until every submitted request has returned; notifications
+/// and native-session CLI calls still belong to that Run in the meantime.
+#[derive(Debug, Clone, Default)]
+struct HermesPromptProgress {
+    pending_steers: usize,
+    original_terminal: Option<(u64, Value)>,
+    supplement_failure: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -680,6 +691,7 @@ struct AcpPromptObservation {
     assistant_suffix: AcpAssistantSuffixCollector,
     observed_tools: HashMap<String, ObservedToolMetadata>,
     unsupported_interaction: bool,
+    questionnaire_request_ids: BTreeSet<String>,
     native_usage_message_ids: BTreeSet<String>,
     native_usage_tool_call_ids: BTreeSet<String>,
     images: AcpImageAccumulator,
@@ -693,6 +705,7 @@ impl AcpPromptObservation {
             assistant_suffix: AcpAssistantSuffixCollector::default(),
             observed_tools: HashMap::new(),
             unsupported_interaction: false,
+            questionnaire_request_ids: BTreeSet::new(),
             native_usage_message_ids: BTreeSet::new(),
             native_usage_tool_call_ids: BTreeSet::new(),
             images: AcpImageAccumulator::default(),
@@ -1279,6 +1292,8 @@ pub(crate) struct AcpRpcError {
     message: String,
     provider_detail: Option<String>,
     minimax_steer_pre_delivery_rejection: bool,
+    hermes_session_missing: bool,
+    hermes_input_admitted: bool,
 }
 
 impl std::fmt::Debug for AcpRpcError {
@@ -1300,8 +1315,12 @@ impl AcpRpcError {
             .unwrap_or("ACP request failed")
             .to_string();
         let provider_detail = value
-            .pointer("/data/error")
-            .and_then(Value::as_str)
+            .get("data")
+            .and_then(|data| {
+                data.as_str()
+                    .or_else(|| data.get("error").and_then(Value::as_str))
+                    .or_else(|| data.get("details").and_then(Value::as_str))
+            })
             .and_then(|detail| sanitize_public_runtime_error(detail, &[]))
             .filter(|detail| detail != &message);
         Self {
@@ -1334,6 +1353,9 @@ impl AcpRpcError {
                         })
                 })
                 .map(str::to_string),
+            hermes_session_missing: value["code"] == -32603
+                && value["data"]["details"] == "not_found",
+            hermes_input_admitted: value["data"]["details"] == "admitted_turn_failed",
             minimax_steer_pre_delivery_rejection: value["code"] == -32602
                 && matches!(
                     message.as_str(),
@@ -1371,6 +1393,7 @@ impl AcpRpcError {
                     && self.session_id.as_deref() == Some(session_id)
                     && self.project_root.as_deref() == Some(cwd)
             }
+            AdapterKind::HermesCli => self.hermes_session_missing,
             // The official bridge emits this only for the native resume call,
             // not a later subscribe, model, permission or MCP operation.
             AdapterKind::ZcodeApp => self.code == Some(-32004),
@@ -1469,7 +1492,6 @@ pub(crate) struct AcpHost {
     trae_permission_mode: Option<String>,
     startup_diagnostics: Mutex<String>,
     private_config_root: Option<PathBuf>,
-    remove_private_config_root_on_shutdown: bool,
     detector_config_root: Option<PathBuf>,
     ephemeral_config: Mutex<Option<EphemeralMcpConfigFile>>,
     executable_path: PathBuf,
@@ -1860,8 +1882,13 @@ impl AcpHost {
         if let Some(environment) = &frozen_runtime.environment {
             environment.apply(&mut command)?;
         }
-        if let Some(config) = &builtin_tools {
-            config.configure_command(&mut command)?;
+        if frozen_runtime.adapter_kind != AdapterKind::HermesCli {
+            if let Some(config) = &builtin_tools {
+                config.configure_command(&mut command)?;
+            }
+        }
+        if frozen_runtime.adapter_kind == AdapterKind::HermesCli {
+            crate::hermes::configure_command(&mut command)?;
         }
         if let Some(account)=&selected_account && frozen_runtime.adapter_kind==AdapterKind::GrokBuild {
             command.env("GROK_HOME",account.profile_root.join(".grok"));
@@ -1884,6 +1911,15 @@ impl AcpHost {
         if selected_account.is_some() && let Some(configuration) = grok_configuration.take() {
             apply_grok_native_configuration(&mut command, configuration);
         }
+        let mut command_bootstrap_nonce =
+            if frozen_runtime.adapter_kind == AdapterKind::CommandCodeCli {
+                Some(crate::command_code_acp::configure_host(
+                    &mut command,
+                    private_config_root.context("Command Code private Host directory missing")?,
+                )?)
+            } else {
+                None
+            };
         let detector_config_root = if compaction_detector_policy
             == CompactionDetectorPolicy::BestEffort
             && !(frozen_runtime.adapter_kind == AdapterKind::OpencodeCli
@@ -1929,7 +1965,11 @@ impl AcpHost {
         }
         let spec = ManagedProcessLaunchSpec::capture(
             &command,
-            ManagedProcessPurpose::RuntimeHost,
+            if frozen_runtime.adapter_kind == AdapterKind::HermesCli {
+                ManagedProcessPurpose::RuntimeConnection
+            } else {
+                ManagedProcessPurpose::RuntimeHost
+            },
             ManagedStdinPolicy::Piped,
             ManagedWindowsArgvDialect::MicrosoftCrt,
             format!("runtime-host:{}", frozen_runtime.adapter_kind.as_str()),
@@ -1964,16 +2004,33 @@ impl AcpHost {
         } else {
             None
         };
-        // From this point a process may exist; its owner handles cleanup.
-        if let Some(config) = private_config.as_mut() {
+        let mut startup = PreparedAcpProcess {
+            config: private_config.take(),
+            child: None,
+        };
+        let child = match ManagedProcess::spawn_owned(spec) {
+            Ok(child) => child,
+            Err(failure) => {
+                if failure.process_started() {
+                    if let Some(config) = startup.config.as_mut() {
+                        config.preparing = false;
+                    }
+                }
+                let (error, confirmed) = failure.reap().await;
+                if let Some(config) = startup.config.as_mut() {
+                    config.preparing = confirmed;
+                }
+                return Err(error.context(format!(
+                    "failed to start {} as an ACP server",
+                    frozen_runtime.executable_path
+                )));
+            }
+        };
+        if let Some(config) = startup.config.as_mut() {
             config.preparing = false;
         }
-        let mut child = ManagedProcess::spawn(spec).with_context(|| {
-            format!(
-                "failed to start {} as an ACP server",
-                frozen_runtime.executable_path
-            )
-        })?;
+        startup.child = Some(child);
+        let child = startup.child.as_mut().expect("startup owns child");
         #[cfg(windows)]
         let account_builtin_bridge = match (child.account_authority(), builtin_tools.as_ref()) {
             (Some(authority), Some(config)) => match config.start_account_bridge(authority, child.account_filesystem()) {
@@ -2045,7 +2102,7 @@ impl AcpHost {
             account_filesystem: child.account_filesystem(),
             #[cfg(windows)]
             account_builtin_bridge: std::sync::Mutex::new(account_builtin_bridge),
-            child: Mutex::new(child),
+            child: Mutex::new(startup.child.take().expect("Host takes startup child")),
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
@@ -2086,10 +2143,7 @@ impl AcpHost {
                 },
             ),
             startup_diagnostics: Mutex::new(String::new()),
-            private_config_root: private_config.as_ref().map(|config| config.root.clone()),
-            remove_private_config_root_on_shutdown: private_config
-                .as_ref()
-                .is_some_and(|config| config.remove_on_shutdown),
+            private_config_root: startup.config.as_ref().map(|config| config.root.clone()),
             detector_config_root,
             ephemeral_config: Mutex::new(ephemeral_config),
             executable_path: PathBuf::from(&frozen_runtime.executable_path),
@@ -2145,14 +2199,17 @@ impl AcpHost {
             initialize_params["clientCapabilities"]["_meta"] =
                 json!({"opencode/child-session-updates": true});
         }
-        // V1 installs plugin dependencies in the background during catalog
-        // discovery. If that short-lived process exits first, its native lock
-        // expires after 60 seconds. Allow that bounded cold-start recovery;
-        // never delete native locks or resend an accepted prompt to recover.
-        let initialize_timeout = if host.adapter_kind == AdapterKind::OpencodeCli
+        let initialize_timeout = if host.adapter_kind == AdapterKind::HermesCli {
+            // Cover private Home preparation, the launcher's 55-second Gateway
+            // readiness budget, and the subsequent official ACP import/handshake.
+            Duration::from_secs(90)
+        } else if host.adapter_kind == AdapterKind::OpencodeCli
             && crate::opencode_compat::Generation::from_version(host.reported_version.as_deref())
                 == Some(crate::opencode_compat::Generation::V1)
         {
+            // V1 installs plugin dependencies during catalog discovery. If that
+            // process exits first, its native lock expires after 60 seconds.
+            // Allow recovery without deleting locks or resending accepted input.
             Duration::from_secs(90)
         } else {
             Duration::from_secs(45)
@@ -2175,13 +2232,30 @@ impl AcpHost {
                         "OpenCode initialize identity conflicts with the prepared launch contract (reported {version}); task input was not sent"
                     );
                 }
+                if host.adapter_kind == AdapterKind::HermesCli
+                    && !crate::hermes::supported_version(
+                        result.pointer("/agentInfo/version").and_then(Value::as_str),
+                    )
+                {
+                    host.shutdown().await;
+                    bail!("Rovai requires Hermes >= 0.22.4");
+                }
                 if host.adapter_kind == AdapterKind::CommandCodeCli {
-                    if let Err(error) = crate::command_code_acp::verify_ready(
-                        host.private_config_root
-                            .as_deref()
-                            .context("Command Code private Host missing")?,
-                        host.pid(),
-                    ) {
+                    let ready = {
+                        let child = host.child.lock().await;
+                        (|| {
+                            crate::command_code_acp::verify_ready(
+                                host.private_config_root
+                                    .as_deref()
+                                    .context("Command Code private Host missing")?,
+                                &command_bootstrap_nonce
+                                    .take()
+                                    .context("Command initialize nonce missing")?,
+                                |pid| child.owns_process_id(pid),
+                            )
+                        })()
+                    };
+                    if let Err(error) = ready {
                         host.shutdown().await;
                         return Err(error);
                     }
@@ -2677,6 +2751,99 @@ impl AcpHost {
     }
 
     async fn complete_pending(&self, id: u64, pending: PendingRpc, message: Value) {
+        if self.adapter_kind == AdapterKind::HermesCli {
+            let target = match &pending {
+                PendingRpc::Prompt {
+                    owner,
+                    session_id,
+                    prompt_id,
+                } => Some((owner.clone(), session_id.clone(), prompt_id.clone(), false)),
+                PendingRpc::Response {
+                    steer_target: Some(target),
+                    ..
+                } => Some((
+                    target.owner.clone(),
+                    target.session_id.clone(),
+                    target.prompt_id.clone(),
+                    true,
+                )),
+                _ => None,
+            };
+            if let Some((owner, session_id, prompt_id, supplement)) = target {
+                let terminal = {
+                    let mut routes = self.routes.write().await;
+                    let progress = routes.get_mut(&session_id).and_then(|route| {
+                        if route.owner != owner {
+                            return None;
+                        }
+                        match &mut route.phase {
+                            AcpSessionPhase::PromptActive(prompt)
+                                if prompt.prompt_id == prompt_id =>
+                            {
+                                Some(&mut prompt.hermes_progress)
+                            }
+                            _ => None,
+                        }
+                    });
+                    if let Some(progress) = progress {
+                        if supplement {
+                            progress.pending_steers = progress.pending_steers.saturating_sub(1);
+                            // A proven pre-admission rejection returns this input to
+                            // the normal queue, without failing the original work.
+                            let rejected = matches!(
+                                message["error"]["code"].as_i64(),
+                                Some(-32600 | -32601 | -32602)
+                            );
+                            if !rejected
+                                && message["result"]["stopReason"] != "end_turn"
+                                && progress.supplement_failure.is_none()
+                            {
+                                progress.supplement_failure = Some(message.clone());
+                            }
+                        } else {
+                            progress.original_terminal = Some((id, message.clone()));
+                        }
+                        if progress.pending_steers == 0 {
+                            progress.original_terminal.take().map(|(id, mut original)| {
+                                if original["result"]["stopReason"] == "end_turn"
+                                    && let Some(failure) = progress.supplement_failure.take()
+                                {
+                                    original = failure;
+                                    original["id"] = json!(id);
+                                }
+                                (id, original)
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                };
+                // Settle the correlated input before publishing the aggregate
+                // terminal. No model text or slash notice is used as a receipt.
+                if supplement {
+                    self.complete_single_pending(id, pending, message).await;
+                }
+                if let Some((id, message)) = terminal {
+                    self.complete_single_pending(
+                        id,
+                        PendingRpc::Prompt {
+                            owner,
+                            session_id,
+                            prompt_id,
+                        },
+                        message,
+                    )
+                    .await;
+                }
+                return;
+            }
+        }
+        self.complete_single_pending(id, pending, message).await;
+    }
+
+    async fn complete_single_pending(&self, id: u64, pending: PendingRpc, message: Value) {
         let response_error = message.get("error").map(AcpRpcError::from_response);
         let response = if let Some(error) = response_error.as_ref() {
             Err(self.redact_text(&error.diagnostic()))
@@ -2726,6 +2893,13 @@ impl AcpHost {
                 session_id,
                 prompt_id,
             } => {
+                let hermes_failed = self.adapter_kind == AdapterKind::HermesCli
+                    && message
+                        .pointer("/error/data/details")
+                        .and_then(Value::as_str)
+                        == Some("admitted_turn_failed");
+                let hermes_uncertain = self.adapter_kind == AdapterKind::HermesCli
+                    && crate::hermes::input_acceptance_uncertain(&message);
                 // An undrained Qwen callback item has never crossed stdin.
                 let mut queued = self.qwen_steering.lock().await;
                 let ids: Vec<_> = queued
@@ -2745,7 +2919,7 @@ impl AcpHost {
                     }
                 }
                 drop(queued);
-                let native_response_succeeded = response.is_ok();
+                let native_response_succeeded = response.is_ok() && !hermes_uncertain;
                 let cline_observations = if self.adapter_kind == AdapterKind::ClineCli {
                     match self
                         .capture_cline_observations(&session_id, &prompt_id, response.as_ref().ok())
@@ -2813,7 +2987,11 @@ impl AcpHost {
                     active_prompt
                 {
                     match (&response, response_error.as_ref()) {
-                        (Ok(_), _) if should_emit_input_disposition => {
+                        (Ok(_), _)
+                            if should_emit_input_disposition
+                                && (native_response_succeeded
+                                    || active_prompt.prompt_activity_observed) =>
+                        {
                             let _ = self.incoming.send(owner.input_accepted(
                                 self.adapter_kind,
                                 &self.host_instance_id,
@@ -2823,7 +3001,7 @@ impl AcpHost {
                         }
                         (Err(_), Some(_))
                             if should_emit_input_disposition
-                                && active_prompt.prompt_activity_observed =>
+                                && (active_prompt.prompt_activity_observed || hermes_failed) =>
                         {
                             // A matching terminal response alone may be a pre-execution
                             // rejection. Prompt-scoped activity observed before that matching
@@ -2836,7 +3014,9 @@ impl AcpHost {
                                 &active_prompt,
                             ));
                         }
-                        (Err(error), Some(response_error)) if should_emit_input_disposition => {
+                        (Err(error), Some(response_error))
+                            if should_emit_input_disposition && !hermes_uncertain =>
+                        {
                             let _ = self.incoming.send(owner.input_not_accepted(
                                 self.adapter_kind,
                                 &self.host_instance_id,
@@ -2847,12 +3027,16 @@ impl AcpHost {
                         }
                         _ => {}
                     }
-                    let input_disposition =
-                        if native_response_succeeded || active_prompt.prompt_activity_observed {
-                            "accepted"
-                        } else {
-                            "not_accepted"
-                        };
+                    let input_disposition = if native_response_succeeded
+                        || active_prompt.prompt_activity_observed
+                        || hermes_failed
+                    {
+                        "accepted"
+                    } else if hermes_uncertain {
+                        "unknown"
+                    } else {
+                        "not_accepted"
+                    };
                     if self.adapter_kind == AdapterKind::ClineCli && !cline_observations.is_empty()
                     {
                         for record in &cline_observations {
@@ -3485,6 +3669,7 @@ impl AcpHost {
                         | AdapterKind::KiroCli
                         | AdapterKind::TraeCnCli
                         | AdapterKind::MinimaxCodeCli
+                        | AdapterKind::HermesCli
                 ) && !active_prompt.acceptance_emitted
                     && (matches!(
                         message
@@ -4203,10 +4388,7 @@ impl AcpHost {
         if !matches!(filesystem_close.await, Ok(true)) {
             self.send_host_diagnostic("Account filesystem cleanup remains unconfirmed".into());
         }
-        if groups_reaped
-            && self.remove_private_config_root_on_shutdown
-            && let Some(root) = self.private_config_root.as_ref()
-        {
+        if groups_reaped && let Some(root) = self.private_config_root.as_ref() {
             let _ = std::fs::remove_dir_all(root);
         }
         if let Some(root) = self.detector_config_root.as_ref() {
@@ -4353,6 +4535,7 @@ impl AcpHost {
                 kimi_compaction_lifecycle: KimiCompactionLifecycle::Idle,
                 zcode_input_id: None,
                 codebuddy_request_id: None,
+                hermes_progress: HermesPromptProgress::default(),
             });
         }
         self.pending.lock().await.insert(
@@ -4375,15 +4558,13 @@ impl AcpHost {
         prepared: &AcpPreparedPrompt,
         text: &str,
     ) -> Result<()> {
+        let params = json!({"sessionId": session_id, "prompt": [{"type":"text", "text":text}]});
         if let Err(error) = self
             .send(json!({
                 "jsonrpc": "2.0",
                 "method": "session/prompt",
                 "id": prepared.request_id,
-                "params": {
-                    "sessionId": session_id,
-                    "prompt": [{"type": "text", "text": text}]
-                }
+                "params": params
             }))
             .await
         {
@@ -4701,6 +4882,12 @@ impl AcpSessionPermissions {
     fn from_frozen(frozen: &FrozenAgentRuntimeConfig) -> Result<Self> {
         let values = &frozen.permissions.values;
         let mode = match frozen.adapter_kind {
+            AdapterKind::HermesCli => Some(
+                values["permission_mode"]
+                    .as_str()
+                    .filter(|mode| matches!(*mode, "default" | "accept_edits" | "dont_ask"))
+                    .context("Hermes requires valid file edit policy")?,
+            ),
             AdapterKind::MinimaxCodeCli => Some(
                 values["permission_mode"]
                     .as_str()
@@ -4763,8 +4950,8 @@ impl AcpSessionPermissions {
 pub struct AcpRuntime {
     owner: AcpRuntimeOwner,
     host: Arc<AcpHost>,
-    runtime_compatibility_digest: String,
-    mcp_projection_digest: String,
+    compatibility: RuntimeCompatibilityKey,
+    mcp_projection_digest: Option<String>,
     session_id: RwLock<Option<String>>,
     session_result: RwLock<Option<Value>>,
     execution_root: PathBuf,
@@ -4824,6 +5011,7 @@ fn history_restore_allowed(adapter_kind: AdapterKind) -> bool {
             | AdapterKind::MinimaxCodeCli
             | AdapterKind::CommandCodeCli
             | AdapterKind::ClineCli
+            | AdapterKind::HermesCli
     )
 }
 
@@ -4918,8 +5106,8 @@ impl AcpRuntime {
     fn from_host(
         owner: AcpRuntimeOwner,
         host: Arc<AcpHost>,
-        runtime_compatibility_digest: String,
-        mcp_projection_digest: String,
+        compatibility: RuntimeCompatibilityKey,
+        mcp_projection_digest: Option<String>,
         execution_root: PathBuf,
         attachment_access_root: Option<PathBuf>,
         workspace_access: String,
@@ -4934,7 +5122,7 @@ impl AcpRuntime {
                 .as_ref()
                 .map(|filesystem| filesystem.for_run()),
             host,
-            runtime_compatibility_digest,
+            compatibility,
             mcp_projection_digest,
             session_id: RwLock::new(None),
             session_result: RwLock::new(None),
@@ -4946,6 +5134,32 @@ impl AcpRuntime {
             active_observation: Mutex::new(None),
             native_usage: Arc::new(Mutex::new(None)),
         })
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    fn from_test_host(
+        owner: AcpRuntimeOwner,
+        host: Arc<AcpHost>,
+        digest: String,
+        mcp: String,
+        execution_root: PathBuf,
+        attachment_access_root: Option<PathBuf>,
+        workspace_access: String,
+        session_permissions: AcpSessionPermissions,
+        dsh_model_source: Option<rovai_core::agent_profile::DshModelSource>,
+    ) -> Arc<Self> {
+        Self::from_host(
+            owner,
+            host,
+            RuntimeCompatibilityKey::member("test-camp", "test-member", digest),
+            Some(mcp),
+            execution_root,
+            attachment_access_root,
+            workspace_access,
+            session_permissions,
+            dsh_model_source,
+        )
     }
 
     pub(crate) async fn bind_managed_bootstrap(
@@ -4964,14 +5178,25 @@ impl AcpRuntime {
             );
         }
         if self.host.adapter_kind == AdapterKind::CommandCodeCli {
-            return crate::command_code_acp::bind_bootstrap(
-                self.host
-                    .private_config_root
-                    .as_deref()
-                    .context("Command Code private Host missing")?,
-                session_id,
-                bootstrap,
+            // Session preparation leaves the route Ready. Its notifications are
+            // metadata, and PendingRpc::Response returns only to this waiter;
+            // the control end_turn never accepts or completes a business input.
+            let prompt = crate::command_code_acp::bootstrap_prompt(bootstrap)?;
+            let result = self
+                .host
+                .rpc(
+                    "session/prompt",
+                    json!({
+                        "sessionId": session_id,
+                        "prompt": [{"type":"text", "text":prompt}],
+                    }),
+                )
+                .await?;
+            ensure!(
+                result["stopReason"] == "end_turn",
+                "command_code_bootstrap_update_failed"
             );
+            return Ok(());
         }
         if self.host.adapter_kind != AdapterKind::DeepseekHarness {
             bail!("DSH Bootstrap requires the DSH Adapter");
@@ -5036,29 +5261,45 @@ impl AcpRuntime {
         external_mcp_servers: &BTreeMap<String, McpServerDefinition>,
         new_session_native_rules: Option<&str>,
     ) -> Result<String> {
+        let continuation = self
+            .session_continuation(existing_session_id, capabilities)
+            .await;
         let cwd = acp_protocol_path(&self.execution_root);
-        let run_tmp = self
-            .host
-            .builtin_tool_process_config()
-            .context("ACP Runtime has no Built-in Tool Run tmp")?
-            .run_tmp();
-        let additional_directories =
-            session_additional_directories(self.attachment_access_root.as_deref(), Some(run_tmp))?;
-        let mut mcp_servers: Vec<Value> = if !matches!(
-            self.host.adapter_kind,
-            AdapterKind::CopilotCli
-                | AdapterKind::KiroCli
-                | AdapterKind::QoderCli
-                | AdapterKind::CodebuddyCli
-                | AdapterKind::QwenCode
-                | AdapterKind::CursorAgent
-                | AdapterKind::GrokBuild
-                | AdapterKind::ClineCli
-                | AdapterKind::CommandCodeCli
-        ) {
+        let additional_directories = if continuation == AcpSessionContinuation::ReuseSameHost {
+            Vec::new()
+        } else {
+            let run_tmp = self
+                .host
+                .builtin_tool_process_config()
+                .context("ACP Runtime has no Built-in Tool Run tmp")?
+                .run_tmp();
+            session_additional_directories(self.attachment_access_root.as_deref(), Some(run_tmp))?
+        };
+        let mut mcp_servers: Vec<Value> = if continuation != AcpSessionContinuation::ReuseSameHost
+            && !matches!(
+                self.host.adapter_kind,
+                AdapterKind::CopilotCli
+                    | AdapterKind::KiroCli
+                    | AdapterKind::QoderCli
+                    | AdapterKind::CodebuddyCli
+                    | AdapterKind::QwenCode
+                    | AdapterKind::CursorAgent
+                    | AdapterKind::GrokBuild
+                    | AdapterKind::ClineCli
+            ) {
             external_mcp_servers
                 .iter()
-                .map(|(name, definition)| external_acp_server(name, definition))
+                .map(|(name, definition)| {
+                    let mut server = external_acp_server(name, definition);
+                    if self.host.adapter_kind == AdapterKind::CommandCodeCli {
+                        crate::command_code_acp::adapt_mcp_server(
+                            &mut server,
+                            definition,
+                            &self.execution_root,
+                        );
+                    }
+                    server
+                })
                 .collect()
         } else {
             // These adapters receive Rovai servers through their native
@@ -5070,9 +5311,6 @@ impl AcpRuntime {
                 crate::dsh::resolve_mcp_command(server, &self.execution_root)?;
             }
         }
-        let continuation = self
-            .session_continuation(existing_session_id, capabilities)
-            .await;
         let new_session_native_rules = validate_new_session_native_rules(
             self.host.adapter_kind,
             continuation,
@@ -5109,24 +5347,6 @@ impl AcpRuntime {
                     }
                     #[cfg(not(windows))]
                     verify_codebuddy_restore_target(root, existing_session_id, &cwd).await?;
-                }
-                if self.host.adapter_kind == AdapterKind::CommandCodeCli {
-                    // Command Code 1.74.1 silently opens an empty Session when
-                    // resume/load names missing history. Its official catalog
-                    // must prove the exact target before either operation.
-                    let catalog = self
-                        .host
-                        .rpc_with_timeout(
-                            "session/list",
-                            json!({"cwd": cwd}),
-                            ACP_HISTORY_RESTORE_TIMEOUT,
-                        )
-                        .await?;
-                    crate::command_code_acp::verify_restore_target(
-                        &catalog,
-                        existing_session_id,
-                        &cwd,
-                    )?;
                 }
                 self.host
                     .bind_session(
@@ -5296,7 +5516,22 @@ impl AcpRuntime {
                 ));
             }
         }
-        if model_source == "explicit" {
+        if model_source == "explicit" && self.host.adapter_kind == AdapterKind::HermesCli {
+            anyhow::ensure!(
+                model_options
+                    .as_object()
+                    .is_some_and(|options| options.is_empty()),
+                "Hermes ACP does not support generic per-Session model options"
+            );
+            // Compare native provider forms locally; pass a changed choice intact.
+            let current = session_result
+                .as_ref()
+                .and_then(|session| session.pointer("/models/currentModelId"))
+                .and_then(Value::as_str);
+            if !crate::hermes::model_selection_matches(model, current) {
+                self.set_model(&session_id, model).await?;
+            }
+        } else if model_source == "explicit" {
             if self.host.adapter_kind == AdapterKind::DeepseekHarness {
                 let root = self
                     .host
@@ -5312,51 +5547,25 @@ impl AcpRuntime {
                     }));
                 }
             }
-            let session_result = session_result.as_ref().ok_or_else(|| {
-                anyhow::Error::new(AcpLiveModelValidationError {
-                    code: "runtime_model_catalog_unavailable",
+            // Pass explicit intent to the native setter even when the optional
+            // catalog is absent, incomplete, or does not enumerate this value.
+            if !model_options
+                .as_object()
+                .is_some_and(|options| options.values().all(Value::is_string))
+            {
+                return Err(anyhow::Error::new(AcpLiveModelValidationError {
+                    code: "runtime_model_options_invalid",
                     model_id: model.to_string(),
-                    detail: "the real ACP Session did not expose its catalog".to_string(),
-                })
-            })?;
-            let models = acp_model_catalog_for_adapter(self.host.adapter_kind, session_result)
-                .map_err(|error| {
-                    anyhow::Error::new(AcpLiveModelValidationError {
-                        code: "runtime_model_catalog_unavailable",
-                        model_id: model.to_string(),
-                        detail: error.to_string(),
-                    })
-                })?;
-            if matches!(
-                self.host.adapter_kind,
-                AdapterKind::DeepseekHarness | AdapterKind::MinimaxCodeCli
-            ) {
-                if !model_options
-                    .as_object()
-                    .is_some_and(|options| options.values().all(Value::is_string))
-                {
-                    return Err(anyhow::Error::new(AcpLiveModelValidationError {
-                        code: "runtime_model_options_invalid",
-                        model_id: model.to_string(),
-                        detail: "Model options must be an object of native string values"
-                            .to_string(),
-                    }));
-                }
-                rovai_core::agent_runtime_adapter::validate_live_model_selection(
-                    &models,
-                    model,
-                    &json!({}),
-                )?;
-            } else {
-                rovai_core::agent_runtime_adapter::validate_live_model_selection(
-                    &models,
-                    model,
-                    model_options,
-                )?;
+                    detail: "Model options must be an object of native string values".to_string(),
+                }));
             }
             if self.host.adapter_kind == AdapterKind::CodebuddyCli
                 && model.starts_with("custom-local:")
-                && acp_runtime_model_id_from_session(session_result).as_deref() == Some(model)
+                && session_result
+                    .as_ref()
+                    .and_then(acp_runtime_model_id_from_session)
+                    .as_deref()
+                    == Some(model)
             {
                 // This custom model was selected by the host's --model argument.
                 // CodeBuddy omits it from set_config_option's built-in choices.
@@ -5367,32 +5576,6 @@ impl AcpRuntime {
                 self.set_model(&session_id, model).await?;
             } else {
                 self.set_config_option(&session_id, "model", model).await?;
-            }
-            if self.host.adapter_kind == AdapterKind::MinimaxCodeCli {
-                let selected = self
-                    .session_result
-                    .read()
-                    .await
-                    .clone()
-                    .context("MiniMax selected model has no option state")?;
-                rovai_core::agent_runtime_adapter::validate_live_model_selection(
-                    &acp_model_catalog_for_adapter(self.host.adapter_kind, &selected)?,
-                    model,
-                    model_options,
-                )?;
-            }
-            if self.host.adapter_kind == AdapterKind::DeepseekHarness {
-                let selected = self
-                    .session_result
-                    .read()
-                    .await
-                    .clone()
-                    .context("DSH model selection has no option state")?;
-                crate::agent_runtime_adapter::validate_dsh_model_options(
-                    &selected,
-                    model,
-                    model_options,
-                )?;
             }
             if self.host.adapter_kind == AdapterKind::CodebuddyCli {
                 // Freeze the acknowledged selection, not session/new's old
@@ -5428,7 +5611,7 @@ impl AcpRuntime {
         if model_source == "explicit"
             && !matches!(
                 self.host.adapter_kind,
-                AdapterKind::KiroCli | AdapterKind::GrokBuild
+                AdapterKind::KiroCli | AdapterKind::GrokBuild | AdapterKind::HermesCli
             )
             && let Some(options) = model_options.as_object()
         {
@@ -5505,16 +5688,49 @@ impl AcpRuntime {
                 .await?;
             }
         }
+        if self.host.adapter_kind == AdapterKind::HermesCli {
+            let mode = self
+                .session_permissions
+                .mode
+                .as_deref()
+                .context("Hermes edit approval mode missing")?;
+            let current = session_result
+                .as_ref()
+                .and_then(|session| session.pointer("/modes/currentModeId"))
+                .and_then(Value::as_str);
+            if current != Some(mode) {
+                self.host
+                    .rpc(
+                        "session/set_mode",
+                        json!({"sessionId":session_id,"modeId":mode}),
+                    )
+                    .await?;
+            }
+        }
+        self.finish_session_attachment(&session_id, prebound_session)
+            .await?;
+        Ok(session_id)
+    }
+
+    async fn finish_session_attachment(
+        &self,
+        session_id: &str,
+        prebound_session: bool,
+    ) -> Result<()> {
         if prebound_session {
             self.host
-                .settle_loading_replay(&session_id, &self.owner)
+                .settle_loading_replay(session_id, &self.owner)
                 .await?;
         } else {
             self.host
-                .bind_session(&session_id, &self.owner, AcpSessionPhase::Ready)
+                .bind_session(session_id, &self.owner, AcpSessionPhase::Ready)
                 .await?;
         }
-        let previous_session_id = self.session_id.write().await.replace(session_id.clone());
+        let previous_session_id = self
+            .session_id
+            .write()
+            .await
+            .replace(session_id.to_string());
         if let Some(previous_session_id) = previous_session_id
             && previous_session_id != session_id
         {
@@ -5522,7 +5738,7 @@ impl AcpRuntime {
                 .unbind_session(&previous_session_id, &self.owner)
                 .await;
         }
-        Ok(session_id)
+        Ok(())
     }
 
     pub async fn session_capabilities(&self) -> AcpSessionCapabilities {
@@ -5580,44 +5796,17 @@ impl AcpRuntime {
                 }),
             )
             .await?;
-        if self.host.adapter_kind == AdapterKind::MinimaxCodeCli {
-            let options = result["configOptions"]
-                .as_array()
-                .context("MiniMax did not return configuration state")?;
-            ensure!(
-                options
-                    .iter()
-                    .any(|option| option["id"] == config_id && option["currentValue"] == value),
-                "MiniMax did not confirm requested configuration"
-            );
+        // Successful native replies need not repeat the catalog or selected value.
+        // Consume any returned option state without turning missing metadata into
+        // an execution failure.
+        if let Some(options) = result.get("configOptions").filter(|value| value.is_array()) {
             let mut selected = self
                 .session_result
                 .read()
                 .await
                 .clone()
-                .context("MiniMax Session has no option state")?;
-            selected["configOptions"] = result["configOptions"].clone();
-            *self.session_result.write().await = Some(selected.clone());
-            self.host
-                .remember_session(session_id, Some(&selected))
-                .await;
-        }
-        if self.host.adapter_kind == AdapterKind::DeepseekHarness {
-            let previous = self
-                .session_result
-                .read()
-                .await
-                .clone()
-                .context("DSH Session has no option state")?;
-            let model = if config_id == "model" {
-                value.to_string()
-            } else {
-                acp_runtime_model_id_from_session(&previous)
-                    .context("DSH Session has no selected model")?
-            };
-            let selected = crate::agent_runtime_adapter::dsh_model_config_after_selection(
-                &previous, &result, &model,
-            )?;
+                .unwrap_or_else(|| json!({}));
+            selected["configOptions"] = options.clone();
             *self.session_result.write().await = Some(selected.clone());
             self.host
                 .remember_session(session_id, Some(&selected))
@@ -5776,7 +5965,7 @@ impl AcpRuntime {
             .await
             .context("ACP Session is unavailable")?;
         let ingress = self.host.ingress_fence.lock().await;
-        let routes = self.host.routes.read().await;
+        let mut routes = self.host.routes.write().await;
         let active = self.host.is_alive() && routes.get(&session).is_some_and(|route|
             route.owner == self.owner && !route.client_terminal_create_cancelled
             && matches!(&route.phase, AcpSessionPhase::PromptActive(p) if p.prompt_id == expected_prompt));
@@ -5821,6 +6010,10 @@ impl AcpRuntime {
             _ => None,
         });
         let (method, params) = match self.adapter_kind() {
+            AdapterKind::HermesCli => (
+                "session/prompt",
+                json!({"sessionId":session,"prompt":[{"type":"text","text":format!("/steer {text}")}]}),
+            ),
             AdapterKind::CodebuddyCli if !codebuddy_legacy => (
                 "session/steer",
                 // An unobserved native owner must not become an unfenced send.
@@ -5864,6 +6057,12 @@ impl AcpRuntime {
         };
         let id = self.host.next_id.fetch_add(1, Ordering::Relaxed);
         let (sender, response) = oneshot::channel();
+        if self.adapter_kind() == AdapterKind::HermesCli
+            && let Some(route) = routes.get_mut(&session)
+            && let AcpSessionPhase::PromptActive(prompt) = &mut route.phase
+        {
+            prompt.hermes_progress.pending_steers += 1;
+        }
         // A supplement response is never the authoritative original Prompt
         // terminal. Legacy CodeBuddy returns end_turn before its tool ends.
         self.host.pending.lock().await.insert(
@@ -5882,8 +6081,9 @@ impl AcpRuntime {
                 }),
             },
         );
-        // Some transports cannot atomically bind to a native turn. Retire the
-        // exact Host for every path so no leftover queue reaches a successor.
+        // Some transports cannot atomically bind to a native turn. Do not reuse
+        // this ACP Host after steering. Hermes additionally drains submitted
+        // prompts above; closing its client does not stop the shared Gateway.
         self.host.retire_after_steer.store(true, Ordering::Release);
         timeout(
             Duration::from_secs(10),
@@ -5894,18 +6094,39 @@ impl AcpRuntime {
         .context("ACP active input write timed out")??;
         drop(routes);
         drop(ingress);
-        let result = timeout(
-            Duration::from_secs(if self.adapter_kind() == AdapterKind::ZcodeApp {
-                600
-            } else {
-                45
-            }),
-            response,
-        )
-        .await
-        .context("ACP active input response timed out")?
-        .context("ACP active input response disconnected")?;
+        // A slash steer normally returns immediately, but its native fallback
+        // is a full prompt. Use the Run's existing cancellation/lifetime budget.
+        let result = if self.adapter_kind() == AdapterKind::HermesCli {
+            response
+                .await
+                .context("Hermes supplemental prompt disconnected")?
+        } else {
+            timeout(
+                Duration::from_secs(if self.adapter_kind() == AdapterKind::ZcodeApp {
+                    600
+                } else {
+                    45
+                }),
+                response,
+            )
+            .await
+            .context("ACP active input response timed out")?
+            .context("ACP active input response disconnected")?
+        };
         let result = match result {
+            Err(error) if self.adapter_kind() == AdapterKind::HermesCli => {
+                if let Some(native) = error.downcast_ref::<AcpRpcError>() {
+                    if native.hermes_input_admitted {
+                        // Execution failure is retained in the aggregate terminal;
+                        // the input itself is known to have been admitted.
+                        return Ok(acp_prompt_id(&self.host.host_instance_id, id));
+                    }
+                    if matches!(native.code, Some(-32600 | -32601 | -32602)) {
+                        return Err(rovai_core::steer::ActiveInputNotAccepted.into());
+                    }
+                }
+                return Err(error);
+            }
             Err(error)
                 if self.adapter_kind() == AdapterKind::MinimaxCodeCli
                     && error.downcast_ref::<AcpRpcError>().is_some_and(|e| {
@@ -5943,6 +6164,9 @@ impl AcpRuntime {
             }
             result => result?,
         };
+        if self.adapter_kind() == AdapterKind::HermesCli && result["stopReason"] != "end_turn" {
+            bail!("Hermes did not confirm the supplemental prompt");
+        }
         if self.adapter_kind() == AdapterKind::MinimaxCodeCli
             && (result["mode"] != "steered" || result["turnId"].as_str().is_none_or(str::is_empty))
         {
@@ -6103,6 +6327,32 @@ impl AcpRuntime {
             .await
     }
 
+    pub async fn cancel_questionnaire_request(
+        &self,
+        native_prompt_id: &str,
+        request_id: Value,
+        kind: AcpPermissionRequestKind,
+    ) -> Result<()> {
+        {
+            let mut observation = self.active_observation.lock().await;
+            let observation = observation
+                .as_mut()
+                .filter(|observation| observation.prompt_id == native_prompt_id)
+                .context("ACP questionnaire targeted a stale Prompt")?;
+            if !observation
+                .questionnaire_request_ids
+                .insert(canonical_json_digest(&request_id)?)
+            {
+                return Ok(());
+            }
+            observation.unsupported_interaction = true;
+        }
+        // This is a client capability limit, never a user answer or refusal.
+        eprintln!("ACP native questionnaire cancelled by unsupported client: {kind:?}");
+        self.respond(request_id, json!({"outcome": {"outcome": "cancelled"}}))
+            .await
+    }
+
     pub async fn respond_error(&self, id: Value, code: i64, message: &str) -> Result<()> {
         self.host
             .send(json!({
@@ -6141,7 +6391,9 @@ impl AcpRuntime {
         }
         if method == "session/request_permission" {
             observation.assistant_suffix.observe_tool_activity();
-            observation.unsupported_interaction |= is_questionnaire_permission_request(params);
+            observation.unsupported_interaction |=
+                classify_permission_request(self.adapter_kind(), params)
+                    != AcpPermissionRequestKind::Execution;
             return Ok(None);
         }
         if method != "session/update" {
@@ -6653,11 +6905,10 @@ impl AcpCliRuntimeAdapter {
         if !launchable_acp_adapter(kind) {
             bail!("{} is not a launchable ACP Adapter", kind.as_str());
         }
-        #[cfg(target_os = "macos")]
-        ManagedProcess::recover_descendants(&self.private_runtime_dir.join("owned-processes"))?;
         if matches!(
             kind,
             AdapterKind::CopilotCli
+                | AdapterKind::GrokBuild
                 | AdapterKind::KiroCli
                 | AdapterKind::QoderCli
                 | AdapterKind::CodebuddyCli
@@ -6669,7 +6920,7 @@ impl AcpCliRuntimeAdapter {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn ensure_agent_run_runtime(
+    pub async fn ensure_agent_run_runtime<F, Fut>(
         &self,
         agent_run_id: &str,
         execution_epoch: i64,
@@ -6683,21 +6934,61 @@ impl AcpCliRuntimeAdapter {
         external_mcp_servers: &BTreeMap<String, McpServerDefinition>,
         mcp_projection_digest: &str,
         attachment_access_root: &Path,
-        runtime_compatibility_digest: &str,
+        runtime_compatibility_digest: &Option<String>,
         startup_bootstrap: Option<&str>,
-    ) -> Result<Arc<AcpRuntime>> {
+        prepare_cold: F,
+    ) -> Result<Arc<AcpRuntime>>
+    where
+        F: FnOnce(FrozenAgentRuntimeConfig) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<FrozenAgentRuntimeConfig>> + Send + 'static,
+    {
         if frozen_runtime.adapter_kind != self.kind {
             bail!("ACP Runtime received an AgentRun for another Adapter");
         }
         // Native mode/config RPCs are reapplied for each frozen Run even when
         // Fleet reuses a Host launched under a previous member configuration.
         let session_permissions = AcpSessionPermissions::from_frozen(frozen_runtime)?;
+        let execution_root = PathBuf::from(&workspace.execution_root).canonicalize()?;
+        let (compatibility, mcp_projection_digest) = if matches!(
+            self.kind,
+            AdapterKind::CommandCodeCli | AdapterKind::HermesCli
+        ) {
+            anyhow::ensure!(
+                runtime_compatibility_digest.is_none(),
+                "This Runtime uses Native Binding identity"
+            );
+            (
+                RuntimeCompatibilityKey::native_binding(
+                    camp_id,
+                    agent_id,
+                    native_binding_id,
+                    execution_root.clone(),
+                ),
+                None,
+            )
+        } else {
+            (
+                RuntimeCompatibilityKey::member_session(
+                    camp_id,
+                    agent_id,
+                    Some(native_binding_id),
+                    runtime_compatibility_digest
+                        .as_deref()
+                        .context("ACP compatibility digest missing")?,
+                ),
+                Some(mcp_projection_digest.to_owned()),
+            )
+        };
         let existing = { self.runtimes.lock().await.get(agent_run_id).cloned() };
         if let Some(existing) = existing {
             if existing.execution_epoch() == execution_epoch
                 && existing.host.is_alive()
-                && existing.runtime_compatibility_digest == runtime_compatibility_digest
-                && existing.mcp_projection_digest == mcp_projection_digest
+                && existing
+                    .compatibility
+                    .is_process_compatible_with(&compatibility)
+                && mcp_projection_digest
+                    .as_ref()
+                    .is_none_or(|digest| existing.mcp_projection_digest.as_ref() == Some(digest))
                 && existing.attachment_access_root.as_deref() == Some(attachment_access_root)
             {
                 return Ok(existing);
@@ -6709,24 +7000,21 @@ impl AcpCliRuntimeAdapter {
                 .release(agent_run_id, old_epoch, FleetReleaseDisposition::Stop)
                 .await;
         }
-        let execution_root = PathBuf::from(&workspace.execution_root);
         let spawn_execution_root = execution_root.clone();
         let spawn_workspace = workspace.clone();
         let mut spawn_frozen_runtime = frozen_runtime.clone();
         let spawn_environment_source = rovai_core::member_environment::launch_source();
-        let spawn_builtin_tool_factory = builtin_tool_factory.clone();
+        let spawn_builtin_tool_factory = if self.kind == AdapterKind::HermesCli {
+            builtin_tool_factory.clone().without_context_file()
+        } else {
+            builtin_tool_factory.clone()
+        };
         let spawn_external_mcp_servers = external_mcp_servers.clone();
         let spawn_attachment_access_root = attachment_access_root.to_path_buf();
         let spawn_private_runtime_dir = self.private_runtime_dir.clone();
         let spawn_startup_bootstrap = startup_bootstrap.map(str::to_owned);
         let spawn_incoming = self.incoming.clone();
         let spawn_compaction_policy = self.compaction_detector_policy;
-        let compatibility = RuntimeCompatibilityKey::member_session(
-            camp_id,
-            agent_id,
-            Some(native_binding_id),
-            runtime_compatibility_digest,
-        );
         if self.kind == AdapterKind::DeepseekHarness {
             // DSH persists exact Sessions but holds a native lock while the
             // previous Host owns them. Reap obsolete idle Hosts before resume;
@@ -6743,9 +7031,10 @@ impl AcpCliRuntimeAdapter {
                     agent_run_id: agent_run_id.to_string(),
                     execution_epoch,
                     adapter_kind: self.kind,
-                    compatibility,
+                    compatibility: compatibility.clone(),
                 },
                 move || async move {
+                    spawn_frozen_runtime = prepare_cold(spawn_frozen_runtime).await?;
                     spawn_frozen_runtime.environment =
                         rovai_core::member_environment::resolve_for_launch(
                             spawn_environment_source,
@@ -6787,8 +7076,8 @@ impl AcpCliRuntimeAdapter {
                 execution_epoch,
             },
             host,
-            runtime_compatibility_digest.to_string(),
-            mcp_projection_digest.to_string(),
+            compatibility,
+            mcp_projection_digest,
             execution_root,
             Some(attachment_access_root.to_path_buf()),
             if permission_semantics == PermissionSemantics::CoreEnforcedV1 {
@@ -6932,10 +7221,12 @@ impl AcpCliRuntimeAdapter {
 fn completed_run_release_disposition(adapter_kind: AdapterKind) -> FleetReleaseDisposition {
     if matches!(
         adapter_kind,
-        AdapterKind::KiroCli | AdapterKind::CursorAgent
+        AdapterKind::KiroCli | AdapterKind::CursorAgent | AdapterKind::HermesCli
     ) {
         // Kiro keeps a Native Session locked for the lifetime of its ACP
         // process. Cursor Host reuse remains outside the current contract.
+        // Hermes closes only its ACP client after each Run. Its shared native
+        // Gateway and original Session retain their own lifecycle.
         FleetReleaseDisposition::Stop
     } else {
         FleetReleaseDisposition::Reusable
@@ -6948,7 +7239,13 @@ pub(crate) fn runtime_compatibility_digest(
     permission_semantics: PermissionSemantics,
     external_mcp_servers: &BTreeMap<String, McpServerDefinition>,
     attachment_authorization: &ThreadOutputDirectory,
-) -> Result<String> {
+) -> Result<Option<String>> {
+    if matches!(
+        frozen_runtime.adapter_kind,
+        AdapterKind::CommandCodeCli | AdapterKind::HermesCli
+    ) {
+        return Ok(None);
+    }
     let execution_root = PathBuf::from(&workspace.execution_root)
         .canonicalize()
         .with_context(|| {
@@ -6977,6 +7274,22 @@ pub(crate) fn runtime_compatibility_digest(
         "externalMcpServers": external_mcp_servers,
         "attachmentOutputRoot": attachment_authorization.output_root,
     });
+    if frozen_runtime.adapter_kind == AdapterKind::CopilotCli {
+        compatibility["nativeQuestionnairePolicy"] = json!("no-ask-user-v1");
+    }
+    if frozen_runtime.adapter_kind == AdapterKind::CodebuddyCli {
+        compatibility["nativeBackgroundPolicy"] = json!("disabled-v1");
+    }
+    if frozen_runtime.adapter_kind == AdapterKind::QwenCode {
+        compatibility["nativeQuestionnairePolicy"] = json!("exclude-ask-user-question-v1");
+    }
+    if frozen_runtime.adapter_kind == AdapterKind::OpencodeCli
+        && crate::opencode_compat::Generation::from_version(
+            frozen_runtime.reported_version.as_deref(),
+        ) == Some(crate::opencode_compat::Generation::V2)
+    {
+        compatibility["nativeQuestionnairePolicy"] = json!("deny-question-v1");
+    }
     if is_grok {
         let compatibility = compatibility
             .as_object_mut()
@@ -6996,16 +7309,12 @@ pub(crate) fn runtime_compatibility_digest(
         compatibility["dshNativeConfigurationDigest"] =
             json!(crate::dsh::native_configuration_digest(&execution_root)?);
     }
-    if frozen_runtime.adapter_kind == AdapterKind::CommandCodeCli {
-        compatibility["commandCodeNativeConfigurationDigest"] = json!(
-            crate::command_code_acp::native_configuration_digest(&execution_root)?
-        );
-    }
     if frozen_runtime.adapter_kind == AdapterKind::ClineCli {
         compatibility["clineNativeConfigurationDigest"] =
             json!(crate::cline::runtime_configuration_digest()?);
     }
     if frozen_runtime.adapter_kind == AdapterKind::ZcodeApp {
+        compatibility["nativeQuestionnairePolicy"] = json!("deny-ask-user-question-v1");
         compatibility["zcodeNativeConfigurationDigest"] = json!(
             crate::zcode::NativeConfig::load_for_executable(
                 &execution_root,
@@ -7014,7 +7323,7 @@ pub(crate) fn runtime_compatibility_digest(
             .digest
         );
     }
-    canonical_json_digest(&compatibility)
+    canonical_json_digest(&compatibility).map(Some)
 }
 
 pub(crate) fn freeze_native_session_compatibility(
@@ -7030,7 +7339,6 @@ pub(crate) fn freeze_native_session_compatibility(
             | AdapterKind::GrokBuild
             | AdapterKind::ZcodeApp
             | AdapterKind::DeepseekHarness
-            | AdapterKind::CommandCodeCli
             | AdapterKind::ClineCli
     ) {
         return Ok(frozen_runtime);
@@ -7064,11 +7372,6 @@ pub(crate) fn freeze_native_session_compatibility(
     if adapter_kind == AdapterKind::DeepseekHarness {
         compatibility["dshNativeConfigurationDigest"] =
             json!(crate::dsh::native_configuration_digest(&execution_root)?);
-    }
-    if adapter_kind == AdapterKind::CommandCodeCli {
-        compatibility["commandCodeNativeConfigurationDigest"] = json!(
-            crate::command_code_acp::native_configuration_digest(&execution_root)?
-        );
     }
     if adapter_kind == AdapterKind::ClineCli {
         compatibility["clineNativeConfigurationDigest"] =
@@ -7121,16 +7424,69 @@ pub(crate) fn freeze_native_session_compatibility(
     Ok(frozen_runtime)
 }
 
+/// Between spawn and Host construction this local guard owns both process
+/// and materials. Its cleanup task retains both until reaping is confirmed.
+struct PreparedAcpProcess {
+    config: Option<PreparedPrivateHostConfig>,
+    child: Option<ManagedProcess>,
+}
+
+impl Drop for PreparedAcpProcess {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let mut config = self.config.take();
+        tokio::spawn(async move {
+            #[cfg(target_os = "linux")]
+            let captured = child.capture_descendants().is_ok();
+            #[cfg(not(target_os = "linux"))]
+            let captured = true;
+            let terminated = child.force_terminate_tree().is_ok();
+            let reaped = matches!(
+                timeout(Duration::from_secs(3), child.wait()).await,
+                Ok(Ok(_))
+            );
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            let confirmed = if captured && terminated && reaped {
+                loop {
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    let empty = child.captured_tree_is_empty();
+                    #[cfg(windows)]
+                    let empty = child.tree_is_empty();
+                    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+                    let empty = Ok::<bool, std::io::Error>(false);
+                    match empty {
+                        Ok(true) => break true,
+                        Err(_) => break false,
+                        Ok(false) if tokio::time::Instant::now() < deadline => {
+                            tokio::time::sleep(Duration::from_millis(10)).await
+                        }
+                        _ => break false,
+                    }
+                }
+            } else {
+                false
+            };
+            if !confirmed {
+                eprintln!("acp_startup_cleanup_unconfirmed: retaining Host materials");
+            }
+            if let Some(config) = config.as_mut() {
+                config.preparing = confirmed;
+            }
+        });
+    }
+}
+
 #[derive(Debug)]
 struct PreparedPrivateHostConfig {
     root: PathBuf,
-    remove_on_shutdown: bool,
     preparing: bool,
 }
 
 impl Drop for PreparedPrivateHostConfig {
     fn drop(&mut self) {
-        if self.preparing && self.remove_on_shutdown {
+        if self.preparing {
             let _ = std::fs::remove_dir_all(&self.root);
         }
     }
@@ -7140,38 +7496,35 @@ fn prepare_private_host_config(
     private_runtime_dir: &Path,
     adapter_kind: AdapterKind,
 ) -> Result<Option<PreparedPrivateHostConfig>> {
-    let (root, remove_on_shutdown) = match adapter_kind {
+    let root = match adapter_kind {
         AdapterKind::KiroCli
         | AdapterKind::DeepseekHarness
         | AdapterKind::ClineCli
         | AdapterKind::CommandCodeCli
-        | AdapterKind::MinimaxCodeCli => (
-            private_runtime_dir
-                .join("acp-host")
-                .join(uuid::Uuid::new_v4().to_string()),
-            true,
-        ),
+        | AdapterKind::MinimaxCodeCli => private_runtime_dir
+            .join("acp-host")
+            .join(uuid::Uuid::new_v4().to_string()),
         AdapterKind::ZcodeApp => {
             return Ok(Some(PreparedPrivateHostConfig {
                 root: crate::zcode::private_runtime_root("rvzc")?,
-                remove_on_shutdown: true,
                 preparing: true,
             }));
         }
         _ => return Ok(None),
     };
-    let root = rovai_core::platform::private_storage::prepare_private_directory(&root)
-        .with_context(|| {
-            format!(
-                "failed to create private ACP Host directory {}",
-                root.display()
-            )
-        })?;
-    Ok(Some(PreparedPrivateHostConfig {
+    let mut prepared = PreparedPrivateHostConfig {
         root,
-        remove_on_shutdown,
         preparing: true,
-    }))
+    };
+    prepared.root =
+        rovai_core::platform::private_storage::prepare_private_directory(&prepared.root)
+            .with_context(|| {
+                format!(
+                    "failed to create private ACP Host directory {}",
+                    prepared.root.display()
+                )
+            })?;
+    Ok(Some(prepared))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7207,6 +7560,13 @@ fn configure_runtime_command(
         .as_object()
         .context("ACP permission configuration must be an object")?;
     match runtime.adapter_kind {
+        AdapterKind::HermesCli => {
+            ensure!(
+                permission_semantics != PermissionSemantics::CoreEnforcedV1
+                    || workspace.access != "read_only",
+                "Hermes cannot enforce a read-only workspace"
+            );
+        } // official native ACP entry already configured
         AdapterKind::MinimaxCodeCli => {
             health::configure_acp_command(
                 command,
@@ -7221,11 +7581,7 @@ fn configure_runtime_command(
             );
         }
         AdapterKind::CommandCodeCli => {
-            crate::command_code_acp::configure_host(
-                command,
-                private_config_root.context("Command Code private Host directory missing")?,
-                external_mcp_servers,
-            )?;
+            command.arg("acp");
         }
         AdapterKind::ClineCli => {
             let root = private_config_root.context("Cline private Host directory missing")?;
@@ -7286,12 +7642,9 @@ fn configure_runtime_command(
             if let Some(root) = run_tmp {
                 command.arg("--add-dir").arg(root);
             }
+            command.arg("--no-ask-user");
             if isolated {
-                command.args([
-                    "--no-custom-instructions",
-                    "--no-ask-user",
-                    "--available-tools=",
-                ]);
+                command.args(["--no-custom-instructions", "--available-tools="]);
             }
             if !external_mcp_servers.is_empty() {
                 let config =
@@ -7356,6 +7709,12 @@ fn configure_runtime_command(
                     });
                 }
                 AdapterKind::CodebuddyCli => {
+                    // Apply launch defaults after env overlays; native settings
+                    // and any explicit overrides remain owned by CodeBuddy.
+                    command
+                        .env("CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS", "1")
+                        .env("CODEBUDDY_BASH_AUTO_BACKGROUND_DISABLED", "1")
+                        .env("CODEBUDDY_BASH_ASSISTANT_BUDGET_MS", "0");
                     // CodeBuddy resolves the launch model while creating an ACP
                     // Session. A custom provider cannot be selected later with
                     // session/set_model when session/new already rejected the
@@ -7372,6 +7731,7 @@ fn configure_runtime_command(
                     });
                 }
                 AdapterKind::QwenCode => {
+                    command.arg("--exclude-tools=ask_user_question");
                     command.arg("--approval-mode").arg(if legacy_read_only {
                         "plan"
                     } else {
@@ -8354,6 +8714,12 @@ pub fn intercepted_action_request(
     params: &Value,
     observed: Option<&ObservedAcpToolContext>,
 ) -> Result<InterceptedAcpActionRequest> {
+    validate_permission_request_identity(context.expected_session_id, params)?;
+    if classify_permission_request_with_context(context.adapter_kind, params, observed)
+        != AcpPermissionRequestKind::Execution
+    {
+        bail!("Native questionnaires are user input, not execution authorization");
+    }
     let session_id = params
         .get("sessionId")
         .and_then(Value::as_str)
@@ -8557,6 +8923,7 @@ pub fn automatically_allows_permission_requests(
         AdapterKind::CursorAgent => permissions["approval_policy"] == "force",
         AdapterKind::KimiCodeCli => permissions["permission_mode"] == "yolo",
         AdapterKind::MinimaxCodeCli => permissions["permission_mode"] == "bypassPermissions",
+        AdapterKind::HermesCli => false,
         AdapterKind::CodexCli
         | AdapterKind::Pi
         | AdapterKind::ClaudeCodeCli
@@ -8707,24 +9074,181 @@ pub fn rejection_result(request: &Value) -> Result<Value> {
     approval_result(request, option_id)
 }
 
-/// MiniMax encodes questionnaire answers as allow_once permission options.
-/// They are user input, never execution authorization (including bypass mode).
-pub fn is_questionnaire_permission_request(request: &Value) -> bool {
-    request
-        .get("options")
-        .and_then(Value::as_array)
-        .is_some_and(|options| {
-            options.iter().any(|option| {
-                option
-                    .get("optionId")
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| id.starts_with("questionnaire:"))
-            })
-        })
+pub fn validate_permission_request_identity(
+    expected_session_id: &str,
+    request: &Value,
+) -> Result<()> {
+    if request.get("sessionId").and_then(Value::as_str) != Some(expected_session_id) {
+        bail!("ACP permission request is outside the active Native Session");
+    }
+    if request
+        .pointer("/toolCall/toolCallId")
+        .and_then(Value::as_str)
+        .is_none_or(|id| id.trim().is_empty())
+    {
+        bail!("ACP permission request has no stable toolCallId");
+    }
+    Ok(())
 }
 
-pub fn legacy_approval_result(request: &Value, approved: bool) -> Result<Value> {
-    if is_questionnaire_permission_request(request) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcpPermissionRequestKind {
+    Execution,
+    Questionnaire,
+    MalformedQuestionnaire,
+}
+
+pub fn classify_permission_request_with_context(
+    adapter_kind: AdapterKind,
+    request: &Value,
+    observed: Option<&ObservedAcpToolContext>,
+) -> AcpPermissionRequestKind {
+    let direct = classify_permission_request(adapter_kind, request);
+    // Sparse ACP permission frames may omit metadata already observed for the
+    // exact Session/Prompt/toolCallId. Losing that metadata must not admit Submit.
+    if adapter_kind == AdapterKind::QwenCode
+        && let Some(observed) = observed
+        && let Some(meta) = &observed.stable_meta
+    {
+        let mut proposal = request.clone();
+        proposal["toolCall"]["_meta"] = meta.clone();
+        if let Some(raw_input) = &observed.raw_input {
+            proposal["toolCall"]["rawInput"] = raw_input.clone();
+        }
+        let prior = classify_permission_request(adapter_kind, &proposal);
+        if prior != AcpPermissionRequestKind::Execution {
+            if request
+                .pointer("/toolCall/_meta")
+                .is_some_and(|current| current != meta)
+            {
+                return AcpPermissionRequestKind::MalformedQuestionnaire;
+            }
+            return prior;
+        }
+    }
+    direct
+}
+
+/// Classification is adapter-specific. A known question with missing or
+/// contradictory fields must not fall back to execution authorization.
+pub fn classify_permission_request(
+    adapter_kind: AdapterKind,
+    request: &Value,
+) -> AcpPermissionRequestKind {
+    use AcpPermissionRequestKind::*;
+    let options = request.get("options").and_then(Value::as_array);
+    // Preserve the existing MiniMax questionnaire fallback across adapters.
+    if options.is_some_and(|options| {
+        options.iter().any(|option| {
+            option
+                .get("optionId")
+                .and_then(Value::as_str)
+                .is_some_and(|id| id.starts_with("questionnaire:"))
+        })
+    }) {
+        return Questionnaire;
+    }
+    let tool = &request["toolCall"];
+    let meta = &tool["_meta"];
+    let valid = match adapter_kind {
+        AdapterKind::HermesCli
+            if tool["toolCallId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("clarify-")) =>
+        {
+            // Official ACP falls back to a permission card when form elicitation
+            // is unavailable. An open question has no choices, only Skip.
+            tool["toolCallId"].as_str().unwrap().len() > "clarify-".len()
+                && tool["kind"] == "other"
+                && tool["rawInput"]["question"]
+                    .as_str()
+                    .is_some_and(|question| !question.trim().is_empty())
+                && tool["title"] == tool["rawInput"]["question"]
+                && tool["rawInput"]["choices"]
+                    .as_array()
+                    .is_some_and(|choices| {
+                        options.is_some_and(|options| {
+                            options.len() == choices.len() + 1
+                                && choices.iter().zip(options).enumerate().all(
+                                    |(index, (choice, option))| {
+                                        choice.as_str().is_some()
+                                            && option["optionId"] == format!("choice-{index}")
+                                            && option["kind"] == "allow_once"
+                                            && option["name"] == *choice
+                                    },
+                                )
+                                && options.last().is_some_and(|option| {
+                                    option["optionId"] == "skip" && option["kind"] == "reject_once"
+                                })
+                        })
+                    })
+        }
+        AdapterKind::KimiCodeCli if tool["title"] == "AskUserQuestion" => {
+            // kimi-code 2.1.1's ACP fallback exposes only the first question.
+            options.is_some_and(|options| {
+                options.len() >= 2
+                    && options[..options.len() - 1]
+                        .iter()
+                        .enumerate()
+                        .all(|(index, option)| {
+                            option["optionId"] == format!("q0_opt_{index}")
+                                && option["kind"] == "allow_once"
+                        })
+                    && options.last().is_some_and(|option| {
+                        option["optionId"] == "q0_skip" && option["kind"] == "reject_once"
+                    })
+                    && meta
+                        .get("toolName")
+                        .is_none_or(|name| name == "AskUserQuestion")
+            })
+        }
+        AdapterKind::QwenCode
+            if meta["toolName"] == "ask_user_question"
+                || meta["qwenInteractionKind"] == "user_question"
+                || meta.get("qwenQuestions").is_some() =>
+        {
+            meta["toolName"] == "ask_user_question"
+                && meta["qwenInteractionKind"] == "user_question"
+                && meta
+                    .get("qwenQuestions")
+                    .and_then(Value::as_array)
+                    .is_some_and(|questions| {
+                        !questions.is_empty()
+                            && questions.iter().all(|question| {
+                                question
+                                    .get("question")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|text| !text.trim().is_empty())
+                                    && question
+                                        .get("options")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(|options| !options.is_empty())
+                            })
+                    })
+                && tool.pointer("/rawInput/questions") == meta.get("qwenQuestions")
+                && options.is_some_and(|options| {
+                    options.len() == 2
+                        && options[0]["optionId"] == "proceed_once"
+                        && options[0]["kind"] == "allow_once"
+                        && options[1]["optionId"] == "cancel"
+                        && options[1]["kind"] == "reject_once"
+                })
+        }
+        _ => return Execution,
+    };
+    if valid {
+        Questionnaire
+    } else {
+        MalformedQuestionnaire
+    }
+}
+
+pub fn legacy_approval_result(
+    adapter_kind: AdapterKind,
+    request: &Value,
+    approved: bool,
+) -> Result<Value> {
+    if classify_permission_request(adapter_kind, request) != AcpPermissionRequestKind::Execution {
         return Ok(json!({"outcome": {"outcome": "cancelled"}}));
     }
     let options = request
@@ -8834,9 +9358,13 @@ pub fn completed_action(
         "locations": update.get("locations"),
     }))?;
     let effect_disposition = acp_effect_disposition(succeeded, &native_kind);
-    let public_file_changes = (succeeded && adapter_kind != AdapterKind::MinimaxCodeCli)
-        .then(|| public_acp_file_changes(update.get("content")))
-        .flatten();
+    let public_file_changes = (succeeded
+        && !matches!(
+            adapter_kind,
+            AdapterKind::MinimaxCodeCli | AdapterKind::HermesCli
+        ))
+    .then(|| public_acp_file_changes(update.get("content")))
+    .flatten();
     let public_file_operation_path = (succeeded
         && matches!(native_kind.as_str(), "read" | "edit" | "write"))
     .then(|| single_public_acp_location_path(update.get("locations")))
@@ -8918,7 +9446,10 @@ fn reconcile_completed_action(
     }
     if matches!(completion.outcome, ActionResultOutcome::Succeeded)
         && completion.public_file_changes.is_none()
-        && adapter_kind != AdapterKind::MinimaxCodeCli
+        && !matches!(
+            adapter_kind,
+            AdapterKind::MinimaxCodeCli | AdapterKind::HermesCli
+        )
     {
         completion.public_file_changes = observed.public_file_changes;
     }
@@ -9000,7 +9531,10 @@ fn reconcile_completed_action(
     .map(str::to_string);
     if matches!(completion.outcome, ActionResultOutcome::Succeeded)
         && completion.public_file_changes.is_none()
-        && adapter_kind != AdapterKind::MinimaxCodeCli
+        && !matches!(
+            adapter_kind,
+            AdapterKind::MinimaxCodeCli | AdapterKind::HermesCli
+        )
         && completion.native_kind == "edit"
         && let Some(path) = completion.public_file_operation_path.as_deref()
     {
@@ -9314,8 +9848,8 @@ fn canonicalize_allow_missing(path: &Path) -> Result<PathBuf> {
 mod route_policy_tests {
     use super::*;
 
-    #[test]
-    fn private_host_config_is_scoped_to_profiles_that_require_it() {
+    #[tokio::test]
+    async fn private_host_config_is_scoped_to_profiles_that_require_it() {
         let root = std::env::temp_dir().join(format!(
             "rovai-private-host-config-{}",
             uuid::Uuid::new_v4()
@@ -9327,13 +9861,10 @@ mod route_policy_tests {
             .unwrap()
             .unwrap();
         assert_ne!(kiro_one.root, kiro_two.root);
-        assert!(kiro_one.remove_on_shutdown);
-        assert!(kiro_two.remove_on_shutdown);
         let cline = prepare_private_host_config(&root, AdapterKind::ClineCli)
             .unwrap()
             .unwrap();
         assert_ne!(cline.root, kiro_one.root);
-        assert!(cline.remove_on_shutdown);
         let abandoned = cline.root.clone();
         drop(cline);
         assert!(!abandoned.exists());
@@ -9353,6 +9884,12 @@ mod route_policy_tests {
         assert!(!abandoned.exists());
 
         assert!(
+            prepare_private_host_config(&root, AdapterKind::CodebuddyCli)
+                .unwrap()
+                .is_none()
+        );
+
+        assert!(
             prepare_private_host_config(&root, AdapterKind::CursorAgent)
                 .unwrap()
                 .is_none()
@@ -9364,6 +9901,38 @@ mod route_policy_tests {
         );
         assert!(!root.join("home").exists());
 
+        #[cfg(unix)]
+        {
+            let mut config = prepare_private_host_config(&root, AdapterKind::CommandCodeCli)
+                .unwrap()
+                .unwrap();
+            let path = config.root.clone();
+            let mut command = Command::new("/bin/sleep");
+            command.arg("60").current_dir(&root);
+            let spec = ManagedProcessLaunchSpec::capture(
+                &command,
+                ManagedProcessPurpose::RuntimeHost,
+                ManagedStdinPolicy::Piped,
+                ManagedWindowsArgvDialect::MicrosoftCrt,
+                "startup-cleanup",
+            )
+            .unwrap();
+            let child = ManagedProcess::spawn(spec).unwrap();
+            let pid = child.id().unwrap();
+            config.preparing = false;
+            drop(PreparedAcpProcess {
+                config: Some(config),
+                child: Some(child),
+            });
+            timeout(Duration::from_secs(8), async {
+                while path.exists() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("startup failure must reap before removing its materials");
+            assert_eq!(unsafe { libc::kill(pid as i32, 0) }, -1);
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -9700,11 +10269,16 @@ mod compaction_detector_tests {
                         json!([
                             {"action":"*","resource":"*","effect":mode},
                             {"action":"shell","resource":"*","effect":"allow"},
-                            {"action":"skill","resource":"*","effect":"allow"}
+                            {"action":"skill","resource":"*","effect":"allow"},
+                            {"action":"question","resource":"*","effect":"deny"}
                         ])
                     );
                     assert_eq!(
                         config["agents"]["plan"]["permissions"],
+                        config["permissions"]
+                    );
+                    assert_eq!(
+                        config["agents"]["build"]["permissions"],
                         config["permissions"]
                     );
                 }
@@ -9810,25 +10384,54 @@ mod tests {
             "ACP error -32603: Internal error: failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."
         );
 
-        let redacted_detail = AcpRpcError::from_response(&json!({
+        let string_detail = AcpRpcError::from_response(&json!({
             "code": -32603,
             "message": "Internal error",
-            "data": { "error": "provider failed with api_key=must-not-leak" }
+            "data": "Model usage has reached personal quota limit. Please check usage or contact administrator."
         }));
         assert_eq!(
-            redacted_detail.diagnostic(),
-            "ACP error -32603: Internal error: provider failed with api_key=[redacted]"
+            string_detail.diagnostic(),
+            "ACP error -32603: Internal error: Model usage has reached personal quota limit. Please check usage or contact administrator."
         );
 
-        let unlisted_detail = AcpRpcError::from_response(&json!({
-            "code": -32603,
-            "message": "Internal error",
-            "data": { "detail": "must remain private" }
-        }));
-        assert_eq!(
-            unlisted_detail.diagnostic(),
-            "ACP error -32603: Internal error"
-        );
+        for data in [
+            json!("provider failed with api_key=must-not-leak"),
+            json!({ "error": "provider failed with api_key=must-not-leak" }),
+        ] {
+            let redacted_detail = AcpRpcError::from_response(&json!({
+                "code": -32603,
+                "message": "Internal error",
+                "data": data
+            }));
+            assert_eq!(
+                redacted_detail.diagnostic(),
+                "ACP error -32603: Internal error: provider failed with api_key=[redacted]"
+            );
+        }
+
+        for data in [
+            json!({ "detail": "must remain private" }),
+            json!({ "error": { "message": "must remain private" } }),
+            json!({ "error": ["must remain private"] }),
+            json!(["must remain private"]),
+            json!(42),
+            json!(false),
+            Value::Null,
+            json!(" \n "),
+            json!("Internal error"),
+            json!({ "error": "Internal error" }),
+            json!("prompt: must remain private"),
+        ] {
+            let unlisted_detail = AcpRpcError::from_response(&json!({
+                "code": -32603,
+                "message": "Internal error",
+                "data": data
+            }));
+            assert_eq!(
+                unlisted_detail.diagnostic(),
+                "ACP error -32603: Internal error"
+            );
+        }
 
         for (message, expected) in [
             (
@@ -9901,6 +10504,25 @@ mod tests {
             (AdapterKind::KimiCodeCli, -32002, json!({}), false),
             (AdapterKind::QwenCode, -32602, json!({}), false),
             (AdapterKind::CopilotCli, -32603, json!({}), false),
+            (
+                AdapterKind::HermesCli,
+                -32603,
+                json!({"details":"not_found"}),
+                true,
+            ),
+            (
+                AdapterKind::HermesCli,
+                -32603,
+                json!({"details":"connection_lost"}),
+                false,
+            ),
+            (
+                AdapterKind::HermesCli,
+                -32001,
+                json!({"code":"HERMES_SESSION_NOT_FOUND","sessionId":"old"}),
+                false,
+            ),
+            (AdapterKind::HermesCli, -32603, json!({}), false),
             (AdapterKind::ZcodeApp, -32004, json!({}), true),
             (AdapterKind::ZcodeApp, -32000, json!({}), false),
             (
@@ -10062,8 +10684,8 @@ mod tests {
                 values: json!({"permission_mode": "default"}),
             },
             native_session_compatibility_key: None,
-            binding_compatibility_digest: "sha256:binding".to_string(),
-            host_config_digest: "sha256:host".to_string(),
+            binding_compatibility_digest: Some("sha256:binding".to_string()),
+            host_config_digest: Some("sha256:host".to_string()),
             config_digest: "sha256:config".to_string(),
         }
     }
@@ -10095,8 +10717,8 @@ mod tests {
                 values: json!({"trust_all_tools": "on"}),
             },
             native_session_compatibility_key: Some("kiro-cli:acp-v1".to_string()),
-            binding_compatibility_digest: "sha256:binding".to_string(),
-            host_config_digest: "sha256:host".to_string(),
+            binding_compatibility_digest: Some("sha256:binding".to_string()),
+            host_config_digest: Some("sha256:host".to_string()),
             config_digest: "sha256:config".to_string(),
         }
     }
@@ -10135,8 +10757,8 @@ mod tests {
                 }),
             },
             native_session_compatibility_key: Some("cursor-agent:acp-v1:sha256:cursor".to_string()),
-            binding_compatibility_digest: "sha256:binding".to_string(),
-            host_config_digest: "sha256:host".to_string(),
+            binding_compatibility_digest: Some("sha256:binding".to_string()),
+            host_config_digest: Some("sha256:host".to_string()),
             config_digest: "sha256:config".to_string(),
         }
     }
@@ -10168,8 +10790,8 @@ mod tests {
                 values: json!({"permission_mode": "default"}),
             },
             native_session_compatibility_key: Some("kimi-code-cli:acp-v1".to_string()),
-            binding_compatibility_digest: "sha256:binding".to_string(),
-            host_config_digest: "sha256:host".to_string(),
+            binding_compatibility_digest: Some("sha256:binding".to_string()),
+            host_config_digest: Some("sha256:host".to_string()),
             config_digest: "sha256:config".to_string(),
         }
     }
@@ -10201,8 +10823,8 @@ mod tests {
                 values: json!({"permission_mode": "bypassPermissions"}),
             },
             native_session_compatibility_key: Some("grok-build:acp-v1".to_string()),
-            binding_compatibility_digest: "sha256:binding".to_string(),
-            host_config_digest: "sha256:host".to_string(),
+            binding_compatibility_digest: Some("sha256:binding".to_string()),
+            host_config_digest: Some("sha256:host".to_string()),
             config_digest: "sha256:config".to_string(),
         }
     }
@@ -10487,13 +11109,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "run-client-fs-proxy".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -10640,13 +11262,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "run-kimi-038-terminal-wire".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -11294,13 +11916,13 @@ done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "run-kimi-terminal-cancel".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -11631,8 +12253,26 @@ done
         );
         session["models"]["currentModelId"] = Value::Null;
         assert!(codebuddy_context_model(&session).is_none());
-        let root = std::env::temp_dir();
+        let root =
+            std::env::temp_dir().join(format!("rovai-codebuddy-policy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join(".codebuddy")).unwrap();
+        // Native settings, including parse errors, belong to the CLI. Launch
+        // preparation must not read or copy any of these files.
+        let native_paths = [
+            root.join("settings.json"),
+            root.join(".codebuddy/settings.json"),
+            root.join(".codebuddy/settings.local.json"),
+        ];
+        let native_text = "{native-settings-are-cli-owned";
+        for path in &native_paths {
+            std::fs::write(path, native_text).unwrap();
+        }
         let workspace = AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().to_string());
+        let policy = [
+            ("CODEBUDDY_CODE_DISABLE_BACKGROUND_TASKS", "1"),
+            ("CODEBUDDY_BASH_AUTO_BACKGROUND_DISABLED", "1"),
+            ("CODEBUDDY_BASH_ASSISTANT_BUDGET_MS", "0"),
+        ];
         for (source, model_id, expected) in [
             ("runtime_default", "codebuddy-cli://runtime-default", None),
             (
@@ -11641,33 +12281,75 @@ done
                 Some("custom-local:MiniMax-M3"),
             ),
         ] {
-            let mut runtime = frozen_kiro_runtime();
-            runtime.adapter_kind = AdapterKind::CodebuddyCli;
-            runtime.permissions.adapter_kind = AdapterKind::CodebuddyCli;
-            runtime.permissions.values = json!({"permission_mode":"bypassPermissions"});
-            runtime.model.source = source.to_string();
-            runtime.model.model_id = model_id.to_string();
-            let mut command = Command::new("/usr/bin/true");
-            configure_runtime_command(
-                &mut command,
-                &workspace,
-                PermissionSemantics::RuntimeManagedV2,
-                &runtime,
-                false,
-                &BTreeMap::new(),
-                &root,
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-            let arguments = command.as_std().get_args().collect::<Vec<_>>();
-            let selected = arguments
-                .windows(2)
-                .find(|pair| pair[0] == "--model")
-                .map(|pair| pair[1].to_str().unwrap());
-            assert_eq!(selected, expected);
+            for with_mcp in [false, true] {
+                let mut runtime = frozen_kiro_runtime();
+                runtime.adapter_kind = AdapterKind::CodebuddyCli;
+                runtime.permissions.adapter_kind = AdapterKind::CodebuddyCli;
+                runtime.permissions.values = json!({"permission_mode":"bypassPermissions"});
+                runtime.model.source = source.to_string();
+                runtime.model.model_id = model_id.to_string();
+                let mut command = Command::new("/usr/bin/true");
+                command.env("CODEBUDDY_CONFIG_DIR", &root);
+                command.env("PROCESS_ONLY", "preserved");
+                for (key, _) in policy {
+                    command.env(key, "9");
+                }
+                let servers = if with_mcp {
+                    BTreeMap::from([(
+                        "fixture".into(),
+                        McpServerDefinition::StreamableHttp {
+                            url: "https://mcp.invalid/example".into(),
+                            headers: BTreeMap::new(),
+                        },
+                    )])
+                } else {
+                    BTreeMap::new()
+                };
+                let mcp = configure_runtime_command(
+                    &mut command,
+                    &workspace,
+                    PermissionSemantics::RuntimeManagedV2,
+                    &runtime,
+                    false,
+                    &servers,
+                    &root,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(
+                    mcp.is_some(),
+                    with_mcp,
+                    "policy precedes the MCP early return"
+                );
+                let arguments = command.as_std().get_args().collect::<Vec<_>>();
+                let selected = arguments
+                    .windows(2)
+                    .find(|pair| pair[0] == "--model")
+                    .map(|pair| pair[1].to_str().unwrap());
+                assert_eq!(selected, expected);
+                assert!(!arguments.iter().any(|arg| *arg == "--settings"));
+                assert!(!root.join("acp-host").exists());
+                for (key, value) in policy.into_iter().chain([("PROCESS_ONLY", "preserved")]) {
+                    assert_eq!(
+                        command
+                            .as_std()
+                            .get_envs()
+                            .find(|(name, _)| *name == key)
+                            .unwrap()
+                            .1
+                            .unwrap(),
+                        value
+                    );
+                }
+                for path in &native_paths {
+                    assert_eq!(std::fs::read_to_string(path).unwrap(), native_text);
+                }
+                drop(mcp);
+            }
         }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -11796,13 +12478,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "run-cursor-private".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -11939,12 +12621,11 @@ while IFS= read -r ignored; do :; done
         }
     }
 
-    // Native process / Mod loading / ACP routing cannot be proved by a fake
-    // transport. This opt-in smoke never sends an LLM prompt: /acp is an
-    // advertised native control command. Generation is verified separately.
+    // Opt-in generation smoke through the actual managed process and ACP Host.
+    // The caller supplies an isolated HOME with a local deterministic Provider.
     #[tokio::test]
-    #[ignore = "requires isolated Command Code 1.74.1 native Home and executable"]
-    async fn isolated_command_code_acp_bootstrap_gate_and_resident_sessions() {
+    #[ignore = "requires isolated Command Code 1.88.0 and a local deterministic Provider"]
+    async fn isolated_command_code_acp_direct_bootstrap_and_cold_resume() {
         use crate::runtime_startup::{RuntimeEnvironmentVariable, RuntimeStartupConfiguration};
         let root = PathBuf::from(
             std::env::var_os("ROVAI_COMMAND_CODE_SMOKE_ROOT").expect("isolated root required"),
@@ -11953,7 +12634,7 @@ while IFS= read -r ignored; do :; done
             std::env::var_os("ROVAI_COMMAND_CODE_SMOKE_EXECUTABLE")
                 .expect("isolated executable required"),
         );
-        assert!(root.is_absolute() && root.join("home/.commandcode/auth.json").is_file());
+        assert!(root.is_absolute() && root.join("home/.commandcode/providers.json").is_file());
         let paths = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
         let search = crate::runtime_discovery::RuntimeSearchEnvironment::for_test_paths(1, paths)
             .with_startup_configuration(
@@ -11965,6 +12646,7 @@ while IFS= read -r ignored; do :; done
                         value: root.join("home").to_string_lossy().into_owned(),
                     }],
                     custom_api_snapshot: None,
+                    common_environment_unavailable: false,
                 },
             );
         crate::runtime_discovery::with_runtime_configuration(
@@ -11973,211 +12655,115 @@ while IFS= read -r ignored; do :; done
             async {
                 let cwd = root.join("workspace");
                 std::fs::create_dir_all(&cwd).unwrap();
-                let workspace =
-                    AgentRunWorkspace::runtime_managed_path(cwd.to_string_lossy().into_owned());
+                let workspace = AgentRunWorkspace::runtime_managed_path(cwd.to_string_lossy().into_owned());
                 let mut frozen = frozen_trae_runtime(&executable);
                 frozen.adapter_kind = AdapterKind::CommandCodeCli;
-                frozen.reported_version = Some("1.74.1".into());
+                frozen.reported_version = Some("1.88.0".into());
                 frozen.permissions.adapter_kind = AdapterKind::CommandCodeCli;
                 frozen.permissions.values = json!({"permission_mode":"bypass"});
-                let (incoming, mut receiver) = mpsc::unbounded_channel();
-                let host = AcpHost::spawn(
-                    &cwd,
-                    &workspace,
-                    PermissionSemantics::RuntimeManagedV2,
-                    &frozen,
-                    incoming,
-                    Some(exact_builtin_tools(&root)),
-                    CompactionDetectorPolicy::Disabled,
-                    true,
-                    &BTreeMap::new(),
-                    &root.join("private"),
-                    None,
-                    None,
-                )
-                .await
-                .unwrap();
-                let pid = host.pid();
-                let mut sessions = Vec::new();
-                for i in 0..2 {
-                    let runtime = AcpRuntime::from_host(
-                        AcpRuntimeOwner {
-                            agent_run_id: format!("command-control-{i}"),
-                            execution_epoch: 1,
-                        },
-                        host.clone(),
-                        "compatibility".into(),
-                        "mcp".into(),
-                        cwd.clone(),
-                        Some(exact_attachment_root(&root)),
-                        "runtime_managed".into(),
-                        AcpSessionPermissions::from_frozen(&frozen).unwrap(),
-                        frozen.model.dsh_source,
+                let mut session_id = None;
+                let mut previous_pid = None;
+                // Same-Host A→B→A, a full-budget value, then a new Host/exact ID.
+                for (host_index, bodies) in [
+                    vec!["ROVAI_DIRECT_A\n合成指令 \"引号\" \\ = ${literal}".to_owned(),
+                         "ROVAI_DIRECT_B\n下一轮指令".into(),
+                         "ROVAI_DIRECT_A\n合成指令 \"引号\" \\ = ${literal}".into(),
+                         "\"".repeat(crate::context::MAX_SESSION_BOOTSTRAP_BYTES)],
+                    vec!["ROVAI_DIRECT_C\n冷恢复指令".to_owned()],
+                ].into_iter().enumerate() {
+                    let (incoming, mut receiver) = mpsc::unbounded_channel();
+                    let host = AcpHost::spawn(
+                        &cwd, &workspace, PermissionSemantics::RuntimeManagedV2,
+                        &frozen, incoming, Some(exact_builtin_tools(&root)),
+                        CompactionDetectorPolicy::Disabled, true, &BTreeMap::new(),
+                        &root.join("private"), None, None,
+                    ).await.unwrap();
+                    let host_root = host.private_config_root.as_ref().unwrap();
+                    assert_eq!(std::fs::read_dir(host_root).unwrap().count(), 1);
+                    assert!(host_root.join("rovai-bootstrap.mjs").is_file());
+                    assert!(!host_root.join("bindings").exists());
+                    let pid = host.pid();
+                    assert_ne!(pid, previous_pid);
+                    previous_pid = pid;
+                    let runtime = AcpRuntime::from_test_host(
+                        AcpRuntimeOwner { agent_run_id: format!("command-direct-{host_index}"), execution_epoch: 1 },
+                        host.clone(), "compatibility".into(), "mcp".into(), cwd.clone(),
+                        Some(exact_attachment_root(&root)), "runtime_managed".into(),
+                        AcpSessionPermissions::from_frozen(&frozen).unwrap(), frozen.model.dsh_source,
                     );
-                    let id = runtime
-                        .start_or_resume_session(
-                            None,
-                            AcpSessionCapabilities::default(),
-                            "runtime_default",
-                            "runtime_default",
-                            &json!({}),
-                            &BTreeMap::new(),
-                        )
-                        .await
-                        .unwrap();
-                    runtime
-                        .bind_managed_bootstrap(&id, &format!("SYSTEM-SESSION-{i}"))
-                        .await
-                        .unwrap();
-                    assert!(
-                        runtime
-                            .bind_managed_bootstrap(&id, "CHANGED")
-                            .await
-                            .is_err()
-                    );
-                    for mode in ["default", "auto-accept", "plan", "dont-ask", "bypass"] {
-                        host.rpc("session/set_mode", json!({"sessionId":id, "modeId":mode}))
-                            .await
-                            .unwrap();
-                    }
-                    assert!(
-                        host.rpc(
-                            "session/set_model",
-                            json!({"sessionId":id, "modelId":"sub2api/gpt-6-sol"})
-                        )
-                        .await
-                        .is_err()
-                    );
-                    sessions.push((runtime, id));
-                }
-                assert_ne!(sessions[0].1, sessions[1].1);
-                for i in [0usize, 1, 0] {
-                    let (runtime, id) = &sessions[i];
-                    assert_eq!(
-                        runtime
-                            .start_or_resume_session(
-                                Some(id),
-                                AcpSessionCapabilities {
-                                    can_resume: true,
-                                    can_load_history: true
-                                },
-                                "runtime_default",
-                                "runtime_default",
-                                &json!({}),
-                                &BTreeMap::new()
-                            )
-                            .await
-                            .unwrap(),
-                        *id
-                    );
-                    let prompt = runtime
-                        .start_prompt(&format!("control-{i}"), "/acp")
-                        .await
-                        .unwrap();
-                    let mut context = None;
-                    loop {
-                        let incoming =
-                            tokio::time::timeout(Duration::from_secs(60), receiver.recv())
-                                .await
-                                .unwrap()
-                                .unwrap();
-                        if let AcpIncoming::Message {
-                            native_prompt_id,
-                            message,
-                            ..
-                        } = incoming
-                        {
-                            if native_prompt_id != prompt {
-                                continue;
+                    for (run_index, body) in bodies.into_iter().enumerate() {
+                        let id = runtime.start_or_resume_session(
+                            session_id.as_deref(), runtime.session_capabilities().await,
+                            "runtime_default", "runtime_default", &json!({}), &BTreeMap::new(),
+                        ).await.unwrap();
+                        if let Some(expected) = &session_id { assert_eq!(&id, expected); }
+                        session_id = Some(id.clone());
+                        if run_index == 0 {
+                            // Retain this native owner's mode and explicit BYOK controls.
+                            for mode in ["default", "auto-accept", "plan", "dont-ask", "bypass"] {
+                                host.rpc("session/set_mode", json!({"sessionId":id, "modeId":mode}))
+                                    .await.unwrap();
                             }
-                            if message["params"]["update"]["sessionUpdate"] == "usage_update" {
-                                context = Some(message["params"]["update"].clone());
-                            }
-                            if message["method"] == "rovai/acp_prompt_completed" {
-                                assert_eq!(message["params"]["result"]["stopReason"], "end_turn");
-                                break;
+                            host.rpc("session/set_model", json!({"sessionId":id, "modelId":"rovai-probe/model"}))
+                                .await.unwrap();
+                        }
+                        if host_index == 0 && run_index == 1 {
+                            for args in ["PRIVATE_INVALID_JSON", "42", "null", "{}"] {
+                                let error = host.rpc("session/prompt", json!({"sessionId":id,
+                                    "prompt":[{"type":"text","text":format!("/rovai-bootstrap {args}")}]}))
+                                    .await.unwrap_err();
+                                assert!(error.to_string().contains("command_code_bootstrap_invalid"));
+                                assert!(!error.to_string().contains(args));
                             }
                         }
+                        runtime.bind_managed_bootstrap(&id, &body).await.unwrap();
+                        // Ready-route metadata and the control result cannot
+                        // enter business input receipts, output or usage.
+                        while let Ok(event) = receiver.try_recv() {
+                            match event {
+                                AcpIncoming::HostDiagnostic { text, .. } => assert!(!text.contains("PRIVATE_INVALID_JSON")),
+                                other => panic!("control emitted business event: {other:?}"),
+                            }
+                        }
+                        assert!(!host.protocol_violated.load(Ordering::Acquire));
+                        let marker = format!("USER_INPUT_UNCHANGED_{host_index}_{run_index}");
+                        let prompt = runtime.start_prompt(&format!("input-{host_index}-{run_index}"), &marker).await.unwrap();
+                        let mut accepted = 0;
+                        let mut output = String::new();
+                        loop {
+                            let event = timeout(Duration::from_secs(45), receiver.recv()).await.unwrap().unwrap();
+                            match event {
+                                AcpIncoming::InputAccepted { native_prompt_id, .. } => {
+                                    assert_eq!(native_prompt_id, prompt);
+                                    accepted += 1;
+                                }
+                                AcpIncoming::Message { native_prompt_id, message, .. } => {
+                                    assert_eq!(native_prompt_id, prompt);
+                                    if message["params"]["update"]["sessionUpdate"] == "agent_message_chunk" {
+                                        output.push_str(message["params"]["update"]["content"]["text"].as_str().unwrap());
+                                    }
+                                    if message["method"] == "rovai/acp_prompt_completed" {
+                                        assert_eq!(message["params"]["result"]["stopReason"], "end_turn");
+                                        break;
+                                    }
+                                }
+                                AcpIncoming::HostDiagnostic { text, .. } => assert!(!text.contains("PRIVATE_INVALID_JSON")),
+                                other => panic!("unexpected business event: {other:?}"),
+                            }
+                        }
+                        assert_eq!(accepted, 1);
+                        assert!(output.contains("PROBE_DONE"));
+                        assert_eq!(host.pid(), pid);
+                        assert_eq!(std::fs::read_dir(host_root).unwrap().count(), 1);
+                        eprintln!("COMMAND_DIRECT {}", json!({"host":host_index,"run":run_index,
+                            "sessionId":id,"pid":pid,"bootstrapBytes":body.len(),"accepted":accepted}));
+                        runtime.detach().await;
                     }
-                    assert!(
-                        context
-                            .as_ref()
-                            .and_then(|v| v["size"].as_u64())
-                            .is_some_and(|v| v > 0)
-                    );
-                    eprintln!(
-                        "COMMAND_CONTROL {}",
-                        json!({"sessionId":id,"pid":pid,"context":context})
-                    );
-                    runtime.detach().await;
-                    assert_eq!(host.pid(), pid);
+                    host.shutdown().await;
+                    assert!(!host_root.exists());
                 }
-                // Native resume itself accepts nonexistent IDs. Our official
-                // catalog preflight must reject them before opening a Session.
-                for id in [uuid::Uuid::new_v4().to_string(), "12345678".into()] {
-                    let error = sessions[0]
-                        .0
-                        .start_or_resume_session(
-                            Some(&id),
-                            AcpSessionCapabilities {
-                                can_resume: true,
-                                can_load_history: true,
-                            },
-                            "runtime_default",
-                            "runtime_default",
-                            &json!({}),
-                            &BTreeMap::new(),
-                        )
-                        .await
-                        .unwrap_err();
-                    assert!(
-                        error
-                            .to_string()
-                            .contains("command_code_restore_target_missing")
-                    );
-                    assert!(!host.knows_session(&id).await);
-                }
-                // The native Mod runner swallows ordinary hook exceptions.
-                // A missing binding must kill the real Host before it can
-                // reach the Provider, rather than emit an unprotected request.
-                let (runtime, id) = &sessions[0];
-                runtime
-                    .start_or_resume_session(
-                        Some(id),
-                        AcpSessionCapabilities {
-                            can_resume: true,
-                            can_load_history: true,
-                        },
-                        "runtime_default",
-                        "runtime_default",
-                        &json!({}),
-                        &BTreeMap::new(),
-                    )
-                    .await
-                    .unwrap();
-                std::fs::remove_file(
-                    host.private_config_root
-                        .as_ref()
-                        .unwrap()
-                        .join("bindings")
-                        .join(format!("{id}.json")),
-                )
-                .unwrap();
-                let _ = runtime
-                    .start_prompt("missing-bootstrap", "Reply once.")
-                    .await;
-                tokio::time::timeout(Duration::from_secs(20), async {
-                    while host.is_alive() {
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                    }
-                })
-                .await
-                .expect("missing Bootstrap must stop the native process before generation");
-                eprintln!("COMMAND_BOOTSTRAP_MISSING_HOST_STOPPED");
-                host.shutdown().await;
             },
-        )
-        .await;
+        ).await;
     }
 
     // This is an opt-in real Runtime smoke, never part of the fixture suite.
@@ -12286,13 +12872,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "cline-host-smoke".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             workspace_root.clone(),
             Some(attachments.clone()),
@@ -12345,13 +12931,13 @@ while IFS= read -r ignored; do :; done
             }
         }
         runtime.detach().await;
-        let session_b = AcpRuntime::from_host(
+        let session_b = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "cline-second-session-smoke".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             workspace_root.clone(),
             Some(attachments.clone()),
@@ -12641,13 +13227,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let cold_runtime = AcpRuntime::from_host(
+        let cold_runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "cline-cold-host-smoke".to_string(),
                 execution_epoch: 1,
             },
             cold_host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             workspace_root,
             Some(attachments),
@@ -12696,6 +13282,7 @@ while IFS= read -r ignored; do :; done
             (AdapterKind::KiroCli, false),
             (AdapterKind::TraeCnCli, false),
             (AdapterKind::MinimaxCodeCli, false),
+            (AdapterKind::HermesCli, false),
         ] {
             for (late, unsupported, bad_owner) in [
                 (false, false, false),
@@ -12704,7 +13291,11 @@ while IFS= read -r ignored; do :; done
                 (true, true, false),
                 (false, false, true),
             ] {
-                if late && unsupported && (kind != AdapterKind::CodebuddyCli || legacy) {
+                if late
+                    && unsupported
+                    && (!matches!(kind, AdapterKind::CodebuddyCli | AdapterKind::HermesCli)
+                        || legacy)
+                {
                     continue;
                 }
                 if bad_owner
@@ -12719,6 +13310,7 @@ while IFS= read -r ignored; do :; done
                             | AdapterKind::TraeCnCli
                             | AdapterKind::CodebuddyCli
                             | AdapterKind::MinimaxCodeCli
+                            | AdapterKind::HermesCli
                     ) || legacy)
                 {
                     continue;
@@ -12772,9 +13364,14 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{}}'"#
                         format!("{rejection}\nIFS= read -r finish || exit 1\n{terminal}")
                     }
                 } else if unsupported {
-                    format!(
+                    let rejection = format!(
                         "printf '%s\\n' '{{\"id\":{supplement_request},\"error\":{{\"code\":-32601,\"message\":\"Method not found\"}}}}'\nIFS= read -r finish || exit 1\n{terminal}"
-                    )
+                    );
+                    if late {
+                        format!("{terminal}\n{rejection}")
+                    } else {
+                        rejection
+                    }
                 } else if kind == AdapterKind::KiroCli {
                     let queued = r#"printf '%s\n' '{"method":"_kiro.dev/session/update","params":{"sessionId":"session-steer","update":{"sessionUpdate":"AgentExecutionUserMessageQueued","messageId":"native-steer","content":"PRIOR\n\nSTEER"}}}'"#;
                     let queued_result = !bad_owner;
@@ -12801,8 +13398,13 @@ IFS= read -r finish || exit 1
                         )
                     }
                 } else if late {
+                    let continuation = if kind == AdapterKind::HermesCli {
+                        r#"printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-steer","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"continuation"}}}}'"#
+                    } else {
+                        ""
+                    };
                     format!(
-                        "{terminal}\nprintf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":{supplement_request},\"result\":{response}}}'"
+                        "{terminal}\n{continuation}\nprintf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":{supplement_request},\"result\":{response}}}'"
                     )
                 } else {
                     format!(
@@ -12814,7 +13416,7 @@ IFS= read -r finish || exit 1
                     &format!(
                         r#"#!/bin/sh
 IFS= read -r initialize || exit 1
-printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1,"agentCapabilities":{{}},"authMethods":[{{"id":"cached_token","name":"Cached token"}}]}}}}'
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1,"agentInfo":{{"version":"0.22.4"}},"agentCapabilities":{{}},"authMethods":[{{"id":"cached_token","name":"Cached token"}}]}}}}'
 {authentication}
 IFS= read -r original || exit 1
 IFS= read -r supplemental || exit 1
@@ -12828,8 +13430,11 @@ while IFS= read -r ignored; do :; done
                 );
                 let mut frozen = frozen_trae_runtime(&executable);
                 frozen.adapter_kind = kind;
+                if kind == AdapterKind::HermesCli {
+                    frozen.reported_version = Some("0.22.4".into());
+                }
                 frozen.permissions = serde_json::from_value(json!({"adapterKind":kind.as_str(),"schemaVersion":1,
-                    "values": if kind == AdapterKind::QwenCode { json!({"approval_mode":"yolo"}) } else if kind == AdapterKind::KiroCli { json!({"trust_all_tools":"on"}) } else { json!({"permission_mode":"bypassPermissions"}) }})).unwrap();
+                    "values": if kind == AdapterKind::QwenCode { json!({"approval_mode":"yolo"}) } else if kind == AdapterKind::KiroCli { json!({"trust_all_tools":"on"}) } else if kind == AdapterKind::HermesCli { json!({"permission_mode":"dont_ask"}) } else { json!({"permission_mode":"bypassPermissions"}) }})).unwrap();
                 let workspace =
                     AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().into());
                 let (incoming, mut receiver) = mpsc::unbounded_channel();
@@ -12856,10 +13461,10 @@ while IFS= read -r ignored; do :; done
                 host.bind_session("session-steer", &owner, AcpSessionPhase::Ready)
                     .await
                     .unwrap();
-                let runtime = AcpRuntime::from_host(
+                let runtime = AcpRuntime::from_test_host(
                     owner,
                     host.clone(),
-                    "compat".into(),
+                    "compat".to_owned(),
                     "mcp".into(),
                     root.clone(),
                     Some(exact_attachment_root(&root)),
@@ -12971,6 +13576,14 @@ while IFS= read -r ignored; do :; done
                             .is::<rovai_core::steer::ActiveInputNotAccepted>()
                     );
                     host.notify("fixture/finish", json!({})).await.unwrap();
+                } else if late && kind == AdapterKind::HermesCli {
+                    result.unwrap();
+                    assert!(!host.protocol_violated.load(Ordering::Acquire));
+                    let request: Value =
+                        serde_json::from_str(std::fs::read_to_string(&requests).unwrap().trim())
+                            .unwrap();
+                    assert_eq!(request["method"], "session/prompt");
+                    assert_eq!(request["params"]["prompt"][0]["text"], "/steer STEER");
                 } else if late {
                     let error = result.unwrap_err();
                     assert_eq!(
@@ -13067,6 +13680,153 @@ while IFS= read -r ignored; do :; done
                         }
                     }
                 }
+                if kind == AdapterKind::HermesCli && !late && !unsupported {
+                    // Reuse this transport owner for the aggregate terminal:
+                    // two already-submitted inputs must both settle, in either
+                    // ordering relative to the original terminal.
+                    for (original_first, reply, accepted, rejected) in [
+                        (
+                            true,
+                            json!({"result":{"stopReason":"end_turn"}}),
+                            true,
+                            false,
+                        ),
+                        (
+                            false,
+                            json!({"result":{"stopReason":"end_turn"}}),
+                            true,
+                            false,
+                        ),
+                        (
+                            true,
+                            json!({"error":{"code":-32603,"message":"native failure","data":{"details":"admitted_turn_failed"}}}),
+                            true,
+                            false,
+                        ),
+                        (
+                            true,
+                            json!({"error":{"code":-32603,"message":"connection lost"}}),
+                            false,
+                            false,
+                        ),
+                        (
+                            true,
+                            json!({"error":{"code":-32602,"message":"invalid input"}}),
+                            false,
+                            true,
+                        ),
+                        (
+                            true,
+                            json!({"result":{"stopReason":"cancelled"}}),
+                            false,
+                            false,
+                        ),
+                    ] {
+                        host.bind_session("session-steer", &runtime.owner, AcpSessionPhase::Ready)
+                            .await
+                            .unwrap();
+                        let prepared = host
+                            .prepare_prompt("session-steer", &runtime.owner, "aggregate")
+                            .await
+                            .unwrap();
+                        let mut waiters = Vec::new();
+                        for input in ["first", "second"] {
+                            let runtime = runtime.clone();
+                            let prompt_id = prepared.prompt_id.clone();
+                            waiters.push(tokio::spawn(async move {
+                                runtime.steer(&prompt_id, input, input).await
+                            }));
+                            timeout(Duration::from_secs(2), async {
+                                loop {
+                                    let routes = host.routes.read().await;
+                                    if let AcpSessionPhase::PromptActive(p) =
+                                        &routes["session-steer"].phase
+                                        && p.hermes_progress.pending_steers == waiters.len()
+                                    {
+                                        break;
+                                    }
+                                    drop(routes);
+                                    tokio::task::yield_now().await;
+                                }
+                            })
+                            .await
+                            .unwrap();
+                        }
+                        let _ingress = host.ingress_fence.lock().await;
+                        let original = host
+                            .pending
+                            .lock()
+                            .await
+                            .remove(&prepared.request_id)
+                            .unwrap();
+                        let end =
+                            json!({"id":prepared.request_id,"result":{"stopReason":"end_turn"}});
+                        let mut original = Some(original);
+                        if original_first {
+                            host.complete_pending(
+                                prepared.request_id,
+                                original.take().unwrap(),
+                                end.clone(),
+                            )
+                            .await;
+                        }
+                        for index in 0..2 {
+                            assert!(matches!(
+                                host.routes.read().await["session-steer"].phase,
+                                AcpSessionPhase::PromptActive(_)
+                            ));
+                            let forwarded = host.route_session_message("session-steer", &json!({"method":"session/update","params":{"sessionId":"session-steer","update":{"sessionUpdate":"tool_call","toolCallId":"continuation"}}}), 0).await;
+                            assert!(matches!(forwarded, AcpSessionMessageRoute::Forward { .. }));
+                            let id = prepared.request_id + index + 1;
+                            let pending = host.pending.lock().await.remove(&id).unwrap();
+                            let message = if index == 0 {
+                                json!({"result":{"stopReason":"end_turn"}})
+                            } else {
+                                reply.clone()
+                            };
+                            host.complete_pending(id, pending, message).await;
+                        }
+                        if let Some(original) = original {
+                            assert!(matches!(
+                                host.routes.read().await["session-steer"].phase,
+                                AcpSessionPhase::PromptActive(_)
+                            ));
+                            host.complete_pending(prepared.request_id, original, end)
+                                .await;
+                        }
+                        assert!(matches!(
+                            host.routes.read().await["session-steer"].phase,
+                            AcpSessionPhase::PromptCompleted(_)
+                        ));
+                        let result = waiters.pop().unwrap().await.unwrap();
+                        assert_eq!(result.is_ok(), accepted);
+                        if let Err(error) = result {
+                            assert_eq!(
+                                error.is::<rovai_core::steer::ActiveInputNotAccepted>(),
+                                rejected
+                            );
+                        }
+                        waiters.pop().unwrap().await.unwrap().unwrap();
+                        let final_message = loop {
+                            if let AcpIncoming::Message { message, .. } =
+                                receiver.recv().await.unwrap()
+                                && message["method"] == "rovai/acp_prompt_completed"
+                            {
+                                break message;
+                            }
+                        };
+                        if rejected || reply["result"]["stopReason"] == "end_turn" {
+                            assert_eq!(final_message["params"]["result"]["stopReason"], "end_turn");
+                        } else if reply.get("error").is_some() {
+                            assert!(final_message["params"]["error"].is_string());
+                        } else {
+                            assert_eq!(
+                                final_message["params"]["result"]["stopReason"],
+                                "cancelled"
+                            );
+                        }
+                    }
+                }
                 host.shutdown().await;
                 std::fs::remove_dir_all(root).unwrap();
             }
@@ -13075,15 +13835,34 @@ while IFS= read -r ignored; do :; done
 
     #[tokio::test]
     async fn prompt_error_after_activity_keeps_input_accepted_while_early_rejection_does_not() {
-        for (case_name, prompt_activity, error_code, expected_accepted) in [
+        for (case_name, prompt_activity, error_code, expected_accepted, string_data) in [
             (
                 "activity-before-error",
                 r#"printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-error","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"working"}}}}'"#,
                 -32603,
                 true,
+                false,
             ),
-            ("error-before-activity", ":", -32602, false),
+            ("error-before-activity", ":", -32602, false, false),
+            (
+                "activity-before-string-error",
+                r#"printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-error","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"working"}}}}'"#,
+                -32603,
+                true,
+                true,
+            ),
+            ("string-error-before-activity", ":", -32603, false, true),
         ] {
+            let provider_detail = if string_data {
+                "Model usage has reached personal quota limit. Please check usage or contact administrator."
+            } else {
+                "failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."
+            };
+            let error_data = if string_data {
+                json!(provider_detail)
+            } else {
+                json!({ "error": provider_detail })
+            };
             let root = std::env::temp_dir().join(format!(
                 "rovai-acp-prompt-error-{case_name}-{}",
                 uuid::Uuid::new_v4()
@@ -13100,7 +13879,7 @@ IFS= read -r session || exit 1
 printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"modes":{{"currentModeId":"default","availableModes":[{{"id":"default","name":"Default"}}]}},"sessionId":"session-error","models":{{"currentModelId":"trae-default","availableModels":[{{"modelId":"trae-default","name":"TRAE Default"}}]}}}}}}'
 IFS= read -r prompt || exit 1
 {prompt_activity}
-printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":{error_code},"message":"Internal error","data":{{"error":"failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."}}}}}}'
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":{error_code},"message":"Internal error","data":{error_data}}}}}'
 while IFS= read -r ignored; do :; done
 "#,
                 ),
@@ -13126,13 +13905,13 @@ while IFS= read -r ignored; do :; done
             )
             .await
             .unwrap();
-            let runtime = AcpRuntime::from_host(
+            let runtime = AcpRuntime::from_test_host(
                 AcpRuntimeOwner {
                     agent_run_id: format!("run-{case_name}"),
                     execution_epoch: 1,
                 },
                 host.clone(),
-                "sha256:compatibility".to_string(),
+                "sha256:compatibility".to_owned(),
                 "sha256:mcp".to_string(),
                 root.clone(),
                 Some(exact_attachment_root(&root)),
@@ -13155,6 +13934,8 @@ while IFS= read -r ignored; do :; done
                 .start_prompt(&format!("delivery-{case_name}"), "continue")
                 .await
                 .unwrap();
+            let expected_error =
+                format!("ACP error {error_code}: Internal error: {provider_detail}");
 
             if expected_accepted {
                 assert!(matches!(
@@ -13173,14 +13954,14 @@ while IFS= read -r ignored; do :; done
                     receiver.recv().await,
                     Some(AcpIncoming::InputNotAccepted {
                         native_prompt_id,
-                        native_error_code: Some(-32602),
+                        native_error_code: Some(native_error_code),
+                        error,
                         ..
                     }) if native_prompt_id == prompt_id
+                        && native_error_code == error_code
+                        && error == expected_error
                 ));
             }
-            let expected_error = format!(
-                "ACP error {error_code}: Internal error: failed to call agent: Model usage has reached personal quota limit. Please check usage or contact administrator."
-            );
             assert!(matches!(
                 receiver.recv().await,
                 Some(AcpIncoming::Message { message, .. })
@@ -13245,13 +14026,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "agent-run-trae".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -13382,13 +14163,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "run-idle-metadata".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -13445,7 +14226,7 @@ while IFS= read -r ignored; do :; done
     }
 
     #[tokio::test]
-    async fn real_acp_session_catalog_rejects_a_missing_explicit_model_without_fallback() {
+    async fn real_acp_session_model_selection_respects_native_adapter_boundaries() {
         for configuration_rejected in [false, true] {
             let root = std::env::temp_dir().join(format!(
                 "rovai-acp-live-model-validation-{}",
@@ -13455,15 +14236,26 @@ while IFS= read -r ignored; do :; done
             let executable = root.join("traecli");
             make_executable(
                 &executable,
-                r#"#!/bin/sh
-IFS= read -r initialize || exit 1
-printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{}}}'
-IFS= read -r session || exit 1
-printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"modes":{"currentModeId":"default","availableModes":[{"id":"default","name":"Default"}]},"sessionId":"session-live-model","models":{"currentModelId":"trae-default","availableModels":[{"modelId":"trae-default","name":"TRAE Default"}]}}}'
-IFS= read -r configuration || exit 1
-printf '%s\n' '{"jsonrpc":"2.0","id":3,"error":{"code":-32602,"message":"configuration refused after successful resume"}}'
-while IFS= read -r ignored; do :; done
+                &format!(
+                    r#"#!/usr/bin/python3
+import json, sys
+for line in sys.stdin:
+    request = json.loads(line)
+    result = {{}}
+    if request['method'] == 'initialize': result = {{'protocolVersion':1, 'agentCapabilities':{{}}}}
+    elif request['method'] in ('session/new', 'session/resume'):
+        result = {{'sessionId':'session-live-model', 'modes':{{'currentModeId':'default','availableModes':[{{'id':'default','name':'Default'}}]}}}}
+    response = {{'jsonrpc':'2.0', 'id':request['id'], 'result':result}}
+    if request['method'] == 'session/set_config_option' and {configuration_rejected}:
+        response = {{'jsonrpc':'2.0','id':request['id'],'error':{{'code':-32602,'message':'configuration refused after successful resume'}}}}
+    print(json.dumps(response), flush=True)
 "#,
+                    configuration_rejected = if configuration_rejected {
+                        "True"
+                    } else {
+                        "False"
+                    }
+                ),
             );
             let frozen = frozen_trae_runtime(&executable);
             let workspace =
@@ -13486,13 +14278,13 @@ while IFS= read -r ignored; do :; done
             )
             .await
             .unwrap();
-            let runtime = AcpRuntime::from_host(
+            let runtime = AcpRuntime::from_test_host(
                 AcpRuntimeOwner {
                     agent_run_id: "run-live-model-validation".to_string(),
                     execution_epoch: 1,
                 },
                 host.clone(),
-                "sha256:compatibility".to_string(),
+                "sha256:compatibility".to_owned(),
                 "sha256:mcp".to_string(),
                 root.clone(),
                 Some(exact_attachment_root(&root)),
@@ -13501,7 +14293,7 @@ while IFS= read -r ignored; do :; done
                 None,
             );
 
-            let error = runtime
+            let result = runtime
                 .start_or_resume_session(
                     configuration_rejected.then_some("session-live-model"),
                     AcpSessionCapabilities {
@@ -13514,45 +14306,314 @@ while IFS= read -r ignored; do :; done
                     } else {
                         "claude-opus-5"
                     },
-                    &json!({}),
+                    &json!({"reasoning_effort":"high"}),
                     &BTreeMap::new(),
                 )
-                .await
-                .expect_err("a model absent from the real Session catalog must fail closed");
-            assert!(
-                error.downcast_ref::<AcpSessionRestoreError>().is_none(),
-                "a model/configuration error after activation must not authorize session replacement"
-            );
+                .await;
             if configuration_rejected {
+                let error = result.unwrap_err();
+                assert!(error.downcast_ref::<AcpSessionRestoreError>().is_none());
                 assert!(
                     format!("{error:#}").contains("configuration refused after successful resume")
                 );
                 assert!(host.knows_session("session-live-model").await);
             } else {
-                let validation = error
-                    .downcast_ref::<AcpLiveModelValidationError>()
-                    .expect("typed catalog failure");
-                assert_eq!(validation.code, "runtime_model_unavailable");
+                assert_eq!(result.unwrap(), "session-live-model");
             }
 
             host.shutdown().await;
             std::fs::remove_dir_all(root).unwrap();
         }
+        // The same Host seam must allow Hermes to decide selections outside its
+        // picker, using the same native acceptance boundary as the adapter above.
+        // A fresh Host per attachment covers both new and cold resume responses.
+        for resume in [false, true] {
+            for (case, source, current_model, current_mode, target, failure, expected) in [
+                (
+                    "default-missing",
+                    "runtime_default",
+                    None,
+                    None,
+                    "native-default",
+                    None,
+                    vec!["session/set_mode"],
+                ),
+                (
+                    "same-without-catalog",
+                    "explicit",
+                    Some("provider-a/model"),
+                    Some("dont_ask"),
+                    "provider-a/model",
+                    None,
+                    vec![],
+                ),
+                (
+                    "outside-catalog",
+                    "explicit",
+                    Some("provider-a/model"),
+                    Some("default"),
+                    "provider-a/other",
+                    None,
+                    vec!["session/set_model", "session/set_mode"],
+                ),
+                (
+                    "custom-provider-omitted",
+                    "explicit",
+                    Some("custom:model"),
+                    Some("dont_ask"),
+                    "custom:sub2api:model",
+                    None,
+                    vec![],
+                ),
+                (
+                    "custom-model-changed",
+                    "explicit",
+                    Some("custom:model"),
+                    Some("dont_ask"),
+                    "custom:sub2api:other",
+                    None,
+                    vec!["session/set_model"],
+                ),
+                (
+                    "different-provider",
+                    "explicit",
+                    Some("provider-a/model"),
+                    Some("dont_ask"),
+                    "provider-b/model",
+                    None,
+                    vec!["session/set_model"],
+                ),
+                (
+                    "unknown-state",
+                    "explicit",
+                    None,
+                    None,
+                    "provider-b/model",
+                    None,
+                    vec!["session/set_model", "session/set_mode"],
+                ),
+                (
+                    "model-rejected",
+                    "explicit",
+                    Some("provider-a/model"),
+                    Some("dont_ask"),
+                    "provider-b/model",
+                    Some("session/set_model"),
+                    vec!["session/set_model"],
+                ),
+                (
+                    "mode-rejected",
+                    "explicit",
+                    Some("provider-a/model"),
+                    Some("default"),
+                    "provider-a/model",
+                    Some("session/set_mode"),
+                    vec!["session/set_mode"],
+                ),
+            ] {
+                let root = std::env::temp_dir()
+                    .join(format!("rovai-hermes-model-{}", uuid::Uuid::new_v4()));
+                std::fs::create_dir_all(&root).unwrap();
+                let executable = root.join("hermes.py");
+                let log = root.join("requests.jsonl");
+                let mut session = json!({"sessionId":"hermes-session"});
+                if let Some(model) = current_model {
+                    session["models"] = json!({"currentModelId":model});
+                    if case != "same-without-catalog" {
+                        session["models"]["availableModels"] =
+                            json!([{"modelId":"provider-a/model","name":"A"}]);
+                    }
+                }
+                if let Some(mode) = current_mode {
+                    session["modes"] = json!({"currentModeId":mode});
+                }
+                std::fs::write(
+                    executable.with_extension("json"),
+                    serde_json::to_vec(&json!({
+                        "session": session, "failure":failure,
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                make_executable(
+                    &executable,
+                    r#"#!/usr/bin/env python3
+import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+config = json.loads(pathlib.Path(__file__).with_suffix('.json').read_text())
+model = config['session'].get('models', {}).get('currentModelId') or 'provider-a/model'
+for line in sys.stdin:
+    request = json.loads(line)
+    method = request['method']
+    params = request.get('params', {})
+    if method == 'session/set_model' and method != config['failure']:
+        model = params['modelId']
+    if method == 'session/prompt':
+        request['executedModel'] = model
+    with (root / 'requests.jsonl').open('a') as output:
+        output.write(json.dumps(request) + '\n')
+    response = {'jsonrpc':'2.0', 'id':request['id']}
+    if method == config['failure']:
+        response['error'] = {'code':-32602, 'message':'native configuration refused'}
+    elif method == 'initialize':
+        response['result'] = {'protocolVersion':1,'agentInfo':{'version':'0.22.4'},'agentCapabilities':{'sessionCapabilities':{'resume':{}}}}
+    elif method in ('session/new', 'session/resume'):
+        response['result'] = config['session']
+    elif method == 'session/prompt':
+        response['result'] = {'stopReason':'end_turn'}
+    elif method in ('session/set_model', 'session/set_mode', 'audit/terminal-barrier'):
+        response['result'] = {}
+    else:
+        response['error'] = {'code':-32601,'message':'unexpected method'}
+    print(json.dumps(response), flush=True)
+"#,
+                );
+                let mut frozen = frozen_trae_runtime(&executable);
+                frozen.adapter_kind = AdapterKind::HermesCli;
+                frozen.reported_version = Some("0.22.4".into());
+                frozen.permissions.adapter_kind = AdapterKind::HermesCli;
+                frozen.permissions.values = json!({"permission_mode":"dont_ask"});
+                let workspace =
+                    AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().into());
+                let (incoming, mut receiver) = mpsc::unbounded_channel();
+                let host = AcpHost::spawn(
+                    &root,
+                    &workspace,
+                    PermissionSemantics::RuntimeManagedV2,
+                    &frozen,
+                    incoming,
+                    Some(exact_builtin_tools(&root)),
+                    CompactionDetectorPolicy::Disabled,
+                    true,
+                    &BTreeMap::new(),
+                    &root.join("private"),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap();
+                let runtime = AcpRuntime::from_test_host(
+                    AcpRuntimeOwner {
+                        agent_run_id: "hermes-model-run".into(),
+                        execution_epoch: 1,
+                    },
+                    host.clone(),
+                    "compat".into(),
+                    "mcp".into(),
+                    root.clone(),
+                    Some(exact_attachment_root(&root)),
+                    "runtime_managed".into(),
+                    AcpSessionPermissions {
+                        mode: Some("dont_ask".into()),
+                        ..Default::default()
+                    },
+                    None,
+                );
+                let result = runtime
+                    .start_or_resume_session(
+                        resume.then_some("hermes-session"),
+                        AcpSessionCapabilities {
+                            can_resume: true,
+                            can_load_history: false,
+                        },
+                        source,
+                        target,
+                        &json!({}),
+                        &BTreeMap::new(),
+                    )
+                    .await;
+                if failure.is_some() {
+                    let error = result.expect_err("native rejection must stop attachment");
+                    assert!(format!("{error:#}").contains("native configuration refused"));
+                    assert!(
+                        !error.is::<AcpSessionRestoreError>(),
+                        "do not replace the Session after a setting error"
+                    );
+                } else {
+                    assert_eq!(result.unwrap(), "hermes-session", "{case}, resume={resume}");
+                    runtime
+                        .start_prompt("model-delivery", "TASK")
+                        .await
+                        .unwrap();
+                    receive_through_prompt_completion(&mut receiver).await;
+                }
+                host.rpc("audit/terminal-barrier", json!({})).await.unwrap();
+                let requests = std::fs::read_to_string(&log)
+                    .unwrap()
+                    .lines()
+                    .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                    .collect::<Vec<_>>();
+                let methods = requests
+                    .iter()
+                    .map(|request| request["method"].as_str().unwrap())
+                    .collect::<Vec<_>>();
+                let mut expected_methods = vec![
+                    "initialize",
+                    if resume {
+                        "session/resume"
+                    } else {
+                        "session/new"
+                    },
+                ];
+                expected_methods.extend(&expected);
+                if failure.is_none() {
+                    expected_methods.push("session/prompt");
+                }
+                expected_methods.push("audit/terminal-barrier");
+                assert_eq!(methods, expected_methods, "{case}, resume={resume}");
+                for request in &requests {
+                    if request["method"] == "session/set_model" {
+                        assert_eq!(request["params"]["modelId"], target);
+                    }
+                    if request["method"] == "session/set_mode" {
+                        assert_eq!(request["params"]["modeId"], "dont_ask");
+                    }
+                    if request["method"] == "session/prompt" {
+                        assert_eq!(
+                            request["executedModel"],
+                            if expected.contains(&"session/set_model") {
+                                target
+                            } else {
+                                current_model.unwrap_or("provider-a/model")
+                            }
+                        );
+                    }
+                }
+                host.shutdown().await;
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
     }
 
     #[tokio::test]
     async fn history_restore_replay_is_quarantined_and_only_current_prompt_accepts_input() {
-        let root = std::env::temp_dir().join(format!(
-            "rovai-acp-resume-quarantine-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let executable = root.join("traecli");
-        let protocol_log = root.join("protocol.jsonl");
-        make_executable(
-            &executable,
-            &format!(
-                r#"#!/bin/sh
+        // Command uses the same transport and goes straight to native restore;
+        // the fixture deliberately has no session/list response.
+        for (kind, control_outcome) in [
+            (AdapterKind::TraeCnCli, "end_turn"),
+            (AdapterKind::CommandCodeCli, "end_turn"),
+            (AdapterKind::CommandCodeCli, "error"),
+            (AdapterKind::CommandCodeCli, "cancelled"),
+        ] {
+            let root = std::env::temp_dir().join(format!(
+                "rovai-acp-resume-quarantine-{}",
+                uuid::Uuid::new_v4()
+            ));
+            std::fs::create_dir_all(&root).unwrap();
+            let executable = root.join("traecli");
+            let protocol_log = root.join("protocol.jsonl");
+            let control_reply = if control_outcome == "error" {
+                json!({"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"command_code_bootstrap_invalid"}})
+            } else {
+                json!({"jsonrpc":"2.0","id":4,"result":{"stopReason":control_outcome,"usage":{"totalTokens":999999}}})
+            };
+            make_executable(
+                &executable,
+                &format!(
+                    r#"#!/bin/sh
+if [ -n "$ROVAI_COMMAND_CODE_BOOTSTRAP_ROOT" ]; then
+  printf '{{"revision":"command-code-system-bootstrap-v2","nonce":"%s","pid":%s}}' "$ROVAI_COMMAND_CODE_BOOTSTRAP_NONCE" "$$" > "$ROVAI_COMMAND_CODE_BOOTSTRAP_ROOT/ready.json"
+fi
 IFS= read -r initialize || exit 1
 printf '%s\n' "$initialize" >> '{}'
 printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1,"agentCapabilities":{{"loadSession":true,"sessionCapabilities":{{"resume":{{}}}}}}}}}}'
@@ -13561,122 +14622,189 @@ printf '%s\n' "$resume" >> '{}'
 printf '%s\n' '{{"jsonrpc":"2.0","id":90,"method":"session/request_permission","params":{{"sessionId":"session-old","toolCall":{{"toolCallId":"historical-tool"}},"options":[]}}}}'
 IFS= read -r quarantined_permission || exit 1
 printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"modes":{{"currentModeId":"default","availableModes":[{{"id":"default","name":"Default"}}]}}}}}}'
+prompt_id=3
+if [ -n "$ROVAI_COMMAND_CODE_BOOTSTRAP_ROOT" ]; then
+  IFS= read -r mode || exit 1
+  printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{}}}}'
+  prompt_id=4
+fi
 sleep 0.2
 printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"session-old","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"historical"}}}}}}}}'
 printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"session-old","update":{{"sessionUpdate":"tool_call","toolCallId":"historical-tool","kind":"execute","title":"historical"}}}}}}'
 printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"session-old","update":{{"sessionUpdate":"usage_update","used":999}}}}}}'
+if [ -n "$ROVAI_COMMAND_CODE_BOOTSTRAP_ROOT" ]; then
+  IFS= read -r control || exit 1
+  printf '%s\n' "$control" >> '{}'
+  printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"session-old","update":{{"sessionUpdate":"usage_update","used":999999,"size":1000000}}}}}}'
+  printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"session-old","update":{{"sessionUpdate":"current_mode_update","currentModeId":"default"}}}}}}'
+  printf '%s\n' '{}'
+  prompt_id=5
+fi
 IFS= read -r prompt || exit 1
 printf '%s\n' "$prompt" >> '{}'
 printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"session-old","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"current"}}}}}}}}'
-printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"stopReason":"end_turn"}}}}\n' "$prompt_id"
 while IFS= read -r ignored; do :; done
 "#,
-                protocol_log.display(),
-                protocol_log.display(),
-                protocol_log.display(),
-            ),
-        );
+                    protocol_log.display(),
+                    protocol_log.display(),
+                    protocol_log.display(),
+                    control_reply,
+                    protocol_log.display(),
+                ),
+            );
 
-        let frozen = frozen_trae_runtime(&executable);
-        let workspace = AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().to_string());
-        let (incoming, mut receiver) = mpsc::unbounded_channel();
-        let builtin_tools = exact_builtin_tools(&root);
-        let host = AcpHost::spawn(
-            &root,
-            &workspace,
-            PermissionSemantics::RuntimeManagedV2,
-            &frozen,
-            incoming,
-            Some(builtin_tools),
-            CompactionDetectorPolicy::Disabled,
-            true,
-            &BTreeMap::new(),
-            &root.join("private"),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        let runtime = AcpRuntime::from_host(
-            AcpRuntimeOwner {
-                agent_run_id: "agent-run-resume".to_string(),
-                execution_epoch: 1,
-            },
-            host.clone(),
-            "sha256:compatibility".to_string(),
-            "sha256:mcp".to_string(),
-            root.clone(),
-            Some(exact_attachment_root(&root)),
-            "runtime_managed".to_string(),
-            AcpSessionPermissions::default(),
-            None,
-        );
-        let session_id = runtime
-            .start_or_resume_session(
-                Some("session-old"),
-                AcpSessionCapabilities {
-                    can_resume: false,
-                    can_load_history: true,
-                },
-                "runtime_default",
-                TRAE_RUNTIME_DEFAULT_MODEL_ID,
-                &json!({}),
+            let mut frozen = frozen_trae_runtime(&executable);
+            frozen.adapter_kind = kind;
+            frozen.permissions.adapter_kind = kind;
+            if kind == AdapterKind::CommandCodeCli {
+                frozen.reported_version = Some("1.88.0".into());
+            }
+            let workspace =
+                AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().to_string());
+            let (incoming, mut receiver) = mpsc::unbounded_channel();
+            let builtin_tools = exact_builtin_tools(&root);
+            let host = AcpHost::spawn(
+                &root,
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &frozen,
+                incoming,
+                Some(builtin_tools),
+                CompactionDetectorPolicy::Disabled,
+                true,
                 &BTreeMap::new(),
+                &root.join("private"),
+                None,
+                None,
             )
             .await
             .unwrap();
-        assert_eq!(session_id, "session-old");
-        assert!(receiver.try_recv().is_err());
+            let runtime = AcpRuntime::from_test_host(
+                AcpRuntimeOwner {
+                    agent_run_id: "agent-run-resume".to_string(),
+                    execution_epoch: 1,
+                },
+                host.clone(),
+                "sha256:compatibility".to_string(),
+                "sha256:mcp".to_string(),
+                root.clone(),
+                Some(exact_attachment_root(&root)),
+                "runtime_managed".to_string(),
+                AcpSessionPermissions {
+                    mode: Some("default".into()),
+                    ..AcpSessionPermissions::default()
+                },
+                None,
+            );
+            let session_id = runtime
+                .start_or_resume_session(
+                    Some("session-old"),
+                    AcpSessionCapabilities {
+                        can_resume: false,
+                        can_load_history: true,
+                    },
+                    "runtime_default",
+                    TRAE_RUNTIME_DEFAULT_MODEL_ID,
+                    &json!({}),
+                    &BTreeMap::new(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(session_id, "session-old");
+            assert!(receiver.try_recv().is_err());
 
-        let prompt_id = runtime
-            .start_prompt("delivery-current", "continue")
-            .await
-            .unwrap();
-        assert!(matches!(
-            receiver.recv().await,
-            Some(AcpIncoming::InputAccepted {
-                native_session_id,
-                native_prompt_id,
-                delivery_id,
-                ..
-            }) if native_session_id == "session-old"
-                && native_prompt_id == prompt_id
-                && delivery_id == "delivery-current"
-        ));
-        let first = receiver
-            .recv()
-            .await
-            .expect("current prompt update missing");
-        assert!(matches!(
-            first,
-            AcpIncoming::Message {
-                native_session_id,
-                native_prompt_id,
-                delivery_id,
-                sequence: 1,
-                message,
-                ..
-            } if native_session_id == "session-old"
-                && native_prompt_id == prompt_id
-                && delivery_id == "delivery-current"
-                && message.pointer("/params/update/content/text").and_then(Value::as_str)
-                    == Some("current")
-        ));
-        assert!(matches!(
-            receiver.recv().await,
-            Some(AcpIncoming::Message {
-                sequence: 2,
-                message,
-                ..
-            }) if message.get("method").and_then(Value::as_str)
-                == Some("rovai/acp_prompt_completed")
-        ));
-        host.shutdown().await;
+            if kind == AdapterKind::CommandCodeCli {
+                let result = runtime
+                    .bind_managed_bootstrap(&session_id, "  Charter 中文\n\"literal\" = ${value}  ")
+                    .await;
+                // Control end_turn, usage and mode metadata are preparation;
+                // none may acknowledge input or enter the Run event stream.
+                assert!(receiver.try_recv().is_err());
+                assert!(matches!(
+                    host.routes.read().await[&session_id].phase,
+                    AcpSessionPhase::Ready
+                ));
+                assert!(!host.protocol_violated.load(Ordering::Acquire));
+                let protocol = std::fs::read_to_string(&protocol_log).unwrap();
+                let control: Value =
+                    serde_json::from_str(protocol.lines().last().unwrap()).unwrap();
+                let text = control["params"]["prompt"][0]["text"].as_str().unwrap();
+                assert_eq!(control["method"], "session/prompt");
+                assert_eq!(
+                    serde_json::from_str::<String>(text.strip_prefix("/rovai-bootstrap ").unwrap())
+                        .unwrap(),
+                    "  Charter 中文\n\"literal\" = ${value}  "
+                );
+                if control_outcome != "end_turn" {
+                    assert!(result.is_err());
+                    host.shutdown().await;
+                    assert_eq!(std::fs::read_to_string(&protocol_log).unwrap(), protocol);
+                    std::fs::remove_dir_all(root).unwrap();
+                    continue;
+                }
+                result.unwrap();
+            }
 
-        let protocol = std::fs::read_to_string(&protocol_log).unwrap();
-        assert!(protocol.contains("\"method\":\"session/load\""));
-        assert!(!protocol.contains("\"method\":\"session/resume\""));
-        std::fs::remove_dir_all(root).unwrap();
+            let prompt_id = runtime
+                .start_prompt("delivery-current", "continue")
+                .await
+                .unwrap();
+            // Command acknowledges on the prompt result; TRAE supports active
+            // input and acknowledges on the first current activity instead.
+            let (accepted, first) = if kind == AdapterKind::CommandCodeCli {
+                let first = receiver.recv().await;
+                (receiver.recv().await, first)
+            } else {
+                (receiver.recv().await, receiver.recv().await)
+            };
+            assert!(
+                matches!(
+                    &accepted,
+                    Some(AcpIncoming::InputAccepted {
+                        native_session_id,
+                        native_prompt_id,
+                        delivery_id,
+                        ..
+                    }) if native_session_id == "session-old"
+                        && native_prompt_id == &prompt_id
+                        && delivery_id == "delivery-current"
+                ),
+                "{kind:?}: {accepted:?}"
+            );
+            let first = first.expect("current prompt update missing");
+            assert!(matches!(
+                first,
+                AcpIncoming::Message {
+                    native_session_id,
+                    native_prompt_id,
+                    delivery_id,
+                    sequence: 1,
+                    message,
+                    ..
+                } if native_session_id == "session-old"
+                    && native_prompt_id == prompt_id
+                    && delivery_id == "delivery-current"
+                    && message.pointer("/params/update/content/text").and_then(Value::as_str)
+                        == Some("current")
+            ));
+            assert!(matches!(
+                receiver.recv().await,
+                Some(AcpIncoming::Message {
+                    sequence: 2,
+                    message,
+                    ..
+                }) if message.get("method").and_then(Value::as_str)
+                    == Some("rovai/acp_prompt_completed")
+            ));
+            host.shutdown().await;
+
+            let protocol = std::fs::read_to_string(&protocol_log).unwrap();
+            assert!(protocol.contains("\"method\":\"session/load\""));
+            assert!(!protocol.contains("\"method\":\"session/resume\""));
+            assert!(!protocol.contains("\"method\":\"session/list\""));
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]
@@ -13726,13 +14854,13 @@ while IFS= read -r ignored; do :; done
             )
             .await
             .unwrap();
-            let runtime = AcpRuntime::from_host(
+            let runtime = AcpRuntime::from_test_host(
                 AcpRuntimeOwner {
                     agent_run_id: format!("agent-run-history-anomaly-{case_name}"),
                     execution_epoch: 1,
                 },
                 host.clone(),
-                "sha256:compatibility".to_string(),
+                "sha256:compatibility".to_owned(),
                 "sha256:mcp".to_string(),
                 root.clone(),
                 Some(exact_attachment_root(&root)),
@@ -13845,6 +14973,8 @@ while IFS= read -r ignored; do :; done
         )
         .unwrap();
 
+        let cold_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let first_cold_calls = cold_calls.clone();
         let first = adapter
             .ensure_agent_run_runtime(
                 "agent-run-one",
@@ -13859,8 +14989,12 @@ while IFS= read -r ignored; do :; done
                 &BTreeMap::new(),
                 "sha256:mcp",
                 &attachment_root,
-                "sha256:compatibility",
+                &Some("sha256:compatibility".to_owned()),
                 None,
+                move |runtime| {
+                    first_cold_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    std::future::ready(Ok(runtime))
+                },
             )
             .await
             .unwrap();
@@ -13900,12 +15034,18 @@ while IFS= read -r ignored; do :; done
                 &BTreeMap::new(),
                 "sha256:mcp",
                 &attachment_root,
-                "sha256:compatibility",
+                &Some("sha256:compatibility".to_owned()),
                 None,
+                |_| {
+                    std::future::ready(Err(anyhow::anyhow!(
+                        "warm reuse must not prepare a new process"
+                    )))
+                },
             )
             .await
             .unwrap();
         assert_eq!(second.host_instance_id(), first_host);
+        assert_eq!(cold_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         assert_eq!(
             second.builtin_tool_process_config().unwrap().context_path(),
             first.builtin_tool_process_config().unwrap().context_path()
@@ -13929,9 +15069,26 @@ while IFS= read -r ignored; do :; done
         second.start_prompt("delivery-two", "two").await.unwrap();
         receive_through_prompt_completion(&mut receiver).await;
         adapter.complete_agent_run("agent-run-two", 1).await;
-        fleet.shutdown_all().await;
+        fleet.invalidate_adapter(AdapterKind::TraeCnCli).await;
 
-        let invocations = std::fs::read_to_string(&invocation_log).unwrap();
+        // Catalog observations are optional background work and may finish after
+        // prompt completion. Observe their actual invocations before asserting.
+        let invocations = timeout(Duration::from_secs(5), async {
+            loop {
+                let invocations = std::fs::read_to_string(&invocation_log).unwrap();
+                if invocations
+                    .lines()
+                    .filter(|line| line.ends_with("models --json"))
+                    .count()
+                    >= 2
+                {
+                    break invocations;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("TRAE catalog observations did not reach the fixture");
         assert_eq!(
             invocations
                 .lines()
@@ -13951,6 +15108,29 @@ while IFS= read -r ignored; do :; done
         assert_eq!(protocol.matches("\"method\":\"session/prompt\"").count(), 2);
         assert!(!protocol.contains("\"method\":\"session/load\""));
         assert!(!protocol.contains("\"method\":\"session/resume\""));
+        let cold_error = adapter
+            .ensure_agent_run_runtime(
+                "agent-run-cold-rejected",
+                1,
+                "camp-one",
+                "agent-one",
+                "fixture-binding",
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &frozen,
+                &warm_factory,
+                &BTreeMap::new(),
+                "sha256:mcp",
+                &attachment_root,
+                &Some("sha256:compatibility".to_owned()),
+                None,
+                |_| std::future::ready(Err(anyhow::anyhow!("cold entry unavailable"))),
+            )
+            .await
+            .err()
+            .expect("cold validation failure must reject spawn");
+        assert!(format!("{cold_error:#}").contains("cold entry unavailable"));
+        fleet.shutdown_all().await;
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -14036,8 +15216,9 @@ while IFS= read -r ignored; do :; done
                 &external_mcp_servers,
                 "sha256:mcp",
                 &attachment_root,
-                "sha256:compatibility",
+                &Some("sha256:compatibility".to_owned()),
                 None,
+                |runtime| std::future::ready(Ok(runtime)),
             )
             .await
             .unwrap();
@@ -14112,8 +15293,9 @@ while IFS= read -r ignored; do :; done
                 &external_mcp_servers,
                 "sha256:mcp",
                 &attachment_root,
-                "sha256:compatibility",
+                &Some("sha256:compatibility".to_owned()),
                 None,
+                |runtime| std::future::ready(Ok(runtime)),
             )
             .await
             .unwrap();
@@ -14215,13 +15397,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "run-kimi-active-compaction".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -14389,13 +15571,13 @@ while IFS= read -r ignored; do :; done
         )
         .await
         .unwrap();
-        let runtime = AcpRuntime::from_host(
+        let runtime = AcpRuntime::from_test_host(
             AcpRuntimeOwner {
                 agent_run_id: "run-final-assistant-suffix".to_string(),
                 execution_epoch: 1,
             },
             host.clone(),
-            "sha256:compatibility".to_string(),
+            "sha256:compatibility".to_owned(),
             "sha256:mcp".to_string(),
             root.clone(),
             Some(exact_attachment_root(&root)),
@@ -15237,6 +16419,15 @@ while IFS= read -r ignored; do :; done
         );
         assert_eq!(
             select_acp_session_continuation(
+                AdapterKind::HermesCli,
+                false,
+                Some("session-1"),
+                load_only,
+            ),
+            AcpSessionContinuation::HistoryRestore
+        );
+        assert_eq!(
+            select_acp_session_continuation(
                 AdapterKind::GrokBuild,
                 false,
                 Some("session-1"),
@@ -15301,6 +16492,21 @@ while IFS= read -r ignored; do :; done
         make_executable(&executable, "#!/bin/sh\nexit 0\n");
         let workspace = AgentRunWorkspace::runtime_managed_path(root.to_string_lossy().to_string());
         let frozen = frozen_trae_runtime(&executable);
+        let mut hermes = frozen.clone();
+        hermes.adapter_kind = AdapterKind::HermesCli;
+        hermes.permissions.adapter_kind = AdapterKind::HermesCli;
+        assert!(
+            runtime_compatibility_digest(
+                &hermes,
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &BTreeMap::new(),
+                &attachment_authorization
+            )
+            .unwrap()
+            .is_none()
+        );
+
         let mut opencode = frozen.clone();
         opencode.adapter_kind = AdapterKind::OpencodeCli;
         opencode.permissions.adapter_kind = AdapterKind::OpencodeCli;
@@ -15353,7 +16559,142 @@ while IFS= read -r ignored; do :; done
             "attachmentOutputRoot": attachment_authorization.output_root,
         }))
         .unwrap();
-        assert_eq!(first, process_input_digest);
+        assert_eq!(first, Some(process_input_digest));
+
+        // A process-policy upgrade replaces Copilot Hosts, without changing
+        // the Native Session binding or other adapters' compatibility inputs.
+        let mut copilot = frozen.clone();
+        copilot.adapter_kind = AdapterKind::CopilotCli;
+        copilot.permissions.adapter_kind = AdapterKind::CopilotCli;
+        copilot.permissions.values = json!({"allow_all":"on"});
+        let copilot_digest = runtime_compatibility_digest(
+            &copilot,
+            &workspace,
+            PermissionSemantics::RuntimeManagedV2,
+            &BTreeMap::new(),
+            &attachment_authorization,
+        )
+        .unwrap();
+        let mut old_inputs = json!({
+            "schemaVersion":4, "adapterKind":copilot.adapter_kind,
+            "hostConfigDigest":copilot.host_config_digest, "codebuddyLaunchModel":null,
+            "executionRoot":root.canonicalize().unwrap(), "workspace":workspace,
+            "permissionSemantics":PermissionSemantics::RuntimeManagedV2,
+            "builtinToolContractVersion":BUILTIN_TOOL_CONTRACT_VERSION,
+            "externalMcpServers":{}, "attachmentOutputRoot":attachment_authorization.output_root,
+        });
+        assert_ne!(
+            copilot_digest,
+            Some(canonical_json_digest(&old_inputs).unwrap())
+        );
+        old_inputs["nativeQuestionnairePolicy"] = json!("no-ask-user-v1");
+        assert_eq!(
+            copilot_digest,
+            Some(canonical_json_digest(&old_inputs).unwrap())
+        );
+        for isolated in [false, true] {
+            let mut command = Command::new(&executable);
+            configure_runtime_command(
+                &mut command,
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &copilot,
+                isolated,
+                &BTreeMap::new(),
+                &root,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let args = command.as_std().get_args().collect::<Vec<_>>();
+            assert!(args.iter().any(|arg| *arg == "--no-ask-user"));
+            assert_eq!(
+                args.iter().any(|arg| *arg == "--available-tools="),
+                isolated
+            );
+            assert_eq!(
+                args.iter().any(|arg| *arg == "--no-custom-instructions"),
+                isolated
+            );
+        }
+
+        // Qwen's tool exclusion is also a Host policy, independent of the
+        // Native Session binding and ordinary permission mode.
+        let mut qwen = frozen.clone();
+        qwen.adapter_kind = AdapterKind::QwenCode;
+        qwen.permissions.adapter_kind = AdapterKind::QwenCode;
+        qwen.permissions.values = json!({"approval_mode":"yolo"});
+        let qwen_digest = runtime_compatibility_digest(
+            &qwen,
+            &workspace,
+            PermissionSemantics::RuntimeManagedV2,
+            &BTreeMap::new(),
+            &attachment_authorization,
+        )
+        .unwrap();
+        old_inputs["adapterKind"] = json!(AdapterKind::QwenCode);
+        old_inputs
+            .as_object_mut()
+            .unwrap()
+            .remove("nativeQuestionnairePolicy");
+        assert_ne!(
+            qwen_digest,
+            Some(canonical_json_digest(&old_inputs).unwrap())
+        );
+        old_inputs["nativeQuestionnairePolicy"] = json!("exclude-ask-user-question-v1");
+        assert_eq!(
+            qwen_digest,
+            Some(canonical_json_digest(&old_inputs).unwrap())
+        );
+        for isolated in [false, true] {
+            let mut command = Command::new(&executable);
+            configure_runtime_command(
+                &mut command,
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &qwen,
+                isolated,
+                &BTreeMap::new(),
+                &root,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let args = command.as_std().get_args().collect::<Vec<_>>();
+            assert!(args.iter().any(|arg| *arg == "--acp"));
+            assert!(
+                args.iter()
+                    .any(|arg| *arg == "--exclude-tools=ask_user_question")
+            );
+            assert!(args.iter().any(|arg| *arg == "yolo"));
+            assert!(!args.iter().any(|arg| *arg == "--available-tools="));
+        }
+
+        // Only the V2 launch policy changes; V1 and native Session identity
+        // retain their existing compatibility inputs.
+        for (runtime, policy) in [(&v1, None), (&v2, Some("deny-question-v1"))] {
+            let digest = runtime_compatibility_digest(
+                runtime,
+                &workspace,
+                PermissionSemantics::RuntimeManagedV2,
+                &BTreeMap::new(),
+                &attachment_authorization,
+            )
+            .unwrap();
+            old_inputs["adapterKind"] = json!(AdapterKind::OpencodeCli);
+            old_inputs["hostConfigDigest"] = json!(runtime.host_config_digest);
+            old_inputs
+                .as_object_mut()
+                .unwrap()
+                .remove("nativeQuestionnairePolicy");
+            if let Some(policy) = policy {
+                assert_ne!(digest, Some(canonical_json_digest(&old_inputs).unwrap()));
+                old_inputs["nativeQuestionnairePolicy"] = json!(policy);
+            }
+            assert_eq!(digest, Some(canonical_json_digest(&old_inputs).unwrap()));
+        }
 
         let mut upgraded = frozen.clone();
         upgraded.reported_version = Some("0.120.52".to_string());
@@ -15433,6 +16774,32 @@ while IFS= read -r ignored; do :; done
             &attachment_authorization,
         )
         .unwrap();
+        let mut old_inputs = json!({
+            "schemaVersion":4, "adapterKind":codebuddy.adapter_kind,
+            "hostConfigDigest":codebuddy.host_config_digest, "codebuddyLaunchModel":null,
+            "executionRoot":root.canonicalize().unwrap(), "workspace":workspace,
+            "permissionSemantics":PermissionSemantics::RuntimeManagedV2,
+            "builtinToolContractVersion":BUILTIN_TOOL_CONTRACT_VERSION,
+            "externalMcpServers":{}, "attachmentOutputRoot":attachment_authorization.output_root,
+        });
+        assert_ne!(
+            codebuddy_default,
+            Some(canonical_json_digest(&old_inputs).unwrap())
+        );
+        old_inputs["nativeBackgroundPolicy"] = json!("disabled-v1");
+        assert_eq!(
+            codebuddy_default,
+            Some(canonical_json_digest(&old_inputs).unwrap())
+        );
+        let unchanged = freeze_native_session_compatibility(codebuddy.clone(), &workspace).unwrap();
+        assert_eq!(
+            unchanged.binding_compatibility_digest,
+            codebuddy.binding_compatibility_digest
+        );
+        assert_eq!(
+            unchanged.native_session_compatibility_key,
+            codebuddy.native_session_compatibility_key
+        );
         codebuddy.model.source = "explicit".to_string();
         codebuddy.model.model_id = "provider:explicit-model".to_string();
         let codebuddy_explicit = runtime_compatibility_digest(
@@ -15465,7 +16832,7 @@ while IFS= read -r ignored; do :; done
         .unwrap();
         assert_ne!(changed_mcp, first);
 
-        upgraded.host_config_digest = "sha256:changed-host-input".to_string();
+        upgraded.host_config_digest = Some("sha256:changed-host-input".to_string());
         let changed_host = runtime_compatibility_digest(
             &upgraded,
             &workspace,
@@ -15557,7 +16924,7 @@ while IFS= read -r ignored; do :; done
         let mut changed_executable = frozen.clone();
         changed_executable.executable_fingerprint = "sha256:grok-other".to_string();
         let mut changed_host = frozen.clone();
-        changed_host.host_config_digest = "sha256:host-other".to_string();
+        changed_host.host_config_digest = Some("sha256:host-other".to_string());
         let mut changed_model = frozen.clone();
         changed_model.model.model_id = "grok-4.5".to_string();
         let mut changed_permissions = frozen.clone();
@@ -15603,6 +16970,129 @@ while IFS= read -r ignored; do :; done
 
     #[test]
     fn approval_selects_the_exact_native_option_id() {
+        for (adapter, fixture) in [
+            (
+                AdapterKind::KimiCodeCli,
+                include_str!("../tests/fixtures/runtime-questionnaire/kimi-2.1.1.json"),
+            ),
+            (
+                AdapterKind::QwenCode,
+                include_str!("../tests/fixtures/runtime-questionnaire/qwen-0.25.0.json"),
+            ),
+            (
+                AdapterKind::HermesCli,
+                include_str!("../tests/fixtures/runtime-questionnaire/hermes-0.22.4.json"),
+            ),
+        ] {
+            let question: Value = serde_json::from_str(fixture).unwrap();
+            if adapter == AdapterKind::QwenCode {
+                let observed = ObservedAcpToolContext {
+                    native_kind: Some("other".into()),
+                    raw_input: Some(question["toolCall"]["rawInput"].clone()),
+                    stable_meta: Some(question["toolCall"]["_meta"].clone()),
+                    locations: None,
+                };
+                let mut sparse = question.clone();
+                sparse["toolCall"].as_object_mut().unwrap().remove("_meta");
+                assert_eq!(
+                    classify_permission_request_with_context(adapter, &sparse, Some(&observed)),
+                    AcpPermissionRequestKind::Questionnaire
+                );
+                sparse["toolCall"]["_meta"] = json!({"toolName":"write_file"});
+                assert_eq!(
+                    classify_permission_request_with_context(adapter, &sparse, Some(&observed)),
+                    AcpPermissionRequestKind::MalformedQuestionnaire
+                );
+            }
+            assert_eq!(
+                classify_permission_request(adapter, &question),
+                AcpPermissionRequestKind::Questionnaire
+            );
+            assert!(
+                validate_permission_request_identity("questionnaire-session", &question).is_ok()
+            );
+            assert!(validate_permission_request_identity("another-session", &question).is_err());
+            let mut malformed = question.clone();
+            malformed["options"] = json!([{"optionId":"submit","kind":"allow_once"}]);
+            assert_eq!(
+                classify_permission_request(adapter, &malformed),
+                AcpPermissionRequestKind::MalformedQuestionnaire
+            );
+            let mut conflicting = question.clone();
+            if adapter == AdapterKind::HermesCli {
+                conflicting["toolCall"]["kind"] = json!("execute");
+            } else {
+                conflicting["toolCall"]["_meta"] =
+                    json!({"toolName":"write_file","qwenInteractionKind":"user_question"});
+            }
+            assert_eq!(
+                classify_permission_request(adapter, &conflicting),
+                AcpPermissionRequestKind::MalformedQuestionnaire
+            );
+            let mut questions = vec![question.clone(), malformed, conflicting];
+            if adapter == AdapterKind::HermesCli {
+                let mut open = question.clone();
+                open["toolCall"]["rawInput"]["choices"] = json!([]);
+                open["options"] = json!([question["options"].as_array().unwrap().last().unwrap()]);
+                assert_eq!(
+                    classify_permission_request(adapter, &open),
+                    AcpPermissionRequestKind::Questionnaire
+                );
+                questions.push(open);
+                for pointer in [
+                    "/toolCall/rawInput/question",
+                    "/toolCall/rawInput/choices",
+                    "/options/0/optionId",
+                    "/options/0/name",
+                ] {
+                    let mut missing = question.clone();
+                    *missing.pointer_mut(pointer).unwrap() = Value::Null;
+                    assert_eq!(
+                        classify_permission_request(adapter, &missing),
+                        AcpPermissionRequestKind::MalformedQuestionnaire
+                    );
+                    questions.push(missing);
+                }
+            }
+            for params in &questions {
+                for approved in [false, true] {
+                    assert_eq!(
+                        legacy_approval_result(adapter, params, approved).unwrap(),
+                        json!({"outcome":{"outcome":"cancelled"}})
+                    );
+                }
+                let context = InterceptedAcpActionContext {
+                    adapter_kind: adapter,
+                    agent_run_id: "run",
+                    execution_epoch: 1,
+                    expected_session_id: "questionnaire-session",
+                    expected_prompt_id: "prompt",
+                    execution_root: Path::new("/project"),
+                    permission_semantics: PermissionSemantics::RuntimeManagedV2,
+                };
+                assert!(
+                    intercepted_action_request(&context, json!("request"), params, None).is_err()
+                );
+            }
+            // Neither a suggestive title nor multiple allow_once options is
+            // enough to turn an ordinary command/MCP authorization into input.
+            let mut ordinary = question.clone();
+            ordinary["toolCall"]["title"] = json!("Question about a command");
+            ordinary["toolCall"]["_meta"] = json!({"toolName":"run_shell_command"});
+            ordinary["toolCall"]["toolCallId"] = json!("tc-ordinary");
+            assert_eq!(
+                classify_permission_request(adapter, &ordinary),
+                AcpPermissionRequestKind::Execution
+            );
+            assert_eq!(
+                legacy_approval_result(adapter, &ordinary, true).unwrap()["outcome"]["optionId"],
+                question["options"][0]["optionId"]
+            );
+            assert_eq!(
+                classify_permission_request(AdapterKind::CopilotCli, &question),
+                AcpPermissionRequestKind::Execution
+            );
+        }
         let request = json!({
             "options": [
                 {"optionId": "once", "kind": "allow_once", "name": "  Runtime Allow once  ", "label": "unused"},
@@ -15636,13 +17126,16 @@ while IFS= read -r ignored; do :; done
             approval_result(&request, "reject").expect("denial should map"),
             json!({"outcome": {"outcome": "selected", "optionId": "reject"}})
         );
-        assert!(!is_questionnaire_permission_request(&request));
         assert_eq!(
-            legacy_approval_result(&request, true).unwrap(),
+            classify_permission_request(AdapterKind::MinimaxCodeCli, &request),
+            AcpPermissionRequestKind::Execution
+        );
+        assert_eq!(
+            legacy_approval_result(AdapterKind::MinimaxCodeCli, &request, true).unwrap(),
             approval_result(&request, "once").unwrap()
         );
         assert_eq!(
-            legacy_approval_result(&request, false).unwrap(),
+            legacy_approval_result(AdapterKind::MinimaxCodeCli, &request, false).unwrap(),
             approval_result(&request, "reject").unwrap()
         );
         // Upstream's simple-single-select fallback labels every answer allow_once.
@@ -15660,10 +17153,14 @@ while IFS= read -r ignored; do :; done
         ] {
             let question =
                 json!({"toolCall":{"toolCallId":"ask-1","kind":"other"},"options":options});
-            assert!(is_questionnaire_permission_request(&question));
+            assert_eq!(
+                classify_permission_request(AdapterKind::MinimaxCodeCli, &question),
+                AcpPermissionRequestKind::Questionnaire
+            );
             for approved in [true, false] {
                 assert_eq!(
-                    legacy_approval_result(&question, approved).unwrap(),
+                    legacy_approval_result(AdapterKind::MinimaxCodeCli, &question, approved)
+                        .unwrap(),
                     json!({"outcome":{"outcome":"cancelled"}})
                 );
             }
@@ -16086,6 +17583,13 @@ while IFS= read -r ignored; do :; done
 
     #[test]
     fn successful_terminal_acp_diff_content_is_kept_for_evidence_projection_only() {
+        for kind in [AdapterKind::HermesCli, AdapterKind::MinimaxCodeCli] {
+            let proposed = completed_action(kind, &json!({"update":{
+                "sessionUpdate":"tool_call_update","toolCallId":"preview","status":"completed","kind":"edit",
+                "content":[{"type":"diff","path":"a.txt","oldText":"before","newText":"after"}]
+            }})).unwrap().unwrap();
+            assert!(proposed.public_file_changes.is_none(), "{kind:?}");
+        }
         let completion = completed_action(
             AdapterKind::CursorAgent,
             &json!({
@@ -16975,8 +18479,8 @@ mod windows_account_live_tests {
                 },
             },
             native_session_compatibility_key: None,
-            binding_compatibility_digest: "synthetic".into(),
-            host_config_digest: "synthetic".into(),
+            binding_compatibility_digest: Some("synthetic".into()),
+            host_config_digest: Some("synthetic".into()),
             config_digest: "synthetic".into(),
         };
         let workspace = AgentRunWorkspace {
@@ -17057,8 +18561,12 @@ mod windows_account_live_tests {
             let logical = AcpRuntime::from_host(
                 owner.clone(),
                 host.clone(),
-                "synthetic".into(),
-                "synthetic".into(),
+                crate::runtime_fleet::RuntimeCompatibilityKey::member(
+                    "synthetic-camp",
+                    "synthetic-member",
+                    "synthetic",
+                ),
+                Some("synthetic".into()),
                 workspace.path().to_path_buf(),
                 Some(fixture.join("attachments")),
                 "write".into(),
@@ -17153,7 +18661,7 @@ mod windows_account_live_tests {
                                 "session/request_permission" => logical
                                     .respond(
                                         request_id.clone(),
-                                        legacy_approval_result(&message["params"], true).unwrap(),
+                                        legacy_approval_result(kind, &message["params"], true).unwrap(),
                                     )
                                     .await
                                     .unwrap(),
@@ -17202,8 +18710,12 @@ mod windows_account_live_tests {
             let logical = AcpRuntime::from_host(
                 owner.clone(),
                 host.clone(),
-                "synthetic".into(),
-                "synthetic".into(),
+                crate::runtime_fleet::RuntimeCompatibilityKey::member(
+                    "synthetic-camp",
+                    "synthetic-member",
+                    "synthetic",
+                ),
+                Some("synthetic".into()),
                 workspace.path().to_path_buf(),
                 Some(fixture.join("attachments")),
                 "write".into(),
@@ -17239,7 +18751,7 @@ mod windows_account_live_tests {
                             let _=logical.observe_message(&prompt_id,method,&message["params"]).await;
                             if let Some(id)=message.get("id") {
                                 match method {
-                                    "session/request_permission"=>logical.respond(id.clone(),legacy_approval_result(&message["params"],true).unwrap()).await.unwrap(),
+                                    "session/request_permission"=>logical.respond(id.clone(),legacy_approval_result(kind, &message["params"],true).unwrap()).await.unwrap(),
                                     "fs/read_text_file"=>match logical.read_text_file(&message["params"]).await {Ok(value)=>logical.respond(id.clone(),value).await.unwrap(),Err(_)=>logical.respond_error(id.clone(),-32603,"OS access denied").await.unwrap()},
                                     "fs/write_text_file"=>match logical.write_text_file(&message["params"]).await {Ok(value)=>logical.respond(id.clone(),value).await.unwrap(),Err(_)=>logical.respond_error(id.clone(),-32603,"OS access denied").await.unwrap()},
                                     _=>logical.respond_error(id.clone(),-32601,"acceptance method unavailable").await.unwrap(),
@@ -17297,8 +18809,12 @@ mod windows_account_live_tests {
             let logical = AcpRuntime::from_host(
                 owner.clone(),
                 host.clone(),
-                "synthetic".into(),
-                "synthetic".into(),
+                crate::runtime_fleet::RuntimeCompatibilityKey::member(
+                    "synthetic-camp",
+                    "synthetic-member",
+                    "synthetic",
+                ),
+                Some("synthetic".into()),
                 workspace.path().to_path_buf(),
                 Some(fixture.join("attachments")),
                 "write".into(),
@@ -17373,7 +18889,7 @@ mod windows_account_live_tests {
                             match method {
                                 "fs/read_text_file" => match logical.read_text_file(&message["params"]).await {Ok(result)=>logical.respond(id.clone(),result).await.unwrap(),Err(_)=>logical.respond_error(id.clone(),-32603,"OS access denied or unavailable").await.unwrap()},
                                 "fs/write_text_file" => match logical.write_text_file(&message["params"]).await {Ok(result)=>logical.respond(id.clone(),result).await.unwrap(),Err(_)=>logical.respond_error(id.clone(),-32603,"OS access denied or unavailable").await.unwrap()},
-                                "session/request_permission" => logical.respond(id.clone(),legacy_approval_result(&message["params"],true).unwrap()).await.unwrap(),
+                                "session/request_permission" => logical.respond(id.clone(),legacy_approval_result(kind, &message["params"],true).unwrap()).await.unwrap(),
                                 _=>logical.respond_error(id.clone(),-32601,"acceptance method not available").await.unwrap(),
                             }
                         }
@@ -17396,8 +18912,12 @@ mod windows_account_live_tests {
                 let hot = AcpRuntime::from_host(
                     hot_owner.clone(),
                     host.clone(),
-                    "synthetic".into(),
-                    "synthetic".into(),
+                    crate::runtime_fleet::RuntimeCompatibilityKey::member(
+                        "synthetic-camp",
+                        "synthetic-member",
+                        "synthetic",
+                    ),
+                    Some("synthetic".into()),
                     workspace.path().to_path_buf(),
                     Some(fixture.join("attachments")),
                     "write".into(),
@@ -17438,8 +18958,12 @@ mod windows_account_live_tests {
                         execution_epoch: 3,
                     },
                     cold_host.clone(),
-                    "synthetic".into(),
-                    "synthetic".into(),
+                    crate::runtime_fleet::RuntimeCompatibilityKey::member(
+                        "synthetic-camp",
+                        "synthetic-member",
+                        "synthetic",
+                    ),
+                    Some("synthetic".into()),
                     workspace.path().to_path_buf(),
                     Some(fixture.join("attachments")),
                     "write".into(),
@@ -17483,8 +19007,12 @@ mod windows_account_live_tests {
                     let tool = AcpRuntime::from_host(
                         tool_owner.clone(),
                         cold_host.clone(),
-                        "synthetic".into(),
-                        "synthetic".into(),
+                        crate::runtime_fleet::RuntimeCompatibilityKey::member(
+                            "synthetic-camp",
+                            "synthetic-member",
+                            "synthetic",
+                        ),
+                        Some("synthetic".into()),
                         workspace.path().to_path_buf(),
                         Some(fixture.join("attachments")),
                         "write".into(),
@@ -17523,8 +19051,12 @@ mod windows_account_live_tests {
                     let stop = AcpRuntime::from_host(
                         stop_owner.clone(),
                         cold_host.clone(),
-                        "synthetic".into(),
-                        "synthetic".into(),
+                        crate::runtime_fleet::RuntimeCompatibilityKey::member(
+                            "synthetic-camp",
+                            "synthetic-member",
+                            "synthetic",
+                        ),
+                        Some("synthetic".into()),
                         workspace.path().to_path_buf(),
                         Some(fixture.join("attachments")),
                         "write".into(),

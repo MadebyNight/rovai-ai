@@ -30,7 +30,7 @@ pub const CAMP_LIST_TOOL_NAME: &str = "thread.list";
 pub const CAMP_SEARCH_TOOL_NAME: &str = "thread.search";
 pub const HISTORY_SEARCH_TOOL_NAME: &str = "history.search";
 pub const CAMP_READ_TOOL_NAME: &str = "thread.read";
-pub const CAMP_HISTORY_CONTRACT_VERSION: u32 = 14;
+pub const CAMP_HISTORY_CONTRACT_VERSION: u32 = 16;
 
 const CAMP_LIST_DEFAULT_LIMIT: usize = 20;
 const CAMP_LIST_MAX_LIMIT: usize = 50;
@@ -100,6 +100,7 @@ pub struct ThreadReadInput {
     #[serde(rename = "replyChain", alias = "thread")]
     pub thread: Option<String>,
     pub before: Option<i64>,
+    pub after: Option<i64>,
     pub limit: Option<usize>,
 }
 
@@ -255,9 +256,28 @@ impl ThreadHistoryService {
                 },
                 {
                     "additionalProperties": false,
+                    "required": ["replyChain", "after"],
+                    "properties": {
+                        "threadId": {"type": "string", "pattern": CAMP_ID_PATTERN},
+                        "replyChain": {"type": "string", "minLength": 1},
+                        "after": {"type": "integer", "minimum": 0},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_PAGE_LIMIT}
+                    }
+                },
+                {
+                    "additionalProperties": false,
                     "properties": {
                         "threadId": {"type": "string", "pattern": CAMP_ID_PATTERN},
                         "before": {"type": "integer", "minimum": 1},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": MAX_PAGE_LIMIT}
+                    }
+                },
+                {
+                    "additionalProperties": false,
+                    "required": ["after"],
+                    "properties": {
+                        "threadId": {"type": "string", "pattern": CAMP_ID_PATTERN},
+                        "after": {"type": "integer", "minimum": 0},
                         "limit": {"type": "integer", "minimum": 1, "maximum": MAX_PAGE_LIMIT}
                     }
                 }
@@ -364,7 +384,6 @@ impl ThreadHistoryService {
         reproject_search_candidates(&transaction, &query, &mut candidates)?;
         let result = attach_search_quotes(
             &transaction,
-            &target,
             ranked_search_response(
                 &transaction,
                 candidates,
@@ -434,10 +453,8 @@ impl ThreadHistoryService {
             &mut candidates,
         )?;
         reproject_search_candidates(&transaction, &query, &mut candidates)?;
-        let result = attach_history_search_quotes(
+        let result = attach_search_quotes(
             &transaction,
-            &run.agent_id,
-            fence.global_boundary,
             ranked_search_response(
                 &transaction,
                 candidates,
@@ -476,32 +493,33 @@ impl ThreadHistoryService {
             resolve_live_read_target(&transaction, run, &fence, requested_camp_id.as_deref())?
                 .ok_or_else(read_unavailable)?;
         validate_cursor(input.before)?;
+        if input.after.is_some_and(|after| after < 0) {
+            return Err(invalid_argument("after must be a non-negative sequence"));
+        }
+        if input.before.is_some() && input.after.is_some() {
+            return Err(invalid_argument("before and after are mutually exclusive"));
+        }
+        let (direction, cursor) = match input.after {
+            Some(after) => (ReadDirection::After, Some(after)),
+            None => (ReadDirection::Before, input.before),
+        };
         let value = if let Some(message_id) = input.message_id.as_deref() {
-            if input.thread.is_some() || input.before.is_some() || input.limit.is_some() {
+            if input.thread.is_some()
+                || input.before.is_some()
+                || input.after.is_some()
+                || input.limit.is_some()
+            {
                 return Err(invalid_argument(
-                    "messageId cannot be combined with thread, before, or limit",
+                    "messageId cannot be combined with replyChain, before, after, or limit",
                 ));
             }
             read_item(&transaction, &target, run, message_id)?
         } else if let Some(message_id) = input.thread.as_deref() {
             let limit = effective_limit(input.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT)?;
-            read_thread(
-                &transaction,
-                &target,
-                message_id,
-                ReadDirection::Before,
-                input.before,
-                limit,
-            )?
+            read_thread(&transaction, &target, message_id, direction, cursor, limit)?
         } else {
             let limit = effective_limit(input.limit, DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT)?;
-            read_timeline(
-                &transaction,
-                &target,
-                ReadDirection::Before,
-                input.before,
-                limit,
-            )?
+            read_timeline(&transaction, &target, direction, cursor, limit)?
         };
         transaction.commit()?;
         Ok(value)
@@ -1615,36 +1633,21 @@ fn snippet(body: &str, first_match: Option<usize>) -> String {
 
 fn attach_message_quotes(
     transaction: &Transaction<'_>,
-    target: &ThreadTarget,
     message_id: &str,
     value: &mut Value,
 ) -> Result<()> {
-    let fence = match target.fence {
-        MessageFence::Current { boundary } => {
-            crate::message_quote::ThreadQuoteFence::CampSequence(boundary)
-        }
-        MessageFence::History { global_boundary } => {
-            crate::message_quote::ThreadQuoteFence::GlobalPublicationSequence(global_boundary)
-        }
-    };
-    let quotes = crate::message_quote::load_agent_visible_camp_quotes(
+    let quotes = crate::message_quote::load_quotes(
         transaction,
+        crate::message_quote::QuoteStorage::CampMessage,
         message_id,
-        &target.camp_id,
-        &target.viewer_agent_id,
-        fence,
     )?;
     if !quotes.is_empty() {
-        value["quotes"] = json!(crate::message_quote::public_history_quotes(&quotes));
+        value["quotes"] = json!(crate::message_quote::model_quotes(&quotes));
     }
     Ok(())
 }
 
-fn attach_search_quotes(
-    transaction: &Transaction<'_>,
-    target: &ThreadTarget,
-    mut response: Value,
-) -> Result<Value> {
+fn attach_search_quotes(transaction: &Transaction<'_>, mut response: Value) -> Result<Value> {
     for value in response["results"]
         .as_array_mut()
         .context("invalid search result")?
@@ -1653,35 +1656,7 @@ fn attach_search_quotes(
             .as_str()
             .context("search result has no message")?
             .to_owned();
-        attach_message_quotes(transaction, target, &message_id, value)?;
-    }
-    cap_top_k_response(response, "results")
-}
-
-fn attach_history_search_quotes(
-    transaction: &Transaction<'_>,
-    viewer_agent_id: &str,
-    global_boundary: i64,
-    mut response: Value,
-) -> Result<Value> {
-    for value in response["results"]
-        .as_array_mut()
-        .context("invalid search result")?
-    {
-        let message_id = value["messageId"]
-            .as_str()
-            .context("search result has no message")?
-            .to_owned();
-        let camp_id = value["threadId"]
-            .as_str()
-            .context("history search result has no Thread")?
-            .to_owned();
-        let target = ThreadTarget {
-            camp_id,
-            fence: MessageFence::History { global_boundary },
-            viewer_agent_id: viewer_agent_id.to_owned(),
-        };
-        attach_message_quotes(transaction, &target, &message_id, value)?;
+        attach_message_quotes(transaction, &message_id, value)?;
     }
     cap_top_k_response(response, "results")
 }
@@ -1745,7 +1720,7 @@ fn read_item(
     SenderNames::default()
         .project(transaction, &message.author_type, &message.author_id)?
         .insert_into(&mut value["items"][0]);
-    attach_message_quotes(transaction, target, message_id, &mut value["items"][0])?;
+    attach_message_quotes(transaction, message_id, &mut value["items"][0])?;
     Ok(value)
 }
 
@@ -1916,7 +1891,6 @@ fn read_thread(
     };
     fit_collection_response(
         transaction,
-        target,
         rows,
         json!({
             "threadId": target.camp_id,
@@ -1971,7 +1945,6 @@ fn read_timeline(
     };
     fit_collection_response(
         transaction,
-        target,
         rows,
         json!({
             "threadId": target.camp_id,
@@ -2361,7 +2334,6 @@ fn attachment_count(transaction: &Transaction<'_>, message_id: &str) -> Result<u
 
 fn fit_collection_response(
     transaction: &Transaction<'_>,
-    target: &ThreadTarget,
     rows: Vec<MessageRow>,
     mut response: Value,
 ) -> Result<Value> {
@@ -2370,15 +2342,7 @@ fn fit_collection_response(
     let mut sender_names = SenderNames::default();
     response["items"] = Value::Array(
         rows.iter()
-            .map(|row| {
-                collection_item(
-                    transaction,
-                    target,
-                    row,
-                    mentions.get(&row.id),
-                    &mut sender_names,
-                )
-            })
+            .map(|row| collection_item(transaction, row, mentions.get(&row.id), &mut sender_names))
             .collect::<Result<Vec<_>>>()?,
     );
     Ok(response)
@@ -2386,7 +2350,6 @@ fn fit_collection_response(
 
 fn collection_item(
     transaction: &Transaction<'_>,
-    target: &ThreadTarget,
     row: &MessageRow,
     mentions: Option<&Value>,
     sender_names: &mut SenderNames,
@@ -2406,7 +2369,7 @@ fn collection_item(
     sender_names
         .project(transaction, &row.author_type, &row.author_id)?
         .insert_into(&mut value);
-    attach_message_quotes(transaction, target, &row.id, &mut value)?;
+    attach_message_quotes(transaction, &row.id, &mut value)?;
     Ok(value)
 }
 
@@ -2731,15 +2694,9 @@ mod slow_tests {
         )
         .unwrap();
         assert_eq!(rows[0].body, "@User authoritative body");
-        let target = ThreadTarget {
-            camp_id: rows[0].camp_id.clone(),
-            fence: MessageFence::Current { boundary: 1 },
-            viewer_agent_id: "agent_1".into(),
-        };
         let addressing = load_message_mentions(&transaction, &[&rows[0]]).unwrap();
         let collection = collection_item(
             &transaction,
-            &target,
             &rows[0],
             addressing.get(&rows[0].id),
             &mut SenderNames::default(),
@@ -2748,14 +2705,8 @@ mod slow_tests {
         assert_eq!(collection["mentions"], json!([{"id": "user"}]));
         let mut withdrawn = rows[0].clone();
         withdrawn.withdrawn = true;
-        let marker = collection_item(
-            &transaction,
-            &target,
-            &withdrawn,
-            None,
-            &mut SenderNames::default(),
-        )
-        .unwrap();
+        let marker =
+            collection_item(&transaction, &withdrawn, None, &mut SenderNames::default()).unwrap();
         assert_eq!(marker.as_object().unwrap().len(), 4);
         assert!(marker.get("addressing").is_none());
         // Only structured atoms accept the alias; literal old text and mixed queries remain literal.
@@ -3324,45 +3275,69 @@ mod slow_tests {
         assert_eq!(default_page["hasMore"], true);
         assert_eq!(default_page["nextCursor"], 211);
 
-        let mut cursor = None;
-        let mut seen = Vec::new();
-        loop {
+        // Both directions traverse the same visible set across multiple pages,
+        // preserving the tombstone gap and the withdrawn placeholder.
+        for direction in [ReadDirection::Before, ReadDirection::After] {
+            let mut cursor = (direction == ReadDirection::After).then_some(0);
+            let mut seen = Vec::new();
+            loop {
+                let page = read_timeline(
+                    &transaction,
+                    &paged_target,
+                    direction,
+                    cursor,
+                    MAX_PAGE_LIMIT,
+                )
+                .unwrap();
+                let items = page["items"].as_array().unwrap();
+                assert!(items.len() <= 100);
+                let sequences = items
+                    .iter()
+                    .map(|item| item["sequence"].as_i64().unwrap())
+                    .collect::<Vec<_>>();
+                assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
+                if let Some(cursor) = cursor {
+                    match direction {
+                        ReadDirection::Before => {
+                            assert!(sequences.last().is_some_and(|value| *value < cursor))
+                        }
+                        ReadDirection::After => {
+                            assert!(sequences.first().is_some_and(|value| *value > cursor))
+                        }
+                    }
+                }
+                seen.extend(sequences);
+                if page["hasMore"] == false {
+                    assert!(page["nextCursor"].is_null());
+                    break;
+                }
+                cursor = Some(page["nextCursor"].as_i64().unwrap());
+                let edge = match direction {
+                    ReadDirection::Before => items.first(),
+                    ReadDirection::After => items.last(),
+                };
+                assert_eq!(cursor, edge.map(|item| item["sequence"].as_i64().unwrap()));
+            }
+            seen.sort_unstable();
+            assert_eq!(
+                seen,
+                (1..=230)
+                    .filter(|sequence| *sequence != 101)
+                    .collect::<Vec<_>>()
+            );
+        }
+        for after in [100, 101] {
             let page = read_timeline(
                 &transaction,
                 &paged_target,
-                ReadDirection::Before,
-                cursor,
-                MAX_PAGE_LIMIT,
+                ReadDirection::After,
+                Some(after),
+                1,
             )
             .unwrap();
-            let items = page["items"].as_array().unwrap();
-            assert!(items.len() <= 100);
-            let sequences = items
-                .iter()
-                .map(|item| item["sequence"].as_i64().unwrap())
-                .collect::<Vec<_>>();
-            assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
-            if let Some(before) = cursor {
-                assert!(sequences.last().is_some_and(|sequence| *sequence < before));
-            }
-            seen.extend(sequences);
-            if page["hasMore"] == false {
-                assert!(page["nextCursor"].is_null());
-                break;
-            }
-            cursor = Some(page["nextCursor"].as_i64().unwrap());
-            assert_eq!(
-                cursor,
-                items.first().map(|item| item["sequence"].as_i64().unwrap())
-            );
+            assert_eq!(page["items"][0]["sequence"], 102);
+            assert_eq!(page["nextCursor"], 102);
         }
-        seen.sort_unstable();
-        assert_eq!(
-            seen,
-            (1..=230)
-                .filter(|sequence| *sequence != 101)
-                .collect::<Vec<_>>()
-        );
         // These rows must still be normal messages when collection metadata is read.
         let rows = (4..=23)
             .map(|sequence| MessageRow {
@@ -3382,7 +3357,6 @@ mod slow_tests {
             .collect();
         let collection = fit_collection_response(
             &transaction,
-            &target,
             rows,
             json!({
                 "threadId": "rvcamp_01h47kvsy5fk1shh6w1g60eecf",

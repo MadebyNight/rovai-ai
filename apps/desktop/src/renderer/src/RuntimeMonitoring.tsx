@@ -6,6 +6,7 @@ import type {
   AdapterKind,
   MonitoringFilter,
   MonitoringRange,
+  RuntimeStatus,
   RuntimeUsageBreakdownRow,
   RuntimeUsageMoneyValue,
   RuntimeUsageSnapshot,
@@ -14,7 +15,7 @@ import type {
 import { SettingsPageHeader } from './SettingsPageHeader'
 import { revealInFileManagerLabel } from './renderer-platform'
 import { UiText, uiAttribute } from './interface-language'
-import { VISIBLE_PRODUCT_RUNTIMES } from './runtime-products'
+import { visibleProductRuntimes } from './runtime-products'
 
 export const MONITORING_POLL_INTERVAL_MS = 12_000
 export const MONITORING_EVENT_DEBOUNCE_MS = 300
@@ -56,6 +57,7 @@ const ADAPTERS: Array<{ value: AdapterKind; label: string }> = [
   { value: 'cursor-agent', label: 'Cursor Agent' },
   { value: 'kimi-code-cli', label: 'Kimi Code' },
   { value: 'minimax-code-cli', label: 'MiniMax Code' },
+  { value: 'hermes-cli', label: 'Hermes Agent' },
   { value: 'grok-build', label: 'Grok Build' },
   { value: 'deepseek-harness', label: 'DeepSeek Harness' },
   { value: 'cline-cli', label: 'Cline' },
@@ -75,9 +77,11 @@ const SUMMARY_METRICS = [
 ] as const
 
 export function RuntimeMonitoring({
-  platform = 'darwin'
+  platform = 'darwin',
+  health = null
 }: {
   platform?: NodeJS.Platform
+  health?: RuntimeStatus | null
 } = {}): React.JSX.Element {
   const client = useThreadClient()
   const [exported, setExported] = useState(false)
@@ -282,6 +286,7 @@ export function RuntimeMonitoring({
       <div className="runtime-monitoring-body">
         <MonitoringFilters
           filter={filter}
+          runtimeKinds={visibleProductRuntimes(health?.hostPlatform ?? null, health?.runtimePlatformAdmission ?? [])}
           snapshot={snapshot}
           disabled={loading}
           onChange={updateFilter}
@@ -322,11 +327,13 @@ export function RuntimeMonitoring({
 
 function MonitoringFilters({
   filter,
+  runtimeKinds,
   snapshot,
   disabled,
   onChange
 }: {
   filter: MonitoringFilter
+  runtimeKinds: readonly AdapterKind[]
   snapshot: RuntimeUsageSnapshot | null
   disabled: boolean
   onChange<K extends keyof MonitoringFilter>(key: K, value: MonitoringFilter[K]): void
@@ -350,7 +357,7 @@ function MonitoringFilters({
         </Filter>
         <Filter label={uiAttribute("智能体")} value={filter.runtimeKind ?? ''} disabled={disabled} onChange={(value) => onChange('runtimeKind', value ? value as AdapterKind : undefined)}>
           <option value=""><UiText zh={"全部"} /></option>
-          {ADAPTERS.filter((adapter) => VISIBLE_PRODUCT_RUNTIMES.includes(adapter.value)).map((adapter) => <option key={adapter.value} value={adapter.value}>{adapter.label}</option>)}
+          {ADAPTERS.filter((adapter) => runtimeKinds.includes(adapter.value)).map((adapter) => <option key={adapter.value} value={adapter.value}>{adapter.label}</option>)}
         </Filter>
         <Filter label="Provider" value={filter.providerKey ?? ''} disabled={disabled} onChange={(value) => onChange('providerKey', value || undefined)}>
           <option value=""><UiText zh={"全部"} /></option>
