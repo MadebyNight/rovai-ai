@@ -1313,6 +1313,7 @@ export const MemberRuntimeForm = forwardRef<
             id={runtimeSelectId}
             value={selectedKind}
             disabled={(busy !== null || submitting) || persistedRuntimeLocked}
+            hostPlatform={hostPlatform}
             isDisabled={(kind) =>
               hostPlatform !== null &&
               !runtimePlatformAdmissionAllowsUse(
