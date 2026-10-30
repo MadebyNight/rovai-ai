@@ -3743,7 +3743,57 @@ fn connection_has_legacy_feishu_migration_collision(
     ))
 }
 
-// The upstream projection marker is unchanged by additive chat migrations.
+#[cfg(test)]
+pub(super) fn downgrade_chat_extensions_for_test(connection: &Connection) {
+    chat_reply::downgrade_for_test(connection);
+    if !connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=219)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap()
+    {
+        return;
+    }
+    connection.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
+    let tx = connection.unchecked_transaction().unwrap();
+    for table in [
+        "channel_chat_target_grant",
+        "channel_chat_tool_request",
+        "channel_chat_input",
+        "channel_chat_conversation",
+        "channel_chat_outbound",
+        "channel_chat_item",
+        "channel_chat_turn",
+        "channel_chat_message",
+        "channel_chat_credential",
+        "channel_chat_bot",
+    ] {
+        let count: i64 = tx
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "a historical fixture cannot discard chat state in {table}");
+        tx.execute_batch(&format!("DROP TABLE {table}")).unwrap();
+    }
+    tx.execute_batch(
+        "ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled;
+         ALTER TABLE agent_profile DROP COLUMN chat_materials_path;
+         ALTER TABLE conversation DROP COLUMN permission_override_json;
+         DROP INDEX camp_navigation_window_idx;
+         ALTER TABLE camp DROP COLUMN navigation_is_chat_bot;
+         CREATE INDEX camp_navigation_window_idx ON camp (
+             CASE WHEN project_binding_kind='directory' THEN 'directory:'||project_path ELSE 'quick-chat' END,
+             COALESCE(navigation_activity_at,created_at) DESC,navigation_activity_sequence DESC,id
+         ) WHERE deletion_operation_id IS NULL;
+         DELETE FROM schema_migration WHERE version BETWEEN 219 AND 223;
+         UPDATE rovai_data_contract SET projection_schema_version=168 WHERE singleton=1;",
+    ).unwrap();
+    tx.commit().unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+}
+
+// Local chat migrations follow the upstream projection migrations.
 // Receipt and layout validation must still precede admission as Current;
 // open_admitted deliberately does not run schema migrations.
 #[cfg(test)]

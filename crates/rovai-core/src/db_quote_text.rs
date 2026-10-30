@@ -184,6 +184,7 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
 // Existing migration owners use synthetic data; product rows never downgrade.
 #[cfg(test)]
 pub(super) fn downgrade_for_test(c: &Connection) {
+    downgrade_chat_extensions_for_test(c);
     if !c
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migration WHERE version=218)",

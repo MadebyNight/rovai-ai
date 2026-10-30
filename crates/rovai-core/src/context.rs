@@ -8594,6 +8594,7 @@ mod tests {
                     context_manifest_version INTEGER
                 );
                 INSERT INTO agent_run_input VALUES ('historical', 26);
+                INSERT INTO agent_run_input VALUES ('retained', 40);
                 INSERT INTO agent_run_input VALUES ('current', 43);
                 INSERT INTO agent_run_input VALUES ('current', 43);
                 INSERT INTO agent_run_input VALUES ('previous', 36);
