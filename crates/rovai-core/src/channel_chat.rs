@@ -406,10 +406,7 @@ pub(crate) fn migrate(database: &mut Database) -> Result<()> {
     )?;
     // Additive chat tables do not change any existing projection, so the
     // projection schema marker stays at 154.
-    transaction.execute(
-        "INSERT INTO schema_migration VALUES(219,datetime('now'))",
-        [],
-    )?;
+    transaction.execute_batch("INSERT INTO schema_migration VALUES(219,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=169,updated_at=datetime('now') WHERE singleton=1;")?;
     transaction.commit()?;
     Ok(())
 }
@@ -2629,9 +2626,12 @@ mod tests {
             crate::db::DatabaseContractClassification::SupportedMigrationSource(_)
         ));
         crate::channel_chat_tools::migrate(&mut database).unwrap();
+        // Only the chat-tool step is applied here, so the marker is an intermediate
+        // migration source rather than the current projection.
         assert!(matches!(
             crate::db::classify_database_contract(database.connection()).unwrap(),
-            crate::db::DatabaseContractClassification::Current(_)
+            crate::db::DatabaseContractClassification::SupportedMigrationSource(ref m)
+                if m.projection_schema_version == 171
         ));
         crate::db::assert_chat_tool_upgrade_sources(&mut database);
         let columns: i64 = database

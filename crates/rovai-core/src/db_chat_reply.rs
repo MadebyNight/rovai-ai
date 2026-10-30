@@ -17,10 +17,10 @@ fn schema(c: &Connection, kind: &str, name: &str) -> Result<String> {
 pub(super) fn schema_matches(c: &Connection) -> rusqlite::Result<bool> {
     Ok(single_chat_facts::schema_matches(c)?
         && schema(c, "table", "context_manifest")
-            .is_ok_and(|s| s.contains(FACT43) && s.contains("40, 41, 42, 43)"))
+            .is_ok_and(|s| s.contains(FACT43) && s.contains("40, 41, 42, 43"))
         && schema(c, "table", "agent_run_input").is_ok_and(|s| s.contains("38, 39, 40, 43)"))
         && schema(c, "trigger", "agent_run_input_v43_only_insert")
-            .is_ok_and(|s| s.contains("IS NOT 43"))
+            .is_ok_and(|s| s.contains("IS NOT 43") && s.contains("IS NOT 44"))
         && schema(c, "trigger", "context_manifest_v40_only_insert").is_ok_and(|s| {
             s.contains("NEW.context_manifest_version = 43")
                 && s.contains("input.context_manifest_version IS NOT 43")
@@ -32,7 +32,7 @@ pub(super) fn schema_matches(c: &Connection) -> rusqlite::Result<bool> {
             "trigger",
             "runtime_input_delivery_attachment_auth_insert",
         )
-        .is_ok_and(|s| s.contains("40, 41, 42, 43)")))
+        .is_ok_and(|s| s.contains("40, 41, 42, 43")))
 }
 
 pub(super) fn migrate(database: &mut Database) -> Result<()> {
@@ -45,11 +45,11 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let marker = match classify_database_contract(&tx)? {
             DatabaseContractClassification::SupportedMigrationSource(m)
-                if m.projection_schema_version == 168 =>
+                if m.projection_schema_version == 172 =>
             {
                 m
             }
-            _ => anyhow::bail!("Chat reply context requires complete schema 168"),
+            _ => anyhow::bail!("Chat reply context requires complete schema 172"),
         };
         anyhow::ensure!(
             matches!(
@@ -58,6 +58,8 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
             ),
             "Chat reply context requires complete chat migrations"
         );
+        let legacy = !schema(&tx, "table", "context_manifest")?.contains(FACT43);
+        if legacy {
         let old = schema(&tx, "table", "context_manifest")?;
         let start = old.find(FACT40).context("Missing public facts clause")?;
         let end = start
@@ -118,8 +120,10 @@ pub(super) fn migrate(database: &mut Database) -> Result<()> {
         )?;
         tx.execute_batch(&guard)?;
         tx.execute_batch(&profile)?;
-        tx.execute_batch("CREATE TRIGGER agent_run_input_v43_only_insert BEFORE INSERT ON agent_run_input WHEN NEW.context_manifest_version IS NOT 43 BEGIN SELECT RAISE(ABORT,'new public Thread AgentRunInput must use ContextManifest v43'); END; DROP TRIGGER runtime_input_delivery_attachment_auth_insert;")?;
+        tx.execute_batch("DROP TRIGGER runtime_input_delivery_attachment_auth_insert;")?;
         tx.execute_batch(&attachment)?;
+        }
+        tx.execute_batch("DROP TRIGGER IF EXISTS agent_run_input_v43_only_insert; CREATE TRIGGER agent_run_input_v43_only_insert BEFORE INSERT ON agent_run_input WHEN NEW.context_manifest_version IS NOT 43 AND NEW.context_manifest_version IS NOT 44 BEGIN SELECT RAISE(ABORT,'new public Thread AgentRunInput must use ContextManifest v43/v44'); END;")?;
         tx.execute_batch("INSERT INTO schema_migration VALUES(223,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=173,updated_at=datetime('now') WHERE singleton=1;")?;
         validate_migration_foreign_keys(
             &tx,
@@ -161,85 +165,14 @@ pub(super) fn downgrade_for_test(c: &Connection) {
     }
     c.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
     let tx = c.unchecked_transaction().unwrap();
-    let immutable = schema(&tx, "trigger", "context_manifest_version_immutable").unwrap();
-    let input_immutable = schema(
-        &tx,
-        "trigger",
-        "agent_run_input_context_projection_immutable",
+    // The reply receipt is the only durable difference this migration adds on a
+    // ContextManifest v44 database; the fence trigger is recreated by migrate.
+    tx.execute_batch(
+        "DROP TRIGGER IF EXISTS agent_run_input_v43_only_insert;
+         DELETE FROM schema_migration WHERE version=223;
+         UPDATE rovai_data_contract SET projection_schema_version=172 WHERE singleton=1;",
     )
     .unwrap();
-    tx.execute_batch("DROP TRIGGER context_manifest_version_immutable; DROP TRIGGER agent_run_input_context_projection_immutable;
-        UPDATE context_manifest SET context_manifest_version=40,formatter_version=40 WHERE context_manifest_version=43;
-        UPDATE agent_run_input SET context_manifest_version=40 WHERE context_manifest_version=43;").unwrap();
-    tx.execute_batch(&immutable).unwrap();
-    tx.execute_batch(&input_immutable).unwrap();
-    let mut manifest = schema(&tx, "table", "context_manifest").unwrap();
-    let start = manifest.find(FACT43).unwrap();
-    let end = start
-        + manifest[start..]
-            .find(
-                "
- OR
- ",
-            )
-            .unwrap()
-        + "
- OR
- "
-        .len();
-    manifest.replace_range(start..end, "");
-    let manifest = replacement_table_schema_v171(manifest, "context_manifest")
-        .replace("38, 39, 40, 41, 42, 43)", "38, 39, 40, 41, 42)");
-    let mut guard = schema(&tx, "trigger", "context_manifest_v40_only_insert").unwrap();
-    let start = guard
-        .find("(NEW.source_delivery_id IS NOT NULL AND NEW.context_manifest_version = 43")
-        .unwrap();
-    let end = start
-        + guard[start..]
-            .find(" OR (NEW.source_delivery_id IS NULL AND NEW.context_manifest_version = 42")
-            .unwrap()
-        + " OR ".len();
-    guard.replace_range(start..end, "");
-    let profile = schema(&tx, "trigger", "context_manifest_quote_profile_insert")
-        .unwrap()
-        .replace(PROFILE, "");
-    let input = replacement_table_schema_v171(
-        schema(&tx, "table", "agent_run_input").unwrap(),
-        "agent_run_input",
-    )
-    .replace("38, 39, 40, 43)", "38, 39, 40)");
-    let attachment = schema(
-        &tx,
-        "trigger",
-        "runtime_input_delivery_attachment_auth_insert",
-    )
-    .unwrap()
-    .replace("38, 39, 40, 41, 42, 43)", "38, 39, 40, 41, 42)");
-    rebuild_table_v171(
-        &tx,
-        "context_manifest",
-        &manifest,
-        &[],
-        &[
-            "context_manifest_v40_only_insert",
-            "context_manifest_quote_profile_insert",
-        ],
-    )
-    .unwrap();
-    rebuild_table_v171(
-        &tx,
-        "agent_run_input",
-        &input,
-        &[],
-        &["agent_run_input_v43_only_insert"],
-    )
-    .unwrap();
-    tx.execute_batch(&guard).unwrap();
-    tx.execute_batch(&profile).unwrap();
-    tx.execute_batch("CREATE TRIGGER agent_run_input_v40_only_insert BEFORE INSERT ON agent_run_input WHEN NEW.context_manifest_version IS NOT 40 BEGIN SELECT RAISE(ABORT,'new public Thread AgentRunInput must use ContextManifest v40'); END;
-        DROP TRIGGER runtime_input_delivery_attachment_auth_insert;").unwrap();
-    tx.execute_batch(&attachment).unwrap();
-    tx.execute_batch("DELETE FROM schema_migration WHERE version=223; UPDATE rovai_data_contract SET projection_schema_version=172 WHERE singleton=1;").unwrap();
     tx.commit().unwrap();
     c.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
 }
@@ -256,7 +189,7 @@ pub(super) fn assert_upgrade(db: &mut Database) {
         public_history_claim_preserved_evidence_digest(db.connection()).unwrap()
     );
     assert!(
-        matches!(classify_database_contract(db.connection()).unwrap(),DatabaseContractClassification::SupportedMigrationSource(ref m) if m.projection_schema_version==158)
+        matches!(classify_database_contract(db.connection()).unwrap(),DatabaseContractClassification::SupportedMigrationSource(ref m) if m.projection_schema_version==172)
     );
     assert_eq!(
         db.connection()

@@ -3378,6 +3378,10 @@ fn connection_has_admissible_data_contract(connection: &Connection) -> rusqlite:
                         | 167
                         | 168
                 | 173
+                | 169
+                | 170
+                | 171
+                | 172
                 )
         })
     {
@@ -3752,8 +3756,11 @@ pub(crate) fn assert_chat_tool_upgrade_sources(database: &mut Database) {
             database.connection.execute_batch("DROP TABLE channel_chat_conversation; ALTER TABLE agent_profile DROP COLUMN chat_bot_enabled; ALTER TABLE agent_profile DROP COLUMN chat_materials_path; ALTER TABLE conversation DROP COLUMN permission_override_json; DELETE FROM schema_migration WHERE version=220;").unwrap();
         }
         if source < 219 {
-            database.connection.execute_batch("DROP TABLE channel_chat_outbound; DROP TABLE channel_chat_item; DROP TABLE channel_chat_turn; DROP TABLE channel_chat_message; DROP TABLE channel_chat_credential; DROP TABLE channel_chat_bot; DELETE FROM schema_migration WHERE version=209;").unwrap();
+            database.connection.execute_batch("DROP TABLE channel_chat_outbound; DROP TABLE channel_chat_item; DROP TABLE channel_chat_turn; DROP TABLE channel_chat_message; DROP TABLE channel_chat_credential; DROP TABLE channel_chat_bot; DELETE FROM schema_migration WHERE version=219;").unwrap();
         }
+        // The synthetic source keeps the marker of its own step so the chain sees a
+        // consistent intermediate layout instead of the current projection.
+        database.connection.execute_batch(&format!("DELETE FROM schema_migration WHERE version>{}; UPDATE rovai_data_contract SET projection_schema_version={} WHERE singleton=1;", source, source - 50)).unwrap();
         assert!(
             matches!(
                 classify_database_contract(database.connection()).unwrap(),
@@ -3997,6 +4004,10 @@ pub(crate) fn classify_database_contract(
                 | 167
                 | 168
                 | 173
+                | 169
+                | 170
+                | 171
+                | 172
         )
     {
         let expected_migration = marker.projection_schema_version + 50;
@@ -10964,10 +10975,7 @@ impl Database {
             chat_bot_member_reuse_v210_schema_matches(&transaction)?,
             "chat Bot member reuse schema did not apply"
         );
-        transaction.execute(
-            "INSERT INTO schema_migration VALUES(220,datetime('now'))",
-            [],
-        )?;
+        transaction.execute_batch("INSERT INTO schema_migration VALUES(220,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=170,updated_at=datetime('now') WHERE singleton=1;")?;
         transaction.commit()?;
         Ok(())
     }
@@ -11028,10 +11036,7 @@ impl Database {
                  navigation_activity_sequence DESC, id
              ) WHERE deletion_operation_id IS NULL;",
         )?;
-        transaction.execute(
-            "INSERT INTO schema_migration VALUES(222,datetime('now'))",
-            [],
-        )?;
+        transaction.execute_batch("INSERT INTO schema_migration VALUES(222,datetime('now')); UPDATE rovai_data_contract SET projection_schema_version=172,updated_at=datetime('now') WHERE singleton=1;")?;
         anyhow::ensure!(
             chat_bot_navigation_schema_matches(&transaction)?,
             "navigation migration layout mismatch"
